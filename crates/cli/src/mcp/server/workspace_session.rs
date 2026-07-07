@@ -425,6 +425,9 @@ impl FriggMcpServer {
         self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
+        self.invalidate_session_result_handles_for_repository_ids(
+            Self::runtime_task_repository_aliases(workspace),
+        );
         if invalidate_precise_generation {
             self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         }
@@ -483,6 +486,7 @@ impl FriggMcpServer {
             RuntimeTaskKind::SemanticRefresh,
             RuntimeTaskKind::WorkspacePrepare,
             RuntimeTaskKind::WorkspaceIndex,
+            RuntimeTaskKind::PrecisePrewarm,
         ]
     }
 
@@ -632,6 +636,9 @@ impl FriggMcpServer {
             let result = (|| -> Result<crate::indexer::IndexSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
                     .map_err(|err| err.to_string())?;
+                Storage::new(&db_path)
+                    .initialize_with_auto_repair()
+                    .map_err(|err| err.to_string())?;
                 let credentials = SemanticRuntimeCredentials::from_process_env();
                 index_repository_with_runtime_config(
                     &workspace.runtime_repository_id,
@@ -716,7 +723,7 @@ impl FriggMcpServer {
                         WorkspaceAttachIndexMode::Ensure,
                         true,
                         true,
-                        WorkspaceIndexAction::SkippedActiveTask,
+                        WorkspaceIndexAction::TimedOut,
                         None,
                     ),
                     None,
@@ -732,7 +739,7 @@ impl FriggMcpServer {
                         WorkspaceAttachIndexMode::Ensure,
                         true,
                         true,
-                        WorkspaceIndexAction::SkippedActiveTask,
+                        WorkspaceIndexAction::TimedOut,
                         None,
                     ),
                     None,
@@ -863,7 +870,7 @@ impl FriggMcpServer {
                     WorkspaceAttachIndexMode::Ensure,
                     true,
                     true,
-                    WorkspaceIndexAction::SkippedActiveTask,
+                    WorkspaceIndexAction::TimedOut,
                     None,
                 ),
                 None,
@@ -928,7 +935,7 @@ impl FriggMcpServer {
                     WorkspaceAttachIndexMode::Ensure,
                     true,
                     true,
-                    WorkspaceIndexAction::SkippedActiveTask,
+                    WorkspaceIndexAction::TimedOut,
                     None,
                 ),
                 None,

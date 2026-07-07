@@ -44,6 +44,7 @@ pub(super) fn walk_candidate_files_for_repository(
 ) -> Vec<(String, PathBuf)> {
     let path_regex = query.path_regex.clone();
     let language = filters.language;
+    let include_hidden = filters.include_hidden;
     let (file_candidates, mut walk_diagnostics) = collect_candidate_files_parallel(
         repository_id,
         root,
@@ -53,6 +54,9 @@ pub(super) fn walk_candidate_files_for_repository(
             if let Some(language) = language
                 && !language.matches_path(path)
             {
+                return false;
+            }
+            if !include_hidden && repository_path_is_hidden(rel_path) {
                 return false;
             }
             if let Some(path_regex) = &path_regex
@@ -146,6 +150,7 @@ pub(super) fn search_root_scoped_runtime_config_candidates_for_repository(
 ) -> Vec<(String, PathBuf)> {
     let path_regex = query.path_regex.clone();
     let language = filters.language;
+    let include_hidden = filters.include_hidden;
     collect_root_scoped_runtime_config_candidates(
         repository_id,
         root,
@@ -157,6 +162,9 @@ pub(super) fn search_root_scoped_runtime_config_candidates_for_repository(
             if let Some(language) = language
                 && !language.matches_path(path)
             {
+                return false;
+            }
+            if !include_hidden && repository_path_is_hidden(rel_path) {
                 return false;
             }
             if let Some(path_regex) = &path_regex
@@ -177,6 +185,12 @@ pub(super) fn normalize_repository_relative_path(root: &Path, path: &Path) -> St
         .replace('\\', "/")
         .trim_start_matches("./")
         .to_owned()
+}
+
+pub(super) fn repository_path_is_hidden(path: &str) -> bool {
+    path.split('/')
+        .filter(|component| !component.is_empty())
+        .any(|component| component.starts_with('.'))
 }
 
 fn search_walk_builder(root: &Path) -> WalkBuilder {

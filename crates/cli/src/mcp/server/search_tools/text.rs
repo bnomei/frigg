@@ -75,8 +75,7 @@ impl FriggMcpServer {
                         explicit_path_regex.clone().or_else(|| glob_regex.clone());
                     let needs_post_path_filter = (explicit_path_regex.is_some()
                         && glob_regex.is_some())
-                        || exclude_glob_regex.is_some()
-                        || !include_hidden;
+                        || exclude_glob_regex.is_some();
                     effective_pattern_type = Some(pattern_type.clone());
 
                     let requested_limit = params_for_blocking
@@ -119,7 +118,10 @@ impl FriggMcpServer {
                                     path_regex: search_path_regex.clone(),
                                     limit,
                                 },
-                                SearchFilters::default(),
+                                SearchFilters {
+                                    include_hidden,
+                                    ..SearchFilters::default()
+                                },
                             ),
                         SearchPatternType::Regex => searcher.search_regex_with_filters_diagnostics(
                             SearchTextQuery {
@@ -127,7 +129,10 @@ impl FriggMcpServer {
                                 path_regex: search_path_regex,
                                 limit,
                             },
-                            SearchFilters::default(),
+                            SearchFilters {
+                                include_hidden,
+                                ..SearchFilters::default()
+                            },
                         ),
                     }
                     .map_err(Self::map_frigg_error)?;

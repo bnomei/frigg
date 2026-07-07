@@ -28,13 +28,25 @@ pub struct SearchTextQuery {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 /// Shared repository-level filters used to scope both lexical and hybrid retrieval paths.
 pub struct SearchFilters {
     /// Restrict retrieval to one configured repository id when set.
     pub repository_id: Option<String>,
     /// Restrict retrieval to files classified as one supported source language when set.
     pub language: Option<String>,
+    /// Include hidden repository paths during candidate intake.
+    pub include_hidden: bool,
+}
+
+impl Default for SearchFilters {
+    fn default() -> Self {
+        Self {
+            repository_id: None,
+            language: None,
+            include_hidden: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -317,6 +329,7 @@ pub struct HybridRankedEvidence {
 pub(crate) struct NormalizedSearchFilters {
     pub(crate) repository_id: Option<String>,
     pub(crate) language: Option<SymbolLanguage>,
+    pub(crate) include_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

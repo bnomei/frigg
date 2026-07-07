@@ -580,6 +580,7 @@ fn hybrid_ranking_semantic_ok_empty_channel_when_active_index_is_filtered_out() 
         SearchFilters {
             repository_id: None,
             language: Some("php".to_owned()),
+            include_hidden: true,
         },
         &credentials,
         &semantic_executor,
@@ -639,6 +640,7 @@ fn hybrid_ranking_semantic_reports_unsupported_language_filter_as_unavailable() 
         SearchFilters {
             repository_id: None,
             language: Some("typescript".to_owned()),
+            include_hidden: true,
         },
         &credentials,
         &semantic_executor,

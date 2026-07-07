@@ -1203,6 +1203,58 @@ fn semantic_chunking_skips_blank_oversized_segments() {
 }
 
 #[test]
+fn semantic_chunking_anchors_end_line_to_embedded_segment_text() {
+    let source = format!(
+        "{}\n\n{}",
+        "a".repeat(SEMANTIC_CHUNK_MAX_CHARS),
+        "b".repeat(10)
+    );
+
+    let chunks = build_file_semantic_chunks(
+        "repo-001",
+        "snapshot-001",
+        "fixtures/trailing-blank.yaml",
+        "yaml",
+        &source,
+    );
+
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0].start_line, 1);
+    assert_eq!(chunks[0].end_line, 1);
+    assert_eq!(chunks[1].start_line, 2);
+    assert_eq!(chunks[1].end_line, 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn semantic_chunk_build_fails_for_unreadable_manifest_file() -> FriggResult<()> {
+    let workspace_root = temp_workspace_root("semantic-unreadable-manifest-file");
+    prepare_workspace(&workspace_root, &[("src/private.rs", "pub fn hidden() {}\n")])?;
+    let manifest = ManifestBuilder::default().build(&workspace_root)?;
+    let unreadable_path = workspace_root.join("src/private.rs");
+    set_file_mode(&unreadable_path, 0o000)?;
+
+    let error = match build_semantic_chunk_candidates(
+        "repo-001",
+        &workspace_root,
+        "snapshot-001",
+        &manifest,
+    ) {
+        Ok(_) => panic!("unreadable semantic manifest file should fail chunk build"),
+        Err(error) => error,
+    };
+
+    set_file_mode(&unreadable_path, 0o644)?;
+    cleanup_workspace(&workspace_root);
+
+    assert!(
+        matches!(error, FriggError::Io(_)),
+        "expected unreadable semantic file to surface as IO error, got {error:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn semantic_chunk_language_supports_blade_paths() {
     assert_eq!(
         semantic_chunk_language_for_path(Path::new("resources/views/welcome.blade.php")),

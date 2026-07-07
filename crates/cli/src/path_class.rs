@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::domain::PathClass;
-use crate::languages::{LanguageCapability, supported_language_for_path};
+use crate::languages::{supported_language_for_path, LanguageCapability};
 
 pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
     let normalized = relative_path.trim_start_matches("./");
@@ -18,8 +18,12 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
     let support_component_index = components
         .iter()
         .position(|component| is_generic_support_component(component));
+    let has_non_first_party_boundary = components
+        .iter()
+        .any(|component| is_non_first_party_boundary_component(component));
     if support_component_index
         .is_some_and(|support_index| src_index.is_none_or(|src_index| support_index < src_index))
+        || has_non_first_party_boundary
     {
         PathClass::Support
     } else if is_roc_platform_source_path(normalized)
@@ -45,6 +49,13 @@ fn is_generic_support_component(component: &str) -> bool {
     matches!(
         component,
         "benches" | "bench" | "examples" | "example" | "tests" | "test"
+    )
+}
+
+fn is_non_first_party_boundary_component(component: &str) -> bool {
+    matches!(
+        component,
+        "vendor" | "node_modules" | "generated" | "dist" | "build" | "out"
     )
 }
 
@@ -117,6 +128,18 @@ mod tests {
         );
         assert_eq!(
             classify_repository_path("tests/fixtures/src/server.rs"),
+            PathClass::Support
+        );
+        assert_eq!(
+            classify_repository_path("vendor/laravel/framework/src/Foundation/Application.php"),
+            PathClass::Support
+        );
+        assert_eq!(
+            classify_repository_path("node_modules/pkg/src/index.ts"),
+            PathClass::Support
+        );
+        assert_eq!(
+            classify_repository_path("generated/client/src/api.rs"),
             PathClass::Support
         );
         assert_eq!(classify_repository_path("Cargo.toml"), PathClass::Project);

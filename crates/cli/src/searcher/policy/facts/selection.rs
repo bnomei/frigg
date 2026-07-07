@@ -49,6 +49,7 @@ impl SelectionCandidate {
         let path_witness_paths = evidence
             .lexical_sources
             .iter()
+            .chain(evidence.witness_sources.iter())
             .filter_map(|source| parse_path_witness_source_path(source))
             .collect::<Vec<_>>();
         let has_path_witness_source = !path_witness_paths.is_empty();

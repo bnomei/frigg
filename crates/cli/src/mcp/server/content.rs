@@ -178,13 +178,29 @@ impl FriggMcpServer {
                         ));
                     }
                     let snapshot = server.file_content_snapshot_for_workspace(&workspace, &path)?;
-                    let pre_read_bytes = pre_read_bytes.unwrap_or_else(|| snapshot.raw_bytes_len());
+                    let _pre_read_bytes =
+                        pre_read_bytes.unwrap_or_else(|| snapshot.raw_bytes_len());
                     if !has_line_range {
+                        let post_read_bytes = snapshot.raw_bytes_len();
+                        if post_read_bytes > max_bytes {
+                            let suggested_max_bytes = post_read_bytes.min(server.config.max_file_bytes);
+                            return Err(Self::invalid_params(
+                                format!("file exceeds max_bytes={max_bytes}"),
+                                Some(json!({
+                                    "path": display_path.clone(),
+                                    "bytes": post_read_bytes,
+                                    "max_bytes": max_bytes,
+                                    "requested_max_bytes": requested_max_bytes,
+                                    "config_max_file_bytes": server.config.max_file_bytes,
+                                    "suggested_max_bytes": suggested_max_bytes,
+                                })),
+                            ));
+                        }
                         let content = snapshot.read_file_content();
                         let mut response = ReadFileResponse {
                             repository_id,
                             path: display_path,
-                            bytes: pre_read_bytes,
+                            bytes: post_read_bytes,
                             content,
                             context_efficiency: None,
                         };

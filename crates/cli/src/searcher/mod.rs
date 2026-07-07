@@ -478,6 +478,7 @@ impl TextSearcher {
             SearchFilters {
                 repository_id: repository_id_filter.map(ToOwned::to_owned),
                 language: None,
+                include_hidden: true,
             },
         )
     }
@@ -583,6 +584,7 @@ impl TextSearcher {
             SearchFilters {
                 repository_id: repository_id_filter.map(ToOwned::to_owned),
                 language: None,
+                include_hidden: true,
             },
         )
     }
@@ -1027,6 +1029,7 @@ fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSea
     Ok(NormalizedSearchFilters {
         repository_id,
         language,
+        include_hidden: filters.include_hidden,
     })
 }
 

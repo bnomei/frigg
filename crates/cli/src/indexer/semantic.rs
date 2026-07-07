@@ -10,7 +10,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use rayon::prelude::*;
-use tracing::warn;
 
 use super::*;
 use crate::embeddings::{
@@ -581,23 +580,11 @@ pub(crate) fn build_semantic_chunk_candidates(
             let mut file = match File::open(&entry.path) {
                 Ok(file) => file,
                 Err(err) => {
-                    warn!(
-                        repository_id = %repository_id,
-                        path = %entry.path.display(),
-                        error = %err,
-                        "skipping semantic chunking for file that failed to open"
-                    );
-                    return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+                    return Err(FriggError::Io(err));
                 }
             };
             if let Err(err) = file.read_to_string(&mut source) {
-                warn!(
-                    repository_id = %repository_id,
-                    path = %entry.path.display(),
-                    error = %err,
-                    "skipping semantic chunking for file that failed to read"
-                );
-                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+                return Err(FriggError::Io(err));
             }
 
             let mut chunks = Vec::new();
@@ -781,12 +768,15 @@ fn append_semantic_chunk_candidates(
         let mut segment_offset = 0usize;
         while segment_start < content_text.len() {
             let segment_end = (segment_start + SEMANTIC_CHUNK_MAX_CHARS).min(content_text.len());
+            let segment_start_line =
+                semantic_segment_start_line(start_line, &content_text[..segment_start]);
             push_nonblank_semantic_chunk_candidate(
                 output,
                 file_context,
                 chunk_index + segment_offset,
-                start_line,
-                end_line,
+                segment_start_line,
+                semantic_chunk_end_line(segment_start_line, &content_text[segment_start..segment_end])
+                    .min(end_line),
                 &content_text[segment_start..segment_end],
             );
             segment_start = segment_end;
@@ -801,7 +791,7 @@ fn append_semantic_chunk_candidates(
             file_context,
             chunk_index,
             start_line,
-            end_line,
+            semantic_chunk_end_line(start_line, content_text).min(end_line),
             content_text.to_owned(),
         ));
         return output_start..output.len();
@@ -812,12 +802,15 @@ fn append_semantic_chunk_candidates(
     let mut segment_offset = 0usize;
     for (byte_index, _) in content_text.char_indices() {
         if chars_in_segment == SEMANTIC_CHUNK_MAX_CHARS {
+            let segment_start_line =
+                semantic_segment_start_line(start_line, &content_text[..segment_start]);
             push_nonblank_semantic_chunk_candidate(
                 output,
                 file_context,
                 chunk_index + segment_offset,
-                start_line,
-                end_line,
+                segment_start_line,
+                semantic_chunk_end_line(segment_start_line, &content_text[segment_start..byte_index])
+                    .min(end_line),
                 &content_text[segment_start..byte_index],
             );
             segment_start = byte_index;
@@ -827,12 +820,15 @@ fn append_semantic_chunk_candidates(
         chars_in_segment += 1;
     }
     if segment_start < content_text.len() {
+        let segment_start_line =
+            semantic_segment_start_line(start_line, &content_text[..segment_start]);
         push_nonblank_semantic_chunk_candidate(
             output,
             file_context,
             chunk_index + segment_offset,
-            start_line,
-            end_line,
+            segment_start_line,
+            semantic_chunk_end_line(segment_start_line, &content_text[segment_start..])
+                .min(end_line),
             &content_text[segment_start..],
         );
     }
@@ -855,9 +851,29 @@ fn push_nonblank_semantic_chunk_candidate(
         file_context,
         chunk_index,
         start_line,
-        end_line,
+        semantic_chunk_end_line(start_line, content_text).min(end_line),
         content_text.to_owned(),
     ));
+}
+
+fn semantic_segment_start_line(start_line: usize, preceding_text: &str) -> usize {
+    start_line.saturating_add(
+        preceding_text
+            .as_bytes()
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count(),
+    )
+}
+
+fn semantic_chunk_end_line(start_line: usize, content_text: &str) -> usize {
+    start_line.saturating_add(
+        content_text
+            .as_bytes()
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count(),
+    )
 }
 
 fn build_semantic_chunk_candidate(

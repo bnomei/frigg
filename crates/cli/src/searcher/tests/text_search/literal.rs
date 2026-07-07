@@ -62,6 +62,7 @@ fn literal_search_repository_filter_accepts_stable_repository_id_alias() -> Frig
         SearchFilters {
             repository_id: Some(crate::domain::model::RepositoryId::for_root(&root).0),
             language: None,
+            include_hidden: true,
         },
     )?;
 
@@ -95,6 +96,64 @@ fn literal_search_walk_fallback_respects_gitignored_contract_artifacts() -> Frig
             .all(|entry| entry.path != "contracts/errors.md"),
         "walk fallback should respect gitignored contract artifacts"
     );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn literal_search_can_filter_hidden_paths_before_scan_limit() -> FriggResult<()> {
+    let root = temp_workspace_root("literal-search-hidden-filter");
+    prepare_workspace(
+        &root,
+        &[
+            (".hidden/first.txt", "needle hidden\n"),
+            ("src/visible.txt", "needle visible\n"),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let visible_only = searcher.search_literal_with_filters_diagnostics(
+        SearchTextQuery {
+            query: "needle".to_owned(),
+            path_regex: None,
+            limit: 1,
+        },
+        SearchFilters {
+            include_hidden: false,
+            ..SearchFilters::default()
+        },
+    )?;
+    assert_eq!(visible_only.total_matches, 1);
+    assert_eq!(visible_only.matches.len(), 1);
+    assert_eq!(visible_only.matches[0].path, "src/visible.txt");
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn literal_search_continues_after_invalid_utf8_line() -> FriggResult<()> {
+    let root = temp_workspace_root("literal-search-invalid-utf8-line");
+    prepare_workspace(&root, &[("src/placeholder.txt", "placeholder\n")])?;
+    fs::write(
+        root.join("src/data.bin"),
+        b"before\ninvalid \xFF\xFE\nneedle after\n",
+    )
+    .map_err(FriggError::Io)?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let matches = searcher.search_literal_with_filters(
+        SearchTextQuery {
+            query: "needle".to_owned(),
+            path_regex: None,
+            limit: 10,
+        },
+        SearchFilters::default(),
+    )?;
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].path, "src/data.bin");
+    assert_eq!(matches[0].line, 3);
 
     cleanup_workspace(&root);
     Ok(())

@@ -5,6 +5,8 @@
 
 use super::*;
 use crate::mcp::types::ListFilesEntry;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 const DEFAULT_LIST_FILES_LIMIT: usize = 1000;
 const MAX_LIST_FILES_LIMIT: usize = 5000;
@@ -31,17 +33,6 @@ impl FriggMcpServer {
                             None,
                         ));
                     }
-                    let resume_offset = match params_for_blocking.resume_from.as_deref() {
-                        Some(raw) => raw.parse::<usize>().map_err(|_| {
-                            Self::invalid_params(
-                                "resume_from must be a cursor returned by list_files",
-                                Some(json!({
-                                    "resume_from": raw,
-                                })),
-                            )
-                        })?,
-                        None => 0,
-                    };
                     let limit = params_for_blocking
                         .limit
                         .unwrap_or(DEFAULT_LIST_FILES_LIMIT)
@@ -99,6 +90,12 @@ impl FriggMcpServer {
                     )?;
                     let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
                     scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
+                    let cursor_scope =
+                        Self::list_files_cursor_scope(&params_for_blocking, &scoped_repository_ids);
+                    let resume_offset = match params_for_blocking.resume_from.as_deref() {
+                        Some(raw) => Self::parse_list_files_resume_cursor(raw, cursor_scope)?,
+                        None => 0,
+                    };
 
                     let mut files = Vec::new();
                     for workspace in &scoped_workspaces {
@@ -155,8 +152,12 @@ impl FriggMcpServer {
                     };
                     let truncated = page.len() > limit;
                     page.truncate(limit);
-                    let next_resume_from = truncated
-                        .then(|| resume_offset.saturating_add(page.len()).to_string());
+                    let next_resume_from = truncated.then(|| {
+                        Self::format_list_files_resume_cursor(
+                            cursor_scope,
+                            resume_offset.saturating_add(page.len()),
+                        )
+                    });
 
                     Ok(Json(ListFilesResponse {
                         total_files,
@@ -212,5 +213,80 @@ impl FriggMcpServer {
             .await?;
 
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    fn list_files_cursor_scope(params: &ListFilesParams, scoped_repository_ids: &[String]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        scoped_repository_ids.hash(&mut hasher);
+        params.repository_id.hash(&mut hasher);
+        params.path_regex.hash(&mut hasher);
+        params.glob.hash(&mut hasher);
+        params.language.hash(&mut hasher);
+        params
+            .path_class
+            .map(|path_class| path_class.as_str())
+            .hash(&mut hasher);
+        params.include_hidden.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn format_list_files_resume_cursor(scope: u64, offset: usize) -> String {
+        format!("v1:{scope:016x}:{offset}")
+    }
+
+    fn parse_list_files_resume_cursor(raw: &str, expected_scope: u64) -> Result<usize, ErrorData> {
+        let Some(rest) = raw.strip_prefix("v1:") else {
+            return Err(Self::invalid_params(
+                "resume_from must be a cursor returned by list_files",
+                Some(json!({ "resume_from": raw })),
+            ));
+        };
+        let Some((scope_hex, offset_raw)) = rest.split_once(':') else {
+            return Err(Self::invalid_params(
+                "resume_from must be a cursor returned by list_files",
+                Some(json!({ "resume_from": raw })),
+            ));
+        };
+        let scope = u64::from_str_radix(scope_hex, 16).map_err(|_| {
+            Self::invalid_params(
+                "resume_from must be a cursor returned by list_files",
+                Some(json!({ "resume_from": raw })),
+            )
+        })?;
+        if scope != expected_scope {
+            return Err(Self::invalid_params(
+                "resume_from cursor does not match the current list_files scope",
+                Some(json!({
+                    "resume_from": raw,
+                    "expected_scope": format!("{expected_scope:016x}"),
+                    "cursor_scope": scope_hex,
+                })),
+            ));
+        }
+        offset_raw.parse::<usize>().map_err(|_| {
+            Self::invalid_params(
+                "resume_from must be a cursor returned by list_files",
+                Some(json!({ "resume_from": raw })),
+            )
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_files_resume_cursor_rejects_scope_mismatch() {
+        let cursor = FriggMcpServer::format_list_files_resume_cursor(0xabc, 42);
+        let error = FriggMcpServer::parse_list_files_resume_cursor(&cursor, 0xdef)
+            .expect_err("cursor from a different scope should be rejected");
+
+        assert!(
+            error
+                .message
+                .contains("does not match the current list_files scope"),
+            "unexpected error: {error:?}"
+        );
     }
 }

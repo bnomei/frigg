@@ -979,7 +979,7 @@ mod tests {
         let intent = HybridRankingIntent::from_query(query);
         let query_context = PolicyQueryContext::new(&intent, query);
         let mut ranked = make_ranked("packages/cli/src/workflow_runner.ts", 1.0);
-        ranked.lexical_sources = vec![
+        ranked.witness_sources = vec![
             "path_witness:packages/cli/test/integration/workflow_runner.test.ts:1:1".to_owned(),
         ];
 

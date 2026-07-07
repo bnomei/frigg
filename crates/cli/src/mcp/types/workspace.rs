@@ -252,6 +252,7 @@ pub enum WorkspaceIndexAction {
     Queued,
     SkippedNoWork,
     SkippedActiveTask,
+    TimedOut,
     Failed,
     Unavailable,
 }

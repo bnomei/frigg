@@ -163,7 +163,7 @@ pub(super) fn search_with_ripgrep_in_universe(
             continue;
         }
 
-        for batch in batch_candidate_paths(&filtered_paths) {
+        for batch in batch_candidate_paths(&filtered_paths)? {
             let mut output =
                 run_ripgrep_batch(executable, &repository.root, &query.query, batch, mode)
                     .map_err(|err| {
@@ -200,12 +200,19 @@ pub(super) fn search_with_ripgrep_in_universe(
 }
 
 // Ripgrep argv size limits require batching; oversized batches are split before spawn.
-fn batch_candidate_paths(paths: &[String]) -> Vec<Vec<String>> {
+fn batch_candidate_paths(paths: &[String]) -> FriggResult<Vec<Vec<String>>> {
     let mut batches = Vec::new();
     let mut current = Vec::new();
     let mut current_bytes = 0usize;
 
     for path in paths {
+        if path.len().saturating_add(1) > RIPGREP_BATCH_ARG_BYTES_LIMIT {
+            return Err(FriggError::Internal(format!(
+                "candidate path exceeds ripgrep argv byte budget: {} bytes > {} bytes",
+                path.len().saturating_add(1),
+                RIPGREP_BATCH_ARG_BYTES_LIMIT
+            )));
+        }
         let next_bytes = current_bytes.saturating_add(path.len()).saturating_add(1);
         if !current.is_empty()
             && (current.len() >= RIPGREP_BATCH_FILE_LIMIT
@@ -223,7 +230,7 @@ fn batch_candidate_paths(paths: &[String]) -> Vec<Vec<String>> {
         batches.push(current);
     }
 
-    batches
+    Ok(batches)
 }
 
 fn run_ripgrep_batch(
@@ -301,6 +308,23 @@ fn run_ripgrep_batch(
             executable.version, executable.display
         )),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ripgrep_batching_rejects_single_path_over_argv_budget() {
+        let oversized = "a".repeat(RIPGREP_BATCH_ARG_BYTES_LIMIT);
+        let error = batch_candidate_paths(&[oversized]).expect_err("oversized path should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("candidate path exceeds ripgrep argv byte budget"),
+            "unexpected error: {error}"
+        );
+    }
 }
 
 fn parse_ripgrep_event_line(line: &str, matches: &mut Vec<TextMatch>) -> Result<(), String> {

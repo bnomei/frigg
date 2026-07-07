@@ -122,6 +122,7 @@ impl FriggMcpServer {
                     SearchFilters {
                         repository_id: Some(target_corpus.repository_id.clone()),
                         language: None,
+                        include_hidden: true,
                     },
                 );
                 let Ok(output) = output else {

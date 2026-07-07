@@ -429,6 +429,10 @@ pub(super) fn merge_hybrid_lexical_search_output(
     base.matches = merged_by_key.into_values().collect::<Vec<_>>();
     sort_matches_deterministically(&mut base.matches);
     base.matches.truncate(limit);
+    base.total_matches = base
+        .total_matches
+        .saturating_add(supplement.total_matches)
+        .max(base.matches.len());
 
     base.diagnostics
         .entries

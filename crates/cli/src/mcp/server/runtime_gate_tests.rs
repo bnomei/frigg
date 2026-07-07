@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::FriggError;
-use crate::indexer::{FileMetadataDigest, IndexMode};
+use crate::indexer::{FileDigest, FileMetadataDigest, IndexMode};
 use crate::mcp::server_cache::{
     HeuristicReferenceCacheKey, RuntimeCacheFamily, RuntimeCacheFreshnessContract,
     RuntimeCacheResidency, RuntimeCacheReuseClass,

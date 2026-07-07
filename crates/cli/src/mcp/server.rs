@@ -298,6 +298,11 @@ pub fn benchmark_precise_graph_for_server(
     })?;
     let reused_cache = server
         .try_reuse_latest_precise_graph_for_repository(repository_id, &root)
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to check precise graph cache for benchmark: {err:?}"
+            ))
+        })?
         .is_some();
     let cached = server
         .precise_graph_for_repository_root(
@@ -1007,6 +1012,18 @@ impl FriggMcpServer {
                 );
             }
         }
+        if let Err(err) =
+            self.ensure_workspace_attach_still_adopted(&response.repository.repository_id)
+        {
+            warn!(
+                repository_id = %response.repository.repository_id,
+                root = %response.repository.root_path,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err.message,
+                "workspace attach cancelled before completion"
+            );
+            return Err(err);
+        }
         info!(
             repository_id = %response.repository.repository_id,
             root = %response.repository.root_path,
@@ -1092,10 +1109,16 @@ impl FriggMcpServer {
     ) -> Result<Json<WorkspaceDetachResponse>, ErrorData> {
         let params = params.0;
         let started_at = Instant::now();
-        let repository_id = params
-            .repository_id
-            .or_else(|| self.current_repository_id())
-            .ok_or_else(|| Self::no_attached_workspaces_error("workspace_detach"))?;
+        let repository_id = match params.repository_id.or_else(|| self.current_repository_id()) {
+            Some(repository_id) => repository_id,
+            None => {
+                let attached = self.attached_workspaces();
+                if attached.is_empty() {
+                    return Err(Self::no_attached_workspaces_error("workspace_detach"));
+                }
+                return Err(Self::workspace_detach_requires_repository_id_error(&attached));
+            }
+        };
         let detached = self.detach_workspace(&repository_id)?;
         let Some(workspace) = detached else {
             return Err(Self::resource_not_found(
@@ -1257,11 +1280,7 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
-        self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
-        self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
-        self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
-        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
-        self.invalidate_repository_navigation_caches(&workspace.repository_id);
+        self.invalidate_workspace_index_runtime_caches(&workspace, true);
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "activate watcher lease").await;
         self.adopt_workspace(&workspace, set_default)

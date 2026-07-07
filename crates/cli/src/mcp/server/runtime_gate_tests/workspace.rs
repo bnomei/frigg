@@ -375,6 +375,101 @@ async fn workspace_detach_clears_session_default_and_preserves_known_workspace()
 }
 
 #[tokio::test]
+async fn workspace_detach_accepts_stable_repository_id_alias() {
+    let workspace_root = temp_workspace_root("detach-accepts-stable-alias");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct DetachedAlias;\n")
+        .expect("failed to write workspace root fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    let stable_repository_id = crate::domain::model::RepositoryId::for_root(&workspace_root).0;
+    server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: None,
+            repository_id: Some(workspace.repository_id.clone()),
+            set_default: Some(true),
+            resolve_mode: None,
+            wait_for_precise: None,
+        }))
+        .await
+        .expect("workspace_attach should adopt a known repository id");
+
+    let response = server
+        .workspace_detach(Parameters(WorkspaceDetachParams {
+            repository_id: Some(stable_repository_id),
+        }))
+        .await
+        .expect("workspace_detach should accept stable repository id alias")
+        .0;
+
+    assert_eq!(response.repository_id, workspace.repository_id);
+    assert!(response.detached);
+    assert!(server.attached_workspaces().is_empty());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn workspace_detach_without_default_reports_remaining_attached_repositories() {
+    let first_root = temp_workspace_root("detach-no-default-first");
+    let second_root = temp_workspace_root("detach-no-default-second");
+    for root in [&first_root, &second_root] {
+        fs::create_dir_all(root.join("src")).expect("failed to create workspace root fixture");
+        fs::write(root.join("src/lib.rs"), "pub struct Attached;\n")
+            .expect("failed to write workspace root fixture");
+    }
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![first_root.clone(), second_root.clone()])
+            .expect("workspace roots must produce valid config"),
+    );
+    let workspaces = server.known_workspaces();
+    for workspace in &workspaces {
+        server
+            .workspace_attach(Parameters(WorkspaceAttachParams {
+                path: None,
+                repository_id: Some(workspace.repository_id.clone()),
+                set_default: Some(false),
+                resolve_mode: None,
+                wait_for_precise: None,
+            }))
+            .await
+            .expect("workspace_attach should adopt known repositories");
+    }
+    assert!(server.current_repository_id().is_none());
+    assert_eq!(server.attached_workspaces().len(), 2);
+
+    let error = match server
+        .workspace_detach(Parameters(WorkspaceDetachParams {
+            repository_id: None,
+        }))
+        .await
+    {
+        Ok(_) => panic!("workspace_detach without default should require repository_id"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error
+            .message
+            .contains("repository_id is required when no session default repository is set"),
+        "unexpected error: {error:?}"
+    );
+
+    let _ = fs::remove_dir_all(first_root);
+    let _ = fs::remove_dir_all(second_root);
+}
+
+#[tokio::test]
 async fn workspace_detach_prunes_ephemeral_known_workspace_after_last_session() {
     let workspace_root = authorized_temp_workspace_root("detach-prunes-ephemeral-workspace");
     fs::create_dir_all(workspace_root.join("src"))
@@ -1590,6 +1685,54 @@ fn repository_runtime_task_atomic_start_rejects_alias_conflict() {
         )
         .expect("atomic start should succeed after alias conflict finishes");
     guard.finish(RuntimeTaskStatus::Succeeded, None);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn workspace_attach_completion_rejects_repository_detached_midflight() {
+    let workspace_root = temp_workspace_root("attach-detach-midflight");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Midflight;\n")
+        .expect("failed to write workspace root fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let mut attach = server
+        .attach_workspace_target_internal(
+            Some(workspace_root.to_string_lossy().as_ref()),
+            None,
+            true,
+            WorkspaceResolveMode::GitRoot,
+            WorkspaceAttachIndexMode::Ensure,
+        )
+        .expect("workspace attach target should adopt fixture repository");
+    let repository_id = attach.response.repository.repository_id.clone();
+    assert!(server.session_has_adopted_repository(&repository_id));
+
+    assert!(
+        server
+            .detach_workspace(&repository_id)
+            .expect("detach should succeed")
+            .is_some(),
+        "detach should remove the in-flight adoption"
+    );
+
+    let err = server
+        .ensure_workspace_attach_still_adopted(&repository_id)
+        .expect_err("attach completion should fail after mid-flight detach");
+    assert!(
+        err.message
+            .to_string()
+            .contains("workspace_attach was cancelled"),
+        "unexpected attach cancellation error: {:?}",
+        err
+    );
+    drop(attach.rollback_guard.take());
+    assert!(!server.session_has_adopted_repository(&repository_id));
 
     let _ = fs::remove_dir_all(workspace_root);
 }

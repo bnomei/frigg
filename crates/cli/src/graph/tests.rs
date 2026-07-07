@@ -290,6 +290,61 @@ fn scip_ingest_maps_and_persists_normalized_records() {
 }
 
 #[test]
+fn scip_replace_deduplicates_symbol_ref_counts_per_file() {
+    let mut graph = SymbolGraph::default();
+    let duplicate_symbol_records = br#"{
+          "documents": [
+            {
+              "relative_path": "src/a.rs",
+              "occurrences": [],
+              "symbols": [
+                { "symbol": "scip-rust pkg a#User", "display_name": "User", "kind": "struct", "relationships": [] },
+                { "symbol": "scip-rust pkg a#User", "display_name": "UserAlias", "kind": "class", "relationships": [] }
+              ]
+            }
+          ]
+        }"#;
+    graph
+        .ingest_scip_json(
+            "repo-001",
+            "fixture:duplicate-symbol-records.json",
+            duplicate_symbol_records,
+        )
+        .expect("duplicate-name symbol records should ingest");
+    assert!(
+        graph
+            .precise_symbol("repo-001", "scip-rust pkg a#User")
+            .is_some(),
+        "symbol should be available after ingest"
+    );
+
+    let empty_replacement = br#"{
+          "documents": [
+            {
+              "relative_path": "src/a.rs",
+              "occurrences": [],
+              "symbols": []
+            }
+          ]
+        }"#;
+    graph
+        .ingest_scip_json(
+            "repo-001",
+            "fixture:empty-symbol-replacement.json",
+            empty_replacement,
+        )
+        .expect("empty replacement should ingest");
+
+    assert!(
+        graph
+            .precise_symbol("repo-001", "scip-rust pkg a#User")
+            .is_none(),
+        "removing the file's only unique symbol reference should evict it"
+    );
+    assert_eq!(graph.precise_counts().symbols, 0);
+}
+
+#[test]
 fn scip_protobuf_ingest_maps_and_persists_normalized_records() {
     let mut graph = SymbolGraph::default();
     let mut index = ScipIndexProto::new();

@@ -361,8 +361,8 @@ where
         if line_bytes.ends_with(b"\r") {
             line_bytes = &line_bytes[..line_bytes.len().saturating_sub(1)];
         }
-        let line = std::str::from_utf8(line_bytes).map_err(|err| err.to_string())?;
-        if !visit(line_number, line) {
+        let line = String::from_utf8_lossy(line_bytes);
+        if !visit(line_number, &line) {
             return Ok(());
         }
         line_start = newline_index.saturating_add(1);
@@ -370,8 +370,8 @@ where
 
     if line_start < bytes.len() {
         line_number = line_number.saturating_add(1);
-        let line = std::str::from_utf8(&bytes[line_start..]).map_err(|err| err.to_string())?;
-        let _ = visit(line_number, line);
+        let line = String::from_utf8_lossy(&bytes[line_start..]);
+        let _ = visit(line_number, &line);
     }
 
     Ok(())

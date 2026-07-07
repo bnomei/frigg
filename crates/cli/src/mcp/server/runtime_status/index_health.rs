@@ -202,7 +202,7 @@ impl FriggMcpServer {
             };
         }
 
-        if let Some(cached) = self.try_reuse_latest_precise_graph_for_repository(
+        if let Ok(Some(cached)) = self.try_reuse_latest_precise_graph_for_repository(
             &workspace.repository_id,
             &workspace.root,
         ) {
@@ -334,20 +334,6 @@ impl FriggMcpServer {
                         None,
                     )
                 })?;
-            if let (Some(snapshot_id), Some(validated_digests)) = (
-                status.snapshot_id.as_deref(),
-                status.validated_manifest_digests.as_ref(),
-            ) {
-                self.runtime_state
-                    .validated_manifest_candidate_cache
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .store_validated_shared(
-                        &workspace.root,
-                        snapshot_id,
-                        std::sync::Arc::new(validated_digests.clone()),
-                    );
-            }
             let dirty_root = self
                 .runtime_state
                 .validated_manifest_candidate_cache
@@ -981,13 +967,20 @@ impl FriggMcpServer {
         if should_prewarm_precise {
             let server = self.clone();
             let workspace = workspace.clone();
-            let task_guard = RuntimeTaskGuard::start(
-                Arc::clone(&self.runtime_state.runtime_task_registry),
+            let task_guard = self.try_start_repository_runtime_task(
+                &workspace,
                 crate::mcp::types::RuntimeTaskKind::PrecisePrewarm,
-                workspace.repository_id.clone(),
                 "precise_attach_prewarm",
                 Some(format!("attach root {}", workspace.root.display())),
             );
+            let Ok(task_guard) = task_guard else {
+                tracing::trace!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    "workspace precise prewarm skipped because runtime index work is active"
+                );
+                return;
+            };
             let spawn_task_id = task_guard.task_id().to_owned();
             let spawn_repository_id = workspace.repository_id.clone();
             let spawn_result = std::thread::Builder::new()

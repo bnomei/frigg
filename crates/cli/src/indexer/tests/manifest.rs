@@ -83,6 +83,38 @@ fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<(
 
 #[cfg(unix)]
 #[test]
+fn changed_only_fails_when_hinted_existing_file_digest_read_fails() -> FriggResult<()> {
+    let root = temp_workspace_root("manifest-changed-only-hinted-read-failure-errors");
+    prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;
+
+    let builder = ManifestBuilder::default();
+    let previous = builder.build(&root)?;
+    let file_path = root.join("src/lib.rs");
+
+    fs::write(&file_path, "pub fn modified_with_a_longer_body() {}\n").map_err(FriggError::Io)?;
+    set_file_mode(&file_path, 0o000)?;
+
+    let err = builder
+        .build_changed_only_with_hints_and_diagnostics(
+            &root,
+            &previous,
+            &[PathBuf::from("src/lib.rs")],
+        )
+        .expect_err("hinted unreadable files must fail instead of reusing stale digests");
+
+    set_file_mode(&file_path, 0o644)?;
+
+    assert!(
+        matches!(err, FriggError::Io(_)),
+        "expected hinted unreadable file to surface as an IO error, got {err:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn changed_only_fails_when_new_file_digest_read_fails() -> FriggResult<()> {
     let root = temp_workspace_root("manifest-changed-only-new-read-failure-errors");
     prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;

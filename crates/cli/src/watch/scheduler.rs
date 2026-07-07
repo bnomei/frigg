@@ -169,7 +169,10 @@ impl RepositoryWatchState {
 
     fn record_event(&mut self, path: PathBuf, now: Instant, debounce: Duration) {
         self.push_sample(path.clone());
-        self.dirty_path_hints.insert(path);
+        self.dirty_path_hints.insert(path.clone());
+        if self.semantic_followup.pending {
+            self.semantic_followup_paths.insert(path);
+        }
         self.manifest_fast.pending = true;
         let first_pending_at = *self.manifest_fast.first_pending_at.get_or_insert(now);
         if self.manifest_fast.retry_deadline.is_some()
@@ -185,7 +188,8 @@ impl RepositoryWatchState {
         if self.active_class == Some(WatchRefreshClass::ManifestFast) {
             self.manifest_fast.rerun_requested = true;
         }
-        if self.active_class != Some(WatchRefreshClass::SemanticFollowup)
+        if !self.semantic_followup.pending
+            && self.active_class != Some(WatchRefreshClass::SemanticFollowup)
             && self.semantic_followup.retry_deadline.is_none()
         {
             self.semantic_followup = RefreshQueueState::default();
@@ -219,7 +223,7 @@ impl RepositoryWatchState {
                 self.manifest_fast_inflight_paths = started_paths.iter().cloned().collect();
                 self.recent_paths.clear();
                 if !started_paths.is_empty() {
-                    self.semantic_followup_paths = started_paths.iter().cloned().collect();
+                    self.semantic_followup_paths.extend(started_paths.iter().cloned());
                 }
                 started_paths
             }

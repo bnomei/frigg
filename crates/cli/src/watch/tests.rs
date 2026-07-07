@@ -762,7 +762,7 @@ fn scheduler_path_change_preserves_failed_semantic_followup_retry() {
 }
 
 #[test]
-fn scheduler_path_change_supersedes_non_failed_semantic_followup() {
+fn scheduler_path_change_preserves_non_failed_semantic_followup() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();
 
@@ -776,8 +776,58 @@ fn scheduler_path_change_supersedes_non_failed_semantic_followup() {
         Duration::from_millis(750),
     );
     assert!(
-        !scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup),
-        "a non-failed pending semantic follow-up should be reset by a path change"
+        scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup),
+        "a non-failed pending semantic follow-up should survive a path change"
+    );
+}
+
+#[test]
+fn scheduler_path_change_preserves_pending_semantic_followup_paths() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let debounce = Duration::from_millis(750);
+
+    scheduler.record_path_change(0, PathBuf::from("one.rs"), now, debounce);
+    assert_eq!(
+        scheduler.mark_started(0, WatchRefreshClass::ManifestFast),
+        vec![PathBuf::from("one.rs")]
+    );
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::ManifestFast,
+        now + Duration::from_millis(100),
+    );
+    scheduler.enqueue_semantic_followup(0, now + Duration::from_millis(100));
+
+    scheduler.record_path_change(
+        0,
+        PathBuf::from("two.rs"),
+        now + Duration::from_millis(200),
+        debounce,
+    );
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup));
+
+    assert_eq!(
+        scheduler.next_ready_refresh(now + Duration::from_millis(950)),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+    assert_eq!(
+        scheduler.mark_started(0, WatchRefreshClass::ManifestFast),
+        vec![PathBuf::from("two.rs")]
+    );
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::ManifestFast,
+        now + Duration::from_millis(1_000),
+    );
+
+    assert_eq!(
+        scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup),
+        vec![PathBuf::from("one.rs"), PathBuf::from("two.rs")]
     );
 }
 

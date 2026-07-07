@@ -145,14 +145,14 @@ impl ManifestBuilder {
                 continue;
             }
 
-            hash_jobs.push(metadata);
+            hash_jobs.push((metadata, is_hinted));
         }
 
         let hashed_entries = hash_jobs
             .into_par_iter()
-            .map(hash_manifest_metadata)
+            .map(|(metadata, is_hinted)| (hash_manifest_metadata(metadata), is_hinted))
             .collect::<Vec<_>>();
-        for result in hashed_entries {
+        for (result, is_hinted) in hashed_entries {
             match result {
                 Ok(entry) => entries.push(entry),
                 Err((metadata, err)) => {
@@ -161,7 +161,9 @@ impl ManifestBuilder {
                         kind: ManifestDiagnosticKind::Read,
                         message: err.to_string(),
                     });
-                    if let Some(previous) = previous_by_path.get(&metadata.path) {
+                    if is_hinted {
+                        return Err(FriggError::Io(err));
+                    } else if let Some(previous) = previous_by_path.get(&metadata.path) {
                         entries.push(previous.clone());
                     } else {
                         return Err(FriggError::Io(err));

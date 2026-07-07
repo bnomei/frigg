@@ -10,12 +10,14 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::{FriggError, FriggResult};
+use crate::embeddings::provider_factory::canonical_provider_model;
 use crate::indexer::{
-    FileMetadataDigest, ManifestBuildDiagnostic, ManifestBuilder, ManifestMetadataBuildOutput,
+    FileDigest, FileMetadataDigest, ManifestBuildDiagnostic, ManifestBuilder, ManifestBuildOutput,
+    ManifestMetadataBuildOutput,
 };
 use crate::languages::semantic_chunk_language_for_path;
 use crate::settings::SemanticRuntimeConfig;
-use crate::storage::{ManifestEntry, ManifestMetadataEntry, RepositoryManifestSnapshot, Storage};
+use crate::storage::{ManifestEntry, RepositoryManifestSnapshot, Storage};
 
 #[cfg(test)]
 pub(crate) fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
@@ -49,6 +51,30 @@ fn validate_manifest_digests_against_live_output(
     (snapshot_digests == live_digests).then_some(snapshot_digests)
 }
 
+fn validate_manifest_file_digests_for_root(
+    root: &Path,
+    file_digests: &[FileDigest],
+) -> Option<Vec<FileDigest>> {
+    let live_output = ManifestBuilder::default().build_with_diagnostics(root).ok()?;
+    validate_manifest_file_digests_against_live_output(root, file_digests, live_output)
+}
+
+fn validate_manifest_file_digests_against_live_output(
+    root: &Path,
+    file_digests: &[FileDigest],
+    live_output: ManifestBuildOutput,
+) -> Option<Vec<FileDigest>> {
+    let snapshot_digests = normalized_manifest_file_digests_for_root(root, file_digests)?;
+    let snapshot_metadata = file_metadata_digests_from_file_digests(&snapshot_digests);
+    if manifest_diagnostics_invalidate_snapshot(root, &snapshot_metadata, &live_output.diagnostics)
+    {
+        return None;
+    }
+    let live_digests = normalized_manifest_file_digests_for_root(root, &live_output.entries)?;
+
+    (snapshot_digests == live_digests).then_some(snapshot_digests)
+}
+
 fn normalized_manifest_digests_for_root(
     root: &Path,
     file_digests: &[FileMetadataDigest],
@@ -64,6 +90,35 @@ fn normalized_manifest_digests_for_root(
     }
     normalized.sort_by(file_metadata_digest_order);
     Some(normalized)
+}
+
+fn normalized_manifest_file_digests_for_root(
+    root: &Path,
+    file_digests: &[FileDigest],
+) -> Option<Vec<FileDigest>> {
+    let mut normalized = Vec::with_capacity(file_digests.len());
+    for digest in file_digests {
+        let path = normalize_manifest_path_for_root(root, &digest.path)?;
+        normalized.push(FileDigest {
+            path,
+            size_bytes: digest.size_bytes,
+            mtime_ns: digest.mtime_ns,
+            hash_blake3_hex: digest.hash_blake3_hex.clone(),
+        });
+    }
+    normalized.sort_by(file_digest_order);
+    Some(normalized)
+}
+
+fn file_metadata_digests_from_file_digests(file_digests: &[FileDigest]) -> Vec<FileMetadataDigest> {
+    file_digests
+        .iter()
+        .map(|digest| FileMetadataDigest {
+            path: digest.path.clone(),
+            size_bytes: digest.size_bytes,
+            mtime_ns: digest.mtime_ns,
+        })
+        .collect()
 }
 
 fn manifest_diagnostics_invalidate_snapshot(
@@ -114,7 +169,7 @@ enum ValidatedManifestCandidateCacheEntry {
     Dirty,
     Ready {
         snapshot_id: String,
-        digests: Arc<Vec<FileMetadataDigest>>,
+        digests: Arc<Vec<FileDigest>>,
     },
 }
 
@@ -134,7 +189,7 @@ pub(crate) struct ValidatedManifestCandidateCacheStats {
 /// Outcome of a validated manifest digest cache lookup for a workspace root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValidatedManifestCandidateCacheLookup {
-    Hit(Arc<Vec<FileMetadataDigest>>),
+    Hit(Arc<Vec<FileDigest>>),
     Miss,
     Dirty,
 }
@@ -182,7 +237,7 @@ impl ValidatedManifestCandidateCache {
         &mut self,
         root: &Path,
         snapshot_id: &str,
-        digests: &[FileMetadataDigest],
+        digests: &[FileDigest],
     ) {
         self.store_validated_shared(root, snapshot_id, Arc::new(digests.to_vec()));
     }
@@ -191,7 +246,7 @@ impl ValidatedManifestCandidateCache {
         &mut self,
         root: &Path,
         snapshot_id: &str,
-        digests: Arc<Vec<FileMetadataDigest>>,
+        digests: Arc<Vec<FileDigest>>,
     ) -> bool {
         let key = Self::cache_key(root);
         if matches!(
@@ -282,7 +337,7 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
 ) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
-    let Some(latest) = storage.load_latest_manifest_metadata_for_repository(repository_id)? else {
+    let Some(latest) = storage.load_latest_manifest_for_repository(repository_id)? else {
         return Ok(None);
     };
     let snapshot_id = latest.snapshot_id.clone();
@@ -294,10 +349,14 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
             .lookup(root, &snapshot_id);
         match lookup {
             ValidatedManifestCandidateCacheLookup::Hit(digests) => {
-                if validate_manifest_digests_for_root(root, digests.as_ref()).is_some() {
+                if let Some(validated_file_digests) =
+                    validate_manifest_file_digests_for_root(root, digests.as_ref())
+                {
                     return Ok(Some(SharedValidatedManifestSnapshot {
                         snapshot_id,
-                        digests,
+                        digests: Arc::new(file_metadata_digests_from_file_digests(
+                            &validated_file_digests,
+                        )),
                     }));
                 }
 
@@ -312,18 +371,22 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
         }
     }
 
-    let snapshot_digests = manifest_digests_from_metadata_entries(&latest.entries);
-    let Some(validated_digests) = validate_manifest_digests_for_root(root, &snapshot_digests)
+    let snapshot_digests = manifest_file_digests_from_entries(&latest.entries);
+    let Some(validated_file_digests) =
+        validate_manifest_file_digests_for_root(root, &snapshot_digests)
     else {
         return Ok(None);
     };
-    let validated_digests = Arc::new(validated_digests);
+    let validated_file_digests = Arc::new(validated_file_digests);
+    let validated_digests = Arc::new(file_metadata_digests_from_file_digests(
+        validated_file_digests.as_ref(),
+    ));
 
     if let Some(cache) = cache {
         cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .store_validated_shared(root, &snapshot_id, Arc::clone(&validated_digests));
+            .store_validated_shared(root, &snapshot_id, Arc::clone(&validated_file_digests));
     }
 
     Ok(Some(SharedValidatedManifestSnapshot {
@@ -354,7 +417,7 @@ pub(crate) fn latest_cached_validated_manifest_snapshot_shared(
         ValidatedManifestCandidateCacheLookup::Hit(digests) => {
             Ok(Some(SharedValidatedManifestSnapshot {
                 snapshot_id,
-                digests,
+                digests: Arc::new(file_metadata_digests_from_file_digests(digests.as_ref())),
             }))
         }
         ValidatedManifestCandidateCacheLookup::Dirty
@@ -442,17 +505,24 @@ pub(crate) fn manifest_digests_from_entries(entries: &[ManifestEntry]) -> Vec<Fi
         .collect()
 }
 
-fn manifest_digests_from_metadata_entries(
-    entries: &[ManifestMetadataEntry],
-) -> Vec<FileMetadataDigest> {
+fn manifest_file_digests_from_entries(entries: &[ManifestEntry]) -> Vec<FileDigest> {
     entries
         .iter()
-        .map(|entry| FileMetadataDigest {
+        .map(|entry| FileDigest {
             path: entry.path.clone().into(),
             size_bytes: entry.size_bytes,
             mtime_ns: entry.mtime_ns,
+            hash_blake3_hex: entry.sha256.clone(),
         })
         .collect()
+}
+
+fn file_digest_order(left: &FileDigest, right: &FileDigest) -> std::cmp::Ordering {
+    left.path
+        .cmp(&right.path)
+        .then(left.size_bytes.cmp(&right.size_bytes))
+        .then(left.mtime_ns.cmp(&right.mtime_ns))
+        .then(left.hash_blake3_hex.cmp(&right.hash_blake3_hex))
 }
 
 pub(crate) fn validate_manifest_snapshot_for_root(
@@ -527,9 +597,12 @@ where
     let model = semantic_runtime.normalized_model().ok_or_else(|| {
         FriggError::Internal("semantic runtime model missing after validation".to_owned())
     })?;
+    let model = canonical_provider_model(provider, model).map_err(|err| {
+        FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
+    })?;
     let semantic_target = RepositorySemanticTarget {
         provider: provider.as_str().to_owned(),
-        model: model.to_owned(),
+        model,
     };
 
     let has_semantic_eligible_entries = snapshot.entries.iter().any(|entry| {
@@ -606,20 +679,31 @@ mod tests {
         snapshot_id: &str,
         file_path: &Path,
     ) -> FriggResult<()> {
-        let metadata = fs::metadata(file_path).map_err(|err| {
+        let root = file_path.parent().ok_or_else(|| {
             FriggError::Internal(format!(
-                "failed to stat manifest-validation fixture '{}': {err}",
+                "manifest-validation fixture '{}' has no parent",
                 file_path.display()
             ))
         })?;
+        let manifest = ManifestBuilder::default().build_with_diagnostics(root)?;
+        let digest = manifest
+            .entries
+            .into_iter()
+            .find(|entry| entry.path == file_path)
+            .ok_or_else(|| {
+                FriggError::Internal(format!(
+                    "manifest-validation fixture '{}' was not discovered",
+                    file_path.display()
+                ))
+            })?;
         storage.upsert_manifest(
             repository_id,
             snapshot_id,
             &[ManifestEntry {
                 path: file_path.display().to_string(),
-                sha256: "fixture-sha".to_owned(),
-                size_bytes: metadata.len(),
-                mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
+                sha256: digest.hash_blake3_hex,
+                size_bytes: digest.size_bytes,
+                mtime_ns: digest.mtime_ns,
             }],
         )
     }
@@ -685,7 +769,8 @@ mod tests {
     }
 
     #[test]
-    fn latest_validated_manifest_snapshot_shared_reuses_cached_digest_arc() -> FriggResult<()> {
+    fn latest_validated_manifest_snapshot_shared_reuses_cached_hash_checked_digests()
+    -> FriggResult<()> {
         let workspace_root = temp_workspace_root("shared-cache-hit");
         fs::create_dir_all(&workspace_root)
             .expect("manifest-validation workspace root should be creatable");
@@ -720,7 +805,7 @@ mod tests {
         )?
         .expect("second shared manifest validation should hit cache");
 
-        assert!(Arc::ptr_eq(&first.digests, &second.digests));
+        assert_eq!(first.digests, second.digests);
         let stats = cache
             .read()
             .expect("validated manifest candidate cache should not be poisoned")
@@ -784,6 +869,54 @@ mod tests {
                 .expect("validated manifest candidate cache should not be poisoned")
                 .has_entry_for_root(&workspace_root),
             "rejecting the stale cached snapshot should invalidate the cache entry"
+        );
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    #[test]
+    fn latest_validated_manifest_snapshot_rejects_hash_mismatch_with_matching_metadata()
+    -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("shared-rejects-hash-mismatch");
+        fs::create_dir_all(&workspace_root)
+            .expect("manifest-validation workspace root should be creatable");
+        let file_path = workspace_root.join("src.rs");
+        fs::write(&file_path, "fn hash_checked() {}\n")
+            .expect("manifest-validation fixture file should be writable");
+        let metadata = fs::metadata(&file_path)
+            .expect("manifest-validation fixture metadata should resolve");
+
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .expect("manifest-validation db path should have a parent"),
+        )
+        .expect("manifest-validation db parent should be creatable");
+        let storage = Storage::new(&db_path);
+        storage.initialize()?;
+        storage.upsert_manifest(
+            "repo-001",
+            "snapshot-001",
+            &[ManifestEntry {
+                path: file_path.display().to_string(),
+                sha256: "wrong-content-hash".to_owned(),
+                size_bytes: metadata.len(),
+                mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
+            }],
+        )?;
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        assert!(
+            latest_validated_manifest_snapshot_shared(
+                &storage,
+                "repo-001",
+                &workspace_root,
+                Some(&cache),
+            )?
+            .is_none(),
+            "manifest snapshots with matching metadata but stale content hashes must be rejected"
         );
 
         cleanup_workspace(&workspace_root);
@@ -906,6 +1039,87 @@ mod tests {
             content_text: format!("fn {chunk_id}() {{}}"),
             embedding: vec![1.0, 0.0],
         }
+    }
+
+    fn semantic_embedding_record_for_model(
+        chunk_id: &str,
+        repository_id: &str,
+        snapshot_id: &str,
+        path: &str,
+        provider: &str,
+        model: &str,
+    ) -> SemanticChunkEmbeddingRecord {
+        let mut record = semantic_embedding_record(chunk_id, repository_id, snapshot_id, path);
+        record.provider = provider.to_owned();
+        record.model = model.to_owned();
+        record
+    }
+
+    #[cfg(feature = "local-embeddings")]
+    #[test]
+    fn repository_freshness_status_canonicalizes_local_model_alias() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("repository-freshness-local-alias");
+        fs::create_dir_all(&workspace_root)
+            .expect("manifest-validation workspace root should be creatable");
+        let file_path = workspace_root.join("src.rs");
+        fs::write(&file_path, "fn local_alias() {}\n")
+            .expect("manifest-validation fixture file should be writable");
+
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .expect("manifest-validation db path should have a parent"),
+        )
+        .expect("manifest-validation db parent should be creatable");
+        let storage = Storage::new(&db_path);
+        storage.initialize()?;
+        let repository_id = "repo-001";
+        let snapshot_id = "snapshot-001";
+        let canonical_model = "all-MiniLM-L6-v2";
+        seed_manifest_snapshot(&storage, repository_id, snapshot_id, &file_path)?;
+        storage.replace_semantic_embeddings_for_repository(
+            repository_id,
+            snapshot_id,
+            "local",
+            canonical_model,
+            &[semantic_embedding_record_for_model(
+                "chunk-local",
+                repository_id,
+                snapshot_id,
+                "src.rs",
+                "local",
+                canonical_model,
+            )],
+        )?;
+
+        let status = repository_freshness_status(
+            &storage,
+            repository_id,
+            &workspace_root,
+            &SemanticRuntimeConfig {
+                enabled: true,
+                provider: Some(SemanticRuntimeProvider::Local),
+                model: Some("AllMiniLML6V2".to_owned()),
+                strict_mode: false,
+            },
+            |_| false,
+        )?;
+
+        assert_eq!(status.manifest, RepositoryManifestFreshness::Ready);
+        assert_eq!(
+            status.semantic,
+            RepositorySemanticFreshness::Ready,
+            "local model aliases must resolve to the same storage key used by indexing"
+        );
+        let semantic_target = status
+            .semantic_target
+            .expect("semantic target should be present for enabled runtime");
+        assert_eq!(semantic_target.provider, "local");
+        assert_eq!(semantic_target.model, canonical_model);
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
     }
 
     #[test]
@@ -1043,8 +1257,11 @@ mod tests {
         let mut cache = ValidatedManifestCandidateCache::default();
         cache.mark_dirty_root(&workspace_root);
 
-        let stored =
-            cache.store_validated_shared(&workspace_root, "snapshot-001", Arc::new(Vec::new()));
+        let stored = cache.store_validated_shared(
+            &workspace_root,
+            "snapshot-001",
+            Arc::new(Vec::<FileDigest>::new()),
+        );
 
         assert!(!stored, "dirty roots must reject ready snapshot stores");
         assert!(cache.is_dirty_root(&workspace_root));

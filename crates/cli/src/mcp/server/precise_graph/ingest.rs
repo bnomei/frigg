@@ -214,29 +214,41 @@ impl FriggMcpServer {
         let max_elapsed = Duration::from_millis(budgets.scip_max_elapsed_ms);
         let mut processed_artifacts = 0usize;
         let mut processed_bytes = 0u64;
+        let total_artifacts = artifact_digests.len();
 
-        for artifact_digest in artifact_digests {
+        for (artifact_index, artifact_digest) in artifact_digests.iter().enumerate() {
             if started_at.elapsed() > max_elapsed {
                 let elapsed_ms =
                     u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let skipped_artifacts = total_artifacts.saturating_sub(artifact_index);
+                let skipped_bytes = artifact_digests[artifact_index..]
+                    .iter()
+                    .fold(0u64, |acc, digest| acc.saturating_add(digest.size_bytes));
                 warn!(
                     repository_id,
                     actual_elapsed_ms = elapsed_ms,
                     limit_elapsed_ms = budgets.scip_max_elapsed_ms,
                     processed_artifacts,
                     bytes_processed = processed_bytes,
+                    skipped_artifacts,
+                    skipped_bytes,
                     "scip processing exceeded time budget; degrading precise path to heuristic fallback"
                 );
+                stats.artifacts_failed = stats.artifacts_failed.saturating_add(skipped_artifacts);
+                stats.artifacts_failed_bytes =
+                    stats.artifacts_failed_bytes.saturating_add(skipped_bytes);
                 Self::push_precise_failure_sample(
                     &mut stats,
                     "<scip-processing-budget>".to_owned(),
                     "ingest_budget_elapsed_ms",
                     format!(
-                        "scip processing elapsed_ms={} exceeded limit={} after processing {} artifacts and {} bytes",
+                        "scip processing elapsed_ms={} exceeded limit={} after processing {} artifacts and {} bytes; skipped {} artifacts and {} bytes",
                         elapsed_ms,
                         budgets.scip_max_elapsed_ms,
                         processed_artifacts,
-                        processed_bytes
+                        processed_bytes,
+                        skipped_artifacts,
+                        skipped_bytes
                     ),
                 );
                 break;
@@ -442,23 +454,28 @@ impl FriggMcpServer {
         &self,
         repository_id: &str,
         root: &Path,
-    ) -> Option<CachedPreciseGraph> {
-        let current_root_signature =
-            Self::current_root_signature_for_repository(root, repository_id)?;
+    ) -> Result<Option<CachedPreciseGraph>, ErrorData> {
+        let current_root_signature = Self::current_root_signature_for_repository(
+            root,
+            repository_id,
+        )?;
         let cached = self
             .cache_state
             .latest_precise_graph_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(repository_id)
-            .cloned()?;
+            .cloned();
+        let Some(cached) = cached else {
+            return Ok(None);
+        };
         if cached.corpus_signature != current_root_signature {
-            return None;
+            return Ok(None);
         }
         if !Self::cached_scip_discovery_is_current(root, &cached.discovery) {
-            return None;
+            return Ok(None);
         }
-        Some((*cached).clone())
+        Ok(Some((*cached).clone()))
     }
 
     fn cached_scip_discovery_is_current(root: &Path, discovery: &ScipArtifactDiscovery) -> bool {
@@ -607,22 +624,14 @@ impl FriggMcpServer {
         discovery: &ScipArtifactDiscovery,
         budgets: FindReferencesResourceBudgets,
     ) -> Result<CachedPreciseGraph, ErrorData> {
-        if let Some(cached) =
-            self.try_reuse_latest_precise_graph_for_repository(repository_id, root)
+        if let Some(cached) = self
+            .try_reuse_latest_precise_graph_for_repository(repository_id, root)?
         {
             return Ok(cached);
         }
 
         let current_root_signature =
-            Self::current_root_signature_for_repository(root, repository_id).ok_or_else(|| {
-                Self::internal(
-                    "failed to compute current root signature for precise graph",
-                    Some(json!({
-                        "repository_id": repository_id,
-                        "root": root.display().to_string(),
-                    })),
-                )
-            })?;
+            Self::current_root_signature_for_repository(root, repository_id)?;
         let scip_signature = Self::scip_signature(&discovery.artifact_digests);
         let cache_key = PreciseGraphCacheKey {
             repository_id: repository_id.to_owned(),

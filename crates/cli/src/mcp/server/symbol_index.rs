@@ -154,10 +154,15 @@ impl FriggMcpServer {
                 )
             }
             None => {
+                let live_output = ManifestBuilder::default()
+                    .build_metadata_with_diagnostics(&root)
+                    .map_err(Self::map_frigg_error)?;
+                let live_signature = Self::root_signature(&live_output.entries);
+                let live_manifest_token = format!("live:{live_signature}");
                 if can_reuse_dirty_live_corpus {
                     let live_cache_key = SymbolCorpusCacheKey {
                         repository_id: repository_id.clone(),
-                        manifest_token: "live:dirty_root".to_owned(),
+                        manifest_token: live_manifest_token.clone(),
                     };
                     if let Some(cached) = self
                         .cache_state
@@ -170,10 +175,6 @@ impl FriggMcpServer {
                         return Ok(cached);
                     }
                 }
-                let live_output = ManifestBuilder::default()
-                    .build_metadata_with_diagnostics(&root)
-                    .map_err(Self::map_frigg_error)?;
-                let live_signature = Self::root_signature(&live_output.entries);
                 manifest_output = Some(live_output);
                 (
                     Arc::new(
@@ -183,11 +184,7 @@ impl FriggMcpServer {
                             .entries
                             .clone(),
                     ),
-                    if can_reuse_dirty_live_corpus {
-                        "live:dirty_root".to_owned()
-                    } else {
-                        format!("live:{live_signature}")
-                    },
+                    live_manifest_token,
                 )
             }
         };
@@ -408,17 +405,17 @@ impl FriggMcpServer {
     pub(super) fn current_root_signature_for_repository(
         root: &Path,
         repository_id: &str,
-    ) -> Option<String> {
-        if let Ok(Some(snapshot)) =
-            Self::load_latest_validated_manifest_snapshot_shared(root, repository_id, None)
-        {
-            return Some(Self::root_signature(snapshot.digests.as_ref()));
+    ) -> Result<String, ErrorData> {
+        match Self::load_latest_validated_manifest_snapshot_shared(root, repository_id, None) {
+            Ok(Some(snapshot)) => return Ok(Self::root_signature(snapshot.digests.as_ref())),
+            Ok(None) => {}
+            Err(err) => return Err(err),
         }
 
         ManifestBuilder::default()
             .build_metadata_with_diagnostics(root)
-            .ok()
             .map(|output| Self::root_signature(&output.entries))
+            .map_err(Self::map_frigg_error)
     }
 
     pub(super) fn manifest_source_paths_for_digests(

@@ -433,6 +433,7 @@ fn apply_plan_entries(
     mcp_server_url: &str,
 ) -> Result<usize, Box<dyn Error>> {
     let mut writes = 0;
+    let mut rollback_edits = Vec::new();
 
     for entry in &plan.entries {
         if !matches!(
@@ -442,30 +443,48 @@ fn apply_plan_entries(
             continue;
         }
 
-        let contents = read_existing_target_contents(&entry.root, entry.target)?;
-        let write_path = resolve_entry_write_path(entry)?;
-
-        let edit = if matches!(entry.target, AdoptTarget::Hook) {
-            apply_claude_hook_edit(contents.as_deref(), uninstall)
-        } else if matches!(
-            entry.target,
-            AdoptTarget::McpProject | AdoptTarget::McpCursor
-        ) {
-            apply_mcp_json_edit(contents.as_deref(), uninstall, force, mcp_server_url)
-        } else {
-            apply_markdown_edit(contents.as_deref(), uninstall)
-        }?;
+        let entry_edit = (|| -> Result<(PathBuf, AdoptApplyEdit), Box<dyn Error>> {
+            let contents = read_existing_target_contents(&entry.root, entry.target)?;
+            let write_path = resolve_entry_write_path(entry)?;
+            let edit = if matches!(entry.target, AdoptTarget::Hook) {
+                apply_claude_hook_edit(contents.as_deref(), uninstall)
+            } else if matches!(
+                entry.target,
+                AdoptTarget::McpProject | AdoptTarget::McpCursor
+            ) {
+                apply_mcp_json_edit(contents.as_deref(), uninstall, force, mcp_server_url)
+            } else {
+                apply_markdown_edit(contents.as_deref(), uninstall)
+            }?;
+            Ok((write_path, edit))
+        })();
+        let (write_path, edit) = match entry_edit {
+            Ok(entry_edit) => entry_edit,
+            Err(err) => return Err(rollback_adopt_edits(rollback_edits, err)),
+        };
 
         match edit {
             AdoptApplyEdit::Write(updated) => {
-                fs::write(&write_path, updated)?;
+                let rollback = match AdoptRollbackEdit::capture(&write_path) {
+                    Ok(rollback) => rollback,
+                    Err(err) => return Err(rollback_adopt_edits(rollback_edits, Box::new(err))),
+                };
+                rollback_edits.push(rollback);
+                if let Err(err) = fs::write(&write_path, updated) {
+                    return Err(rollback_adopt_edits(rollback_edits, Box::new(err)));
+                }
                 writes += 1;
             }
             AdoptApplyEdit::Delete => {
+                let rollback = match AdoptRollbackEdit::capture(&write_path) {
+                    Ok(rollback) => rollback,
+                    Err(err) => return Err(rollback_adopt_edits(rollback_edits, Box::new(err))),
+                };
+                rollback_edits.push(rollback);
                 match fs::remove_file(&write_path) {
                     Ok(()) => {}
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(Box::new(err)),
+                    Err(err) => return Err(rollback_adopt_edits(rollback_edits, Box::new(err))),
                 }
                 writes += 1;
             }
@@ -474,6 +493,59 @@ fn apply_plan_entries(
     }
 
     Ok(writes)
+}
+
+#[derive(Debug)]
+struct AdoptRollbackEdit {
+    path: PathBuf,
+    previous_contents: Option<Vec<u8>>,
+}
+
+impl AdoptRollbackEdit {
+    fn capture(path: &Path) -> io::Result<Self> {
+        let previous_contents = match fs::read(path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
+        Ok(Self {
+            path: path.to_path_buf(),
+            previous_contents,
+        })
+    }
+
+    fn rollback(self) -> io::Result<()> {
+        match self.previous_contents {
+            Some(contents) => fs::write(self.path, contents),
+            None => match fs::remove_file(self.path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(err),
+            },
+        }
+    }
+}
+
+fn rollback_adopt_edits(
+    rollback_edits: Vec<AdoptRollbackEdit>,
+    original_error: Box<dyn Error>,
+) -> Box<dyn Error> {
+    let mut rollback_failures = Vec::new();
+    for rollback in rollback_edits.into_iter().rev() {
+        let path = rollback.path.clone();
+        if let Err(err) = rollback.rollback() {
+            rollback_failures.push(format!("{}: {err}", path.display()));
+        }
+    }
+
+    if rollback_failures.is_empty() {
+        original_error
+    } else {
+        Box::new(io::Error::other(format!(
+            "{original_error}; rollback failed for {}",
+            rollback_failures.join(", ")
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -1246,6 +1318,56 @@ mod tests {
             value["hooks"]["PreToolUse"][1]["hooks"][1]["command"],
             "write-hook"
         );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_rolls_back_prior_write_on_later_error() {
+        let root = temp_dir("adopt-apply-rollback");
+        fs::create_dir_all(&root).expect("create temp root");
+        let agents_path = root.join("AGENTS.md");
+        fs::write(
+            &agents_path,
+            format!("# Broken\n{}\n", super::managed_block::MANAGED_BLOCK_START),
+        )
+        .expect("write invalid managed block fixture");
+        let mcp_path = root.join(".mcp.json");
+        assert!(!mcp_path.exists());
+
+        let plan = super::AdoptPlan::new(vec![
+            super::AdoptPlanEntry {
+                repository_id: "repo-001".to_owned(),
+                root: root.clone(),
+                target: AdoptTarget::McpProject,
+                path: mcp_path.clone(),
+                action: super::AdoptPlanAction::Create,
+                reason: None,
+            },
+            super::AdoptPlanEntry {
+                repository_id: "repo-001".to_owned(),
+                root: root.clone(),
+                target: AdoptTarget::AgentsMd,
+                path: agents_path.clone(),
+                action: super::AdoptPlanAction::Update,
+                reason: None,
+            },
+        ]);
+
+        let err = apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL)
+            .expect_err("later invalid managed block should fail apply");
+        assert!(
+            err.to_string().contains("invalid nested or unmatched"),
+            "unexpected apply error: {err}"
+        );
+        assert!(
+            !mcp_path.exists(),
+            "prior created MCP config should be rolled back after later failure"
+        );
+        assert_eq!(
+            fs::read_to_string(&agents_path).expect("read unchanged invalid markdown"),
+            format!("# Broken\n{}\n", super::managed_block::MANAGED_BLOCK_START)
+        );
+
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

@@ -583,10 +583,11 @@ fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
         .store_validated(
             &root,
             "snapshot-001",
-            &[FileMetadataDigest {
+            &[FileDigest {
                 path: source_path,
                 size_bytes: metadata.len(),
                 mtime_ns: None,
+                hash_blake3_hex: "fixture-hash".to_owned(),
             }],
         );
     assert!(
@@ -960,6 +961,103 @@ async fn read_match_reads_from_cached_result_handle() {
     assert_eq!(read_match.line, 3);
     assert_eq!(read_match.start_line, 3);
     assert_eq!(read_match.end_line, 3);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn read_match_result_handle_is_invalidated_after_workspace_index_refresh() {
+    let workspace_root = temp_workspace_root("read-match-result-handle-invalidation");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn unique_marker_beta() {}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("runtime gate tests should build a valid FriggConfig");
+    let declared_repository = config
+        .repositories()
+        .into_iter()
+        .next()
+        .expect("read_match invalidation test should define one repository");
+    let declared_root = PathBuf::from(&declared_repository.root_path);
+    let db_path = crate::storage::ensure_provenance_db_parent_dir(&declared_root)
+        .expect("storage path should resolve");
+    Storage::new(&db_path)
+        .initialize()
+        .expect("storage should initialize");
+    crate::indexer::index_repository_with_runtime_config(
+        &declared_repository.repository_id.0,
+        &declared_root,
+        &db_path,
+        IndexMode::ChangedOnly,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+    )
+    .expect("baseline changed-only index should succeed");
+
+    let server = FriggMcpServer::new(config);
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let search = server
+        .search_text_impl(crate::mcp::types::SearchTextParams {
+            query: "unique_marker_beta".to_owned(),
+            pattern_type: None,
+            repository_id: Some(workspace.repository_id.clone()),
+            path_regex: None,
+            limit: None,
+            context_lines: None,
+            case_sensitive: None,
+            ignore_case: None,
+            word: None,
+            files_with_matches: None,
+            count_only: None,
+            glob: None,
+            exclude_glob: None,
+            include_hidden: None,
+            max_count_per_file: None,
+            collapse_by_file: None,
+            response_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("search_text should succeed")
+        .0;
+    let result_handle = search
+        .result_handle
+        .expect("search_text should return a result handle");
+    let match_id = search
+        .matches
+        .first()
+        .and_then(|found| found.match_id.clone())
+        .expect("search_text match should carry a match id");
+
+    server.invalidate_workspace_index_runtime_caches(&workspace, true);
+
+    let read_match = server
+        .read_match_impl(crate::mcp::types::ReadMatchParams {
+            result_handle: result_handle.clone(),
+            match_id: match_id.clone(),
+            before: Some(0),
+            after: Some(0),
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })
+        .await;
+    assert!(
+        read_match.is_err(),
+        "read_match should reject handles invalidated by index refresh"
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }

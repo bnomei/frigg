@@ -107,6 +107,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: Some("  repo-002  ".to_owned()),
             language: Some("  RS ".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -123,6 +124,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("tsx".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -142,6 +144,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("py".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -161,6 +164,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("golang".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -180,6 +184,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("kt".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -199,6 +204,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("java".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -218,6 +224,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("lua".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -237,6 +244,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("roc".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -256,6 +264,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("nim".to_owned()),
+            include_hidden: true,
         },
     )?;
     assert_eq!(
@@ -275,6 +284,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         SearchFilters {
             repository_id: None,
             language: Some("javascript".to_owned()),
+            include_hidden: true,
         },
     );
     let err = unsupported_language.expect_err("unsupported language filter should fail");

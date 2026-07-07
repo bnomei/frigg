@@ -59,8 +59,9 @@ pub(super) fn replace_precise_symbols_for_file(
     for symbol in symbols {
         let symbol_key = (symbol.repository_id.clone(), symbol.symbol.clone());
         upsert_precise_symbol_record(graph, &symbol_key, symbol);
-        increment_precise_symbol_ref_count(graph, &symbol_key);
-        next_symbols.insert(symbol.symbol.clone());
+        if next_symbols.insert(symbol.symbol.clone()) {
+            increment_precise_symbol_ref_count(graph, &symbol_key);
+        }
     }
 
     graph.precise_symbols_by_file.insert(file_key, next_symbols);

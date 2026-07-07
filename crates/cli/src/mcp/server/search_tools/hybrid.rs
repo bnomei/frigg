@@ -157,6 +157,7 @@ impl FriggMcpServer {
                     let search_filters = SearchFilters {
                         repository_id: None,
                         language: params_for_blocking.language.clone(),
+                        include_hidden: true,
                     };
                     let search_output = match server
                         .runtime_state
@@ -844,6 +845,7 @@ impl FriggMcpServer {
                 SearchFilters {
                     repository_id: None,
                     language: normalized_language.clone(),
+                    include_hidden: true,
                 },
             )
             .map_err(Self::map_frigg_error)?;
@@ -1081,6 +1083,13 @@ impl FriggMcpServer {
         evidence: crate::searcher::HybridRankedEvidence,
     ) -> SearchHybridMatch {
         let path = evidence.document.path.clone();
+        let mut lexical_sources = evidence.lexical_sources;
+        for source in evidence.witness_sources {
+            if !lexical_sources.contains(&source) {
+                lexical_sources.push(source);
+            }
+        }
+        lexical_sources.sort();
         SearchHybridMatch {
             match_id: None,
             repository_id: evidence.document.repository_id,
@@ -1093,7 +1102,7 @@ impl FriggMcpServer {
             lexical_score: evidence.lexical_score,
             graph_score: evidence.graph_score,
             semantic_score: evidence.semantic_score,
-            lexical_sources: evidence.lexical_sources,
+            lexical_sources,
             graph_sources: evidence.graph_sources,
             semantic_sources: evidence.semantic_sources,
             path_class: Some(classify_repository_path(&path)),
@@ -1280,6 +1289,45 @@ mod tests {
             }),
             rank_reasons: vec![],
         }
+    }
+
+    #[test]
+    fn search_hybrid_match_from_evidence_preserves_witness_sources_for_guardrails() {
+        let matched = FriggMcpServer::search_hybrid_match_from_evidence(
+            crate::searcher::HybridRankedEvidence {
+                document: crate::domain::EvidenceDocumentRef {
+                    repository_id: "repo-001".to_owned(),
+                    path: "src/server.rs".to_owned(),
+                    line: 12,
+                    column: 4,
+                },
+                anchor: crate::domain::EvidenceAnchor::new(
+                    crate::domain::EvidenceAnchorKind::PathWitness,
+                    12,
+                    4,
+                    12,
+                    10,
+                ),
+                excerpt: "needle".to_owned(),
+                blended_score: 1.0,
+                lexical_score: 0.1,
+                witness_score: 1.0,
+                graph_score: 0.0,
+                semantic_score: 0.0,
+                lexical_sources: Vec::new(),
+                witness_sources: vec!["path_witness:tests/server_test.rs:3:1".to_owned()],
+                graph_sources: Vec::new(),
+                semantic_sources: Vec::new(),
+            },
+        );
+
+        assert_eq!(
+            matched.lexical_sources,
+            vec!["path_witness:tests/server_test.rs:3:1".to_owned()]
+        );
+        assert!(FriggMcpServer::search_hybrid_match_is_weak_witness_only(
+            &matched, 0, 0
+        ));
     }
 
     #[test]

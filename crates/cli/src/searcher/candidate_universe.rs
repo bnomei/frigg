@@ -14,7 +14,7 @@ use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_
 
 use super::attribution::elapsed_us;
 use super::candidates::{
-    hidden_workflow_candidates_for_repository, merge_candidate_files,
+    hidden_workflow_candidates_for_repository, merge_candidate_files, repository_path_is_hidden,
     normalize_repository_relative_path, root_scoped_runtime_config_candidates_for_repository,
     search_root_scoped_runtime_config_candidates_for_repository,
     walk_candidate_files_for_repository,
@@ -257,6 +257,9 @@ impl TextSearcher {
             if let Some(language) = filters.language
                 && !language.matches_path(&path)
             {
+                continue;
+            }
+            if !filters.include_hidden && repository_path_is_hidden(&rel_path) {
                 continue;
             }
             if let Some(path_regex) = &query.path_regex

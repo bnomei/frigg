@@ -88,6 +88,33 @@ impl FriggMcpServer {
             .cloned()
     }
 
+    pub(super) fn invalidate_session_result_handles_for_repository_ids<'a>(
+        &self,
+        repository_ids: impl IntoIterator<Item = &'a str>,
+    ) {
+        let repository_ids = repository_ids.into_iter().collect::<Vec<_>>();
+        if repository_ids.is_empty() {
+            return;
+        }
+        let mut cache = self
+            .session_state
+            .inner
+            .result_handles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.entries.retain(|_, entry| {
+            !entry.matches.values().any(|anchor| {
+                repository_ids
+                    .iter()
+                    .any(|repository_id| anchor.repository_id == *repository_id)
+            })
+        });
+        let retained_handles = cache.entries.keys().cloned().collect::<BTreeSet<_>>();
+        cache
+            .insertion_order
+            .retain(|handle| retained_handles.contains(handle));
+    }
+
     fn assign_result_handle_for_text_matches(
         &self,
         tool_name: &'static str,
@@ -314,6 +341,22 @@ impl FriggMcpServer {
         let slice = snapshot
             .read_line_slice_lossy(line_start, Some(line_end), self.config.max_file_bytes)
             .map_err(|err| Self::map_lossy_line_slice_error(&canonical_path, err))?;
+        if slice.bytes > self.config.max_file_bytes {
+            return Err(Self::invalid_params(
+                format!(
+                    "selected line range exceeds max_file_bytes={}",
+                    self.config.max_file_bytes
+                ),
+                Some(json!({
+                    "path": found.path.clone(),
+                    "bytes": slice.bytes,
+                    "max_bytes": self.config.max_file_bytes,
+                    "start_line": line_start,
+                    "end_line": line_end,
+                    "total_lines": slice.total_lines,
+                })),
+            ));
+        }
         found.excerpt = slice.content;
         Ok(())
     }
@@ -386,7 +429,15 @@ impl FriggMcpServer {
             self.assign_result_handle_for_hybrid_matches("search_hybrid", &mut response.matches);
         if !Self::should_return_full_response(response_mode) {
             response.metadata = response.metadata.and_then(|mut metadata| {
-                let context_efficiency = metadata.context_efficiency.take()?;
+                let lexical_only_mode = metadata.lexical_only_mode;
+                let warning = metadata.warning.take();
+                let context_efficiency = metadata.context_efficiency.take();
+                if lexical_only_mode != Some(true)
+                    && warning.is_none()
+                    && context_efficiency.is_none()
+                {
+                    return None;
+                }
                 Some(SearchHybridMetadata {
                     channels: BTreeMap::new(),
                     lexical_backend: None,
@@ -398,9 +449,9 @@ impl FriggMcpServer {
                     semantic_candidate_count: None,
                     semantic_hit_count: None,
                     semantic_match_count: None,
-                    lexical_only_mode: None,
+                    lexical_only_mode,
                     query_shape: None,
-                    warning: None,
+                    warning,
                     exact_pivot_assistance: None,
                     witness_demotion_applied: None,
                     diagnostics_count: 0,
@@ -412,7 +463,7 @@ impl FriggMcpServer {
                     stage_attribution: None,
                     semantic_capability: None,
                     utility: None,
-                    context_efficiency: Some(context_efficiency),
+                    context_efficiency,
                     cache_debug: None,
                 })
             });
