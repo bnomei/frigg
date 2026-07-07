@@ -30,8 +30,8 @@ use semantic_store_support::{
     load_ready_semantic_head_for_repository_snapshot_model_on_connection,
     load_semantic_head_for_repository_model_on_connection,
     normalize_embedding_for_vector_projection, rebuild_semantic_vector_rows,
-    sync_vector_partition_replace, sync_vector_rows_insert, upsert_semantic_head,
-    validate_semantic_target,
+    semantic_vector_chunk_ids_match_embeddings_for_repository_model, sync_vector_partition_replace,
+    sync_vector_rows_insert, upsert_semantic_head, validate_semantic_target,
 };
 
 impl Storage {
@@ -124,6 +124,12 @@ impl Storage {
         )?;
         let live_vector_rows =
             count_semantic_vector_rows_for_repository_model(&conn, repository_id, provider, model)?;
+        let vector_consistent = semantic_vector_chunk_ids_match_embeddings_for_repository_model(
+            &conn,
+            repository_id,
+            provider,
+            model,
+        )?;
         let retained_manifest_snapshots =
             count_manifest_snapshots_for_repository(&conn, repository_id)?;
 
@@ -138,7 +144,7 @@ impl Storage {
             live_embedding_rows,
             live_vector_rows,
             retained_manifest_snapshots,
-            vector_consistent: live_embedding_rows == live_vector_rows,
+            vector_consistent,
         })
     }
 

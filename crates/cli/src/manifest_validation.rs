@@ -956,6 +956,44 @@ mod tests {
                 "failed to corrupt semantic vector partition for freshness test: {err}"
             ))
         })?;
+        conn.execute(
+            &format!(
+                r#"
+                INSERT INTO {VECTOR_TABLE_NAME} (
+                    embedding,
+                    repository_id,
+                    provider,
+                    model,
+                    language,
+                    chunk_id
+                )
+                SELECT
+                    embedding,
+                    repository_id,
+                    provider,
+                    model,
+                    language,
+                    ?5
+                FROM {VECTOR_TABLE_NAME}
+                WHERE repository_id = ?1
+                  AND provider = ?2
+                  AND model = ?3
+                  AND chunk_id = ?4
+                "#
+            ),
+            (
+                repository_id,
+                "openai",
+                "text-embedding-3-small",
+                "chunk-a",
+                "chunk-orphan",
+            ),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to seed equal-count orphan semantic vector for freshness test: {err}"
+            ))
+        })?;
         drop(conn);
 
         assert!(
@@ -972,6 +1010,7 @@ mod tests {
             "openai",
             "text-embedding-3-small",
         )?;
+        assert_eq!(health.live_embedding_rows, health.live_vector_rows);
         assert!(!health.vector_consistent);
 
         let status = repository_freshness_status(

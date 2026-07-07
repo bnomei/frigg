@@ -659,6 +659,61 @@ pub(super) fn count_semantic_vector_rows_for_repository_model(
     })
 }
 
+pub(super) fn semantic_vector_chunk_ids_match_embeddings_for_repository_model(
+    conn: &Connection,
+    repository_id: &str,
+    provider: &str,
+    model: &str,
+) -> FriggResult<bool> {
+    let drift_count: i64 = conn
+        .query_row(
+            &format!(
+                r#"
+                SELECT
+                  (
+                    SELECT COUNT(*)
+                    FROM semantic_chunk_embedding AS embedding
+                    WHERE embedding.repository_id = ?1
+                      AND embedding.provider = ?2
+                      AND embedding.model = ?3
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM {VECTOR_TABLE_NAME} AS vector
+                        WHERE vector.repository_id = embedding.repository_id
+                          AND vector.provider = embedding.provider
+                          AND vector.model = embedding.model
+                          AND vector.chunk_id = embedding.chunk_id
+                      )
+                  )
+                  +
+                  (
+                    SELECT COUNT(*)
+                    FROM {VECTOR_TABLE_NAME} AS vector
+                    WHERE vector.repository_id = ?1
+                      AND vector.provider = ?2
+                      AND vector.model = ?3
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM semantic_chunk_embedding AS embedding
+                        WHERE embedding.repository_id = vector.repository_id
+                          AND embedding.provider = vector.provider
+                          AND embedding.model = vector.model
+                          AND embedding.chunk_id = vector.chunk_id
+                      )
+                  )
+                "#
+            ),
+            (repository_id, provider, model),
+            |row| row.get(0),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to compare semantic embedding and vector chunk ids for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+            ))
+        })?;
+    Ok(drift_count == 0)
+}
+
 pub(super) fn count_manifest_snapshots_for_repository(
     conn: &Connection,
     repository_id: &str,
