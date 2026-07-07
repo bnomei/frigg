@@ -459,13 +459,23 @@ impl FriggMcpServer {
         rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
     ) -> (u8, u8, u8, u8, u8) {
         let relative_path = Self::relative_display_path(&candidate.root, &candidate.symbol.path);
-        let same_file_rank = rust_hint.map_or(1, |hint| {
-            if hint.prefer_same_file && location_relative_path == Some(relative_path.as_str()) {
-                0
-            } else {
-                1
+        let same_file_rank = match rust_hint {
+            Some(hint) if hint.prefer_same_file => {
+                if location_relative_path == Some(relative_path.as_str()) {
+                    0
+                } else {
+                    1
+                }
             }
-        });
+            Some(_) => 1,
+            None => {
+                if location_relative_path == Some(relative_path.as_str()) {
+                    0
+                } else {
+                    1
+                }
+            }
+        };
         let method_rank = rust_hint.map_or(0, |hint| {
             if hint.prefer_method && candidate.symbol.kind != crate::indexer::SymbolKind::Method {
                 1

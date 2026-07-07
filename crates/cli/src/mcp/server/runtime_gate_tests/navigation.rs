@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::domain::model::{ReferenceMatch, ReferenceMatchKind};
+use crate::mcp::server_state::NavigationTargetSelection;
 use crate::mcp::types::{
     CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
     FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
@@ -703,6 +704,65 @@ fn location_navigation_prefers_token_under_cursor_before_enclosing_symbol() {
 
     assert_eq!(resolved.symbol_query, "helper");
     assert_eq!(resolved.resolution_source, "location_token_rust");
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn navigation_location_same_file_prefers_requested_path_for_non_rust_collisions() {
+    let workspace_root = temp_workspace_root("location-same-file-non-rust");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create workspace src directory");
+    fs::write(src_root.join("a.ts"), "export function handle() {}\n")
+        .expect("failed to write first handle fixture");
+    let b_source = "export function handle() {}\n\nhandle();\n";
+    fs::write(src_root.join("b.ts"), b_source).expect("failed to write second handle fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
+    let corpora = server
+        .collect_repository_symbol_corpora(Some(&repository_id))
+        .expect("symbol corpus collection should succeed");
+
+    let handle_column = b_source.find("handle").expect("handle token should exist") + 1;
+    let resolved = FriggMcpServer::resolve_navigation_target(
+        &corpora,
+        None,
+        Some("src/b.ts"),
+        Some(1),
+        Some(handle_column),
+        None,
+    )
+    .expect("location target resolution should succeed");
+
+    assert_eq!(resolved.symbol_query, "handle");
+    assert_eq!(resolved.resolution_source, "location_token");
+    let NavigationTargetSelection::Resolved(target) = resolved.selection else {
+        panic!("expected resolved navigation target");
+    };
+    assert_eq!(
+        FriggMcpServer::relative_display_path(
+            &target.candidate.root,
+            &target.candidate.symbol.path
+        ),
+        "src/b.ts"
+    );
+    assert_eq!(target.candidate.symbol.line, 1);
 
     let _ = fs::remove_dir_all(workspace_root);
 }

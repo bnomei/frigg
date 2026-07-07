@@ -328,10 +328,7 @@ async fn explore_empty_file_resume_from_line_one_succeeds() {
             anchor: None,
             context_lines: None,
             max_matches: Some(4),
-            resume_from: Some(crate::mcp::types::ExploreCursor {
-                line: 1,
-                column: 1,
-            }),
+            resume_from: Some(crate::mcp::types::ExploreCursor { line: 1, column: 1 }),
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -377,10 +374,7 @@ async fn explore_empty_file_resume_from_outside_bounds_rejects_line_two() {
             anchor: None,
             context_lines: None,
             max_matches: Some(4),
-            resume_from: Some(crate::mcp::types::ExploreCursor {
-                line: 2,
-                column: 1,
-            }),
+            resume_from: Some(crate::mcp::types::ExploreCursor { line: 2, column: 1 }),
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -405,11 +399,8 @@ async fn explore_resume_from_paginates_non_empty_probe() {
     let workspace_root = temp_workspace_root("explore-resume-non-empty");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
-    fs::write(
-        workspace_root.join("src/lib.rs"),
-        "alpha\nbeta\nalpha\n",
-    )
-    .expect("failed to write source fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "alpha\nbeta\nalpha\n")
+        .expect("failed to write source fixture");
 
     let server = FriggMcpServer::new(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
