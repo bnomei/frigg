@@ -1236,9 +1236,14 @@ impl FriggMcpServer {
             }
         }
 
-        if matches.len() > 1 && !requested.is_absolute() && params.repository_id.is_none() {
+        if matches.len() > 1 && params.repository_id.is_none() {
+            let ambiguity_message = if requested.is_absolute() {
+                "path is ambiguous across adopted repositories; pass repository_id"
+            } else {
+                "relative path is ambiguous across adopted repositories; pass repository_id"
+            };
             return Err(Self::invalid_params(
-                "relative path is ambiguous across adopted repositories; pass repository_id",
+                ambiguity_message,
                 Some(serde_json::json!({
                     "path": params.path,
                     "repository_ids": matches

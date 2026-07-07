@@ -1817,6 +1817,77 @@ async fn read_file_rejects_ambiguous_relative_path_across_adopted_repositories()
     let _ = fs::remove_dir_all(workspace_root_b);
 }
 
+#[tokio::test]
+async fn read_file_rejects_ambiguous_absolute_path_across_nested_adopted_repositories() {
+    let mono_root = temp_workspace_root("ambiguous-abs-mono");
+    let package_root = mono_root.join("packages").join("foo");
+    fs::create_dir_all(package_root.join("src"))
+        .expect("failed to create nested package fixture root");
+    fs::write(package_root.join("src/lib.rs"), "pub struct Nested;\n")
+        .expect("failed to write nested package source");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![mono_root.clone(), package_root.clone()])
+            .expect("nested workspace roots must produce valid config"),
+    );
+    let canonical_package = package_root
+        .canonicalize()
+        .expect("package root should canonicalize");
+    let package_workspace = server
+        .known_workspaces()
+        .into_iter()
+        .find(|workspace| {
+            workspace
+                .root
+                .canonicalize()
+                .map(|root| root == canonical_package)
+                .unwrap_or(false)
+        })
+        .expect("package root should be globally known at startup");
+    for workspace in server.known_workspaces() {
+        server
+            .adopt_workspace(&workspace, false)
+            .expect("workspace should adopt");
+    }
+    server.set_current_repository_id(None);
+
+    let absolute_path = package_root.join("src/lib.rs").display().to_string();
+    let ambiguous = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: absolute_path.clone(),
+            repository_id: None,
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await;
+    assert!(
+        ambiguous.is_err(),
+        "absolute reads that match nested adopted repositories should require repository_id"
+    );
+
+    let explicit = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: absolute_path,
+            repository_id: Some(package_workspace.repository_id.clone()),
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("explicit repository_id should disambiguate nested absolute read");
+    assert!(explicit.content.contains("pub struct Nested"));
+    assert_eq!(explicit.path, "src/lib.rs");
+
+    let _ = fs::remove_dir_all(mono_root);
+}
+
 #[test]
 fn workspace_attach_rejects_ambiguous_relative_path_across_adopted_repositories() {
     let workspace_root_a = temp_workspace_root("ambiguous-attach-repo-a");
