@@ -78,6 +78,11 @@ impl FriggMcpServer {
         source_bytes_loaded: u64,
         cache_epoch: Option<u64>,
     ) {
+        let mut cache = self
+            .cache_state
+            .heuristic_reference_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cache_epoch) = cache_epoch {
             if self
                 .cache_state
@@ -89,11 +94,6 @@ impl FriggMcpServer {
             }
         }
 
-        let mut cache = self
-            .cache_state
-            .heuristic_reference_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let inserted = cache
             .insert(
                 cache_key,

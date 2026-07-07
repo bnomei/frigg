@@ -664,14 +664,7 @@ fn heuristic_reference_cache_skips_insert_after_invalidation_epoch_changes() {
         scip_signature: "scip-001".to_owned(),
     };
 
-    server.cache_heuristic_references(
-        cache_key.clone(),
-        Vec::new(),
-        0,
-        0,
-        0,
-        0,
-    );
+    server.cache_heuristic_references(cache_key.clone(), Vec::new(), 0, 0, 0, 0);
     assert_eq!(
         server
             .cache_state
@@ -706,9 +699,7 @@ fn heuristic_reference_cache_skips_insert_after_invalidation_epoch_changes() {
         "stale in-flight heuristic reference loads must not repopulate after invalidation"
     );
     assert!(
-        server
-            .cached_heuristic_references(&cache_key)
-            .is_none(),
+        server.cached_heuristic_references(&cache_key).is_none(),
         "subsequent heuristic reference lookups must miss after stale insert is skipped"
     );
 }
