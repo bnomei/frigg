@@ -34,6 +34,8 @@ use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState}
 
 const WATCH_TICK_MS: u64 = 50;
 const WATCH_INDEX_WORKER_PANIC_MESSAGE: &str = "watch index worker panicked";
+const WATCH_STALE_DISPATCH_EPOCH_MESSAGE: &str =
+    "watch index dispatch epoch stale after lease release";
 
 /// Callback invoked when watch-driven index work invalidates MCP repository caches.
 pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
@@ -216,6 +218,35 @@ impl RepositoryEpochs {
     fn current(&self, repository_id: &str) -> u64 {
         self.epochs.get(repository_id).copied().unwrap_or(0)
     }
+}
+
+fn watch_dispatch_epoch_is_stale(
+    epochs: &RepositoryEpochs,
+    repository_id: &str,
+    dispatch_epoch: u64,
+) -> bool {
+    epochs.current(repository_id) != dispatch_epoch
+}
+
+fn abort_watch_index_plan_if_dispatch_epoch_stale(
+    epochs: &RepositoryEpochs,
+    repository_id: &str,
+    dispatch_epoch: u64,
+) -> FriggResult<()> {
+    if watch_dispatch_epoch_is_stale(epochs, repository_id, dispatch_epoch) {
+        return Err(FriggError::Internal(
+            WATCH_STALE_DISPATCH_EPOCH_MESSAGE.to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn should_invalidate_watch_worker_cache(
+    epochs: &RepositoryEpochs,
+    repository_id: &str,
+    dispatch_epoch: u64,
+) -> bool {
+    !watch_dispatch_epoch_is_stale(epochs, repository_id, dispatch_epoch)
 }
 
 /// Lease snapshot for a repository root watched by the shared supervisor.
@@ -517,7 +548,7 @@ async fn run_supervisor(
         watch_config.manifest_fast_concurrency,
         watch_config.semantic_followup_concurrency,
     );
-    let mut repository_epochs = RepositoryEpochs::default();
+    let repository_epochs = Arc::new(Mutex::new(RepositoryEpochs::default()));
     let mut ticker = tokio::time::interval(Duration::from_millis(WATCH_TICK_MS));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -550,7 +581,10 @@ async fn run_supervisor(
                         &reporter,
                     ),
                     SupervisorCommand::LeaseAcquired { repository } => {
-                        repository_epochs.ensure(&repository.repository_id);
+                        repository_epochs
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .ensure(&repository.repository_id);
                         scheduler.add_repository(&repository.repository_id);
                         queue_startup_refresh_if_needed(
                             &repository,
@@ -564,7 +598,10 @@ async fn run_supervisor(
                     }
                     SupervisorCommand::LeaseReleased { repository_id } => {
                         // Lease released: advance epoch before dropping scheduler state.
-                        repository_epochs.bump(&repository_id);
+                        repository_epochs
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .bump(&repository_id);
                         scheduler.remove_repository(&repository_id);
                     }
                     SupervisorCommand::IndexCompleted {
@@ -573,8 +610,11 @@ async fn run_supervisor(
                         class,
                         result,
                     } => {
-                        let current_epoch = repository_epochs.current(&repository_id);
-                        // Epoch mismatch: ignore stale index side effects from a prior lease.
+                        let current_epoch = repository_epochs
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .current(&repository_id);
+                        // Epoch mismatch: ignore stale scheduler follow-up from a prior lease.
                         if epoch != current_epoch {
                             warn!(
                                 repository_id = %repository_id,
@@ -677,8 +717,11 @@ async fn run_supervisor(
                 }
             };
             let recent_paths = scheduler.mark_started(&repository_id, class);
-            // Capture dispatch epoch so completion handlers can detect lease churn.
-            let dispatch_epoch = repository_epochs.current(&repository.repository_id);
+            // Capture dispatch epoch so worker side effects and completions can detect lease churn.
+            let dispatch_epoch = repository_epochs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .current(&repository.repository_id);
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -702,8 +745,10 @@ async fn run_supervisor(
             let repository_cache_invalidation_callback =
                 repository_cache_invalidation_callback.clone();
             let reporter = reporter.clone();
+            let worker_epochs = Arc::clone(&repository_epochs);
             // Side effect: blocking index runs off the supervisor tick loop.
             tokio::task::spawn_blocking(move || {
+                let invalidation_epochs = Arc::clone(&worker_epochs);
                 let result = run_caught_watch_index_work(|| match class {
                     WatchRefreshClass::ManifestFast => {
                         let mut lexical_only_runtime = semantic_runtime.clone();
@@ -712,6 +757,7 @@ async fn run_supervisor(
                         let progress_reporter = reporter.clone();
                         let plan_repository_id = repository.repository_id.clone();
                         let progress_repository_id = repository.repository_id.clone();
+                        let plan_epochs = Arc::clone(&worker_epochs);
                         index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
                             &repository.repository_id,
                             &repository.root,
@@ -729,7 +775,14 @@ async fn run_supervisor(
                                         plan: plan.clone(),
                                     },
                                 );
-                                Ok(())
+                                let epochs = plan_epochs
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                abort_watch_index_plan_if_dispatch_epoch_stale(
+                                    &epochs,
+                                    &plan_repository_id,
+                                    dispatch_epoch,
+                                )
                             },
                             move |progress| {
                                 report_watch_event(
@@ -748,6 +801,7 @@ async fn run_supervisor(
                         let progress_reporter = reporter.clone();
                         let plan_repository_id = repository.repository_id.clone();
                         let progress_repository_id = repository.repository_id.clone();
+                        let plan_epochs = Arc::clone(&worker_epochs);
                         let index_mode = if recent_paths.is_empty() {
                             IndexMode::Full
                         } else {
@@ -770,7 +824,14 @@ async fn run_supervisor(
                                         plan: plan.clone(),
                                     },
                                 );
-                                Ok(())
+                                let epochs = plan_epochs
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                abort_watch_index_plan_if_dispatch_epoch_stale(
+                                    &epochs,
+                                    &plan_repository_id,
+                                    dispatch_epoch,
+                                )
                             },
                             move |progress| {
                                 report_watch_event(
@@ -807,8 +868,20 @@ async fn run_supervisor(
                 } else {
                     RuntimeTaskStatus::Failed
                 };
-                if let Some(callback) = repository_cache_invalidation_callback.as_ref() {
-                    callback(&repository.repository_id);
+                let should_invalidate_worker_cache = {
+                    let epochs = invalidation_epochs
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    should_invalidate_watch_worker_cache(
+                        &epochs,
+                        &repository.repository_id,
+                        dispatch_epoch,
+                    )
+                };
+                if should_invalidate_worker_cache {
+                    if let Some(callback) = repository_cache_invalidation_callback.as_ref() {
+                        callback(&repository.repository_id);
+                    }
                 }
                 task_guard.finish(status, detail);
                 let _ = completion_tx.send(SupervisorCommand::IndexCompleted {
@@ -1805,6 +1878,138 @@ mod tests {
             "synthetic panic completion should emit RefreshFailed"
         );
 
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn stale_dispatch_epoch_blocks_worker_side_effects_before_completion() {
+        use std::fs;
+
+        use crate::indexer::index_repository_with_runtime_config_and_dirty_paths_and_progress_callback;
+        use crate::settings::SemanticRuntimeCredentials;
+        use crate::storage::Storage;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let workspace_root = std::env::temp_dir().join(format!(
+            "frigg-watch-stale-epoch-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(workspace_root.join("src")).expect("workspace src should be creatable");
+        fs::write(
+            workspace_root.join("src/lib.rs"),
+            "pub fn stale_epoch_guard() {}\n",
+        )
+        .expect("workspace source should be writable");
+
+        let db_path = temp_supervisor_db_path("stale-dispatch-side-effects");
+        index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+            &[],
+            |_| Ok(()),
+            |_| {},
+        )
+        .expect("baseline index should succeed");
+
+        let baseline_snapshot = Storage::new(&db_path)
+            .load_latest_manifest_for_repository("repo-001")
+            .expect("baseline manifest should load")
+            .expect("baseline snapshot should exist")
+            .snapshot_id;
+
+        fs::write(
+            workspace_root.join("src/lib.rs"),
+            "pub fn stale_epoch_guard() { 1 }\n",
+        )
+        .expect("workspace source should be writable for refresh attempt");
+
+        let epochs = Arc::new(Mutex::new(RepositoryEpochs::default()));
+        epochs
+            .lock()
+            .expect("repository epochs poisoned")
+            .ensure("repo-001");
+        let dispatch_epoch = epochs
+            .lock()
+            .expect("repository epochs poisoned")
+            .current("repo-001");
+        epochs
+            .lock()
+            .expect("repository epochs poisoned")
+            .bump("repo-001");
+
+        let worker_epochs = Arc::clone(&epochs);
+        let invalidated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&invalidated);
+        let callback: RepositoryCacheInvalidationCallback =
+            Arc::new(move |repository_id: &str| {
+                recorded
+                    .lock()
+                    .expect("invalidation record poisoned")
+                    .push(repository_id.to_owned());
+            });
+
+        let dirty_path = workspace_root.join("src/lib.rs");
+        let result = index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+            &[dirty_path],
+            move |_plan| {
+                let epochs = worker_epochs
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                abort_watch_index_plan_if_dispatch_epoch_stale(&epochs, "repo-001", dispatch_epoch)
+            },
+            |_| {},
+        );
+
+        assert!(
+            result.is_err(),
+            "stale dispatch epoch must abort index before storage commit"
+        );
+        assert!(
+            result
+                .expect_err("stale dispatch epoch should return an error")
+                .to_string()
+                .contains(WATCH_STALE_DISPATCH_EPOCH_MESSAGE),
+            "stale dispatch epoch should surface the watch abort message"
+        );
+
+        let after_snapshot = Storage::new(&db_path)
+            .load_latest_manifest_for_repository("repo-001")
+            .expect("manifest should still load after aborted refresh")
+            .expect("baseline snapshot should remain")
+            .snapshot_id;
+        assert_eq!(
+            after_snapshot, baseline_snapshot,
+            "stale dispatch epoch must not commit sqlite"
+        );
+
+        let epochs_guard = epochs
+            .lock()
+            .expect("repository epochs poisoned");
+        if should_invalidate_watch_worker_cache(&epochs_guard, "repo-001", dispatch_epoch) {
+            callback("repo-001");
+        }
+        assert!(
+            invalidated
+                .lock()
+                .expect("invalidation record poisoned")
+                .is_empty(),
+            "stale dispatch epoch must skip worker-side cache invalidation"
+        );
+
+        let _ = fs::remove_dir_all(&workspace_root);
         let _ = std::fs::remove_file(&db_path);
     }
 
