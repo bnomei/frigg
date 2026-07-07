@@ -639,6 +639,10 @@ fn classify_claude_hook_target(
             AdoptPlanAction::Remove,
             Some("frigg-hook-present".to_owned()),
         ),
+        (true, json_merge::ClaudeHookState::Diverged) => (
+            AdoptPlanAction::Remove,
+            Some("frigg-hook-diverged".to_owned()),
+        ),
         (true, json_merge::ClaudeHookState::Missing) => (
             AdoptPlanAction::Unchanged,
             Some("frigg-hook-absent".to_owned()),
@@ -646,6 +650,10 @@ fn classify_claude_hook_target(
         (false, json_merge::ClaudeHookState::Desired) => (
             AdoptPlanAction::Unchanged,
             Some("frigg-hook-current".to_owned()),
+        ),
+        (false, json_merge::ClaudeHookState::Diverged) => (
+            AdoptPlanAction::Update,
+            Some("frigg-hook-diverged".to_owned()),
         ),
         (false, json_merge::ClaudeHookState::Missing) => (
             AdoptPlanAction::Update,
@@ -956,6 +964,60 @@ mod tests {
                 .expect("parse mcp");
         assert!(value["mcpServers"].get("frigg").is_none());
         assert_eq!(value["mcpServers"]["other"]["command"], "other");
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_replaces_diverged_claude_hook_without_duplicating() {
+        let root = temp_dir("adopt-apply-replace-diverged-hook");
+        fs::create_dir_all(root.join(".claude")).expect("create claude dir");
+        fs::write(
+            root.join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":10}]}]}}"#,
+        )
+        .expect("write settings");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Update);
+        assert_eq!(
+            plan.entries[0].reason.as_deref(),
+            Some("frigg-hook-diverged")
+        );
+        assert_eq!(
+            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            1
+        );
+
+        let value: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        let hooks = value["hooks"]["PreToolUse"][0]["hooks"]
+            .as_array()
+            .expect("hook array");
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0], super::json_merge::desired_claude_hook_command());
+
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan again");
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 
