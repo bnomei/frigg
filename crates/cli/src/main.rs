@@ -382,6 +382,19 @@ mod tests {
     }
 
     #[test]
+    fn transport_host_missing_allowed_when_allowlist_disabled() {
+        let headers = axum::http::HeaderMap::new();
+        assert!(host_header_allowed(&headers, &None));
+    }
+
+    #[test]
+    fn transport_host_missing_rejected_when_allowlist_enabled() {
+        let headers = axum::http::HeaderMap::new();
+        let allowed = Some(vec!["localhost:4000".to_owned()]);
+        assert!(!host_header_allowed(&headers, &allowed));
+    }
+
+    #[test]
     fn transport_origin_allowlist_rejects_unknown_origin() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(

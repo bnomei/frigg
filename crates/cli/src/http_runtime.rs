@@ -261,7 +261,7 @@ pub(super) fn host_header_allowed(
         .and_then(|value| value.to_str().ok())
         .and_then(parse_host_authority)
     else {
-        return false;
+        return allowed_authorities.is_none();
     };
 
     authority_allowed(&authority, allowed_authorities)
