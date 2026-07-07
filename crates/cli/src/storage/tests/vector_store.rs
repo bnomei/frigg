@@ -337,13 +337,34 @@ fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
     let conn = open_connection(&db_path)?;
     conn.execute(
         &format!(
-            "DELETE FROM {VECTOR_TABLE_NAME} WHERE repository_id = ?1 AND provider = ?2 AND model = ?3 AND chunk_id = ?4"
+            r#"
+            INSERT INTO {VECTOR_TABLE_NAME} (
+                embedding,
+                repository_id,
+                provider,
+                model,
+                language,
+                chunk_id
+            )
+            SELECT
+                embedding,
+                repository_id,
+                provider,
+                model,
+                language,
+                chunk_id
+            FROM {VECTOR_TABLE_NAME}
+            WHERE repository_id = ?1
+              AND provider = ?2
+              AND model = ?3
+              AND chunk_id = ?4
+            "#
         ),
-        ("repo-1", "openai", "text-embedding-3-small", "chunk-b"),
+        ("repo-1", "openai", "text-embedding-3-small", "chunk-a"),
     )
     .map_err(|err| {
         FriggError::Internal(format!(
-            "failed to corrupt semantic vector partition for repair test: {err}"
+            "failed to duplicate semantic vector row for repair test: {err}"
         ))
     })?;
     drop(conn);
@@ -355,7 +376,7 @@ fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
     )?;
     assert!(!broken.vector_consistent);
     assert_eq!(broken.live_embedding_rows, 2);
-    assert_eq!(broken.live_vector_rows, 1);
+    assert_eq!(broken.live_vector_rows, 3);
 
     let err = storage
         .verify()
