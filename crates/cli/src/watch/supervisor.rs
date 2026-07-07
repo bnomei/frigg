@@ -15,7 +15,7 @@ use tracing::{info, warn};
 use crate::domain::{FriggError, FriggResult};
 use crate::indexer::{
     IndexMode, IndexPlan, IndexProgressEvent, IndexSummary,
-    index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback,
 };
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus};
@@ -756,9 +756,11 @@ async fn run_supervisor(
                         let plan_reporter = reporter.clone();
                         let progress_reporter = reporter.clone();
                         let plan_repository_id = repository.repository_id.clone();
+                        let commit_repository_id = repository.repository_id.clone();
                         let progress_repository_id = repository.repository_id.clone();
                         let plan_epochs = Arc::clone(&worker_epochs);
-                        index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+                        let commit_epochs = Arc::clone(&worker_epochs);
+                        index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback(
                             &repository.repository_id,
                             &repository.root,
                             &repository.db_path,
@@ -781,6 +783,16 @@ async fn run_supervisor(
                                 abort_watch_index_plan_if_dispatch_epoch_stale(
                                     &epochs,
                                     &plan_repository_id,
+                                    dispatch_epoch,
+                                )
+                            },
+                            move |_plan| {
+                                let epochs = commit_epochs
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                abort_watch_index_plan_if_dispatch_epoch_stale(
+                                    &epochs,
+                                    &commit_repository_id,
                                     dispatch_epoch,
                                 )
                             },
@@ -807,7 +819,9 @@ async fn run_supervisor(
                         } else {
                             IndexMode::ChangedOnly
                         };
-                        index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+                        let commit_repository_id = repository.repository_id.clone();
+                        let commit_epochs = Arc::clone(&worker_epochs);
+                        index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback(
                             &repository.repository_id,
                             &repository.root,
                             &repository.db_path,
@@ -830,6 +844,16 @@ async fn run_supervisor(
                                 abort_watch_index_plan_if_dispatch_epoch_stale(
                                     &epochs,
                                     &plan_repository_id,
+                                    dispatch_epoch,
+                                )
+                            },
+                            move |_plan| {
+                                let epochs = commit_epochs
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                abort_watch_index_plan_if_dispatch_epoch_stale(
+                                    &epochs,
+                                    &commit_repository_id,
                                     dispatch_epoch,
                                 )
                             },
@@ -1947,13 +1971,12 @@ mod tests {
         let worker_epochs = Arc::clone(&epochs);
         let invalidated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback =
-            Arc::new(move |repository_id: &str| {
-                recorded
-                    .lock()
-                    .expect("invalidation record poisoned")
-                    .push(repository_id.to_owned());
-            });
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
+            recorded
+                .lock()
+                .expect("invalidation record poisoned")
+                .push(repository_id.to_owned());
+        });
 
         let dirty_path = workspace_root.join("src/lib.rs");
         let result = index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
@@ -1995,9 +2018,7 @@ mod tests {
             "stale dispatch epoch must not commit sqlite"
         );
 
-        let epochs_guard = epochs
-            .lock()
-            .expect("repository epochs poisoned");
+        let epochs_guard = epochs.lock().expect("repository epochs poisoned");
         if should_invalidate_watch_worker_cache(&epochs_guard, "repo-001", dispatch_epoch) {
             callback("repo-001");
         }
@@ -2007,6 +2028,120 @@ mod tests {
                 .expect("invalidation record poisoned")
                 .is_empty(),
             "stale dispatch epoch must skip worker-side cache invalidation"
+        );
+
+        let _ = fs::remove_dir_all(&workspace_root);
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn stale_dispatch_epoch_blocks_worker_side_effects_after_plan_before_commit() {
+        use std::fs;
+
+        use crate::indexer::{
+            index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback,
+            index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
+        };
+        use crate::settings::SemanticRuntimeCredentials;
+        use crate::storage::Storage;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let workspace_root = std::env::temp_dir().join(format!(
+            "frigg-watch-stale-commit-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(workspace_root.join("src")).expect("workspace src should be creatable");
+        fs::write(
+            workspace_root.join("src/lib.rs"),
+            "pub fn stale_commit_guard() {}\n",
+        )
+        .expect("workspace source should be writable");
+
+        let db_path = temp_supervisor_db_path("stale-dispatch-commit-side-effects");
+        index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+            &[],
+            |_| Ok(()),
+            |_| {},
+        )
+        .expect("baseline index should succeed");
+
+        let baseline_snapshot = Storage::new(&db_path)
+            .load_latest_manifest_for_repository("repo-001")
+            .expect("baseline manifest should load")
+            .expect("baseline snapshot should exist")
+            .snapshot_id;
+
+        fs::write(
+            workspace_root.join("src/lib.rs"),
+            "pub fn stale_commit_guard() { 1 }\n",
+        )
+        .expect("workspace source should be writable for refresh attempt");
+
+        let epochs = Arc::new(Mutex::new(RepositoryEpochs::default()));
+        epochs
+            .lock()
+            .expect("repository epochs poisoned")
+            .ensure("repo-001");
+        let dispatch_epoch = epochs
+            .lock()
+            .expect("repository epochs poisoned")
+            .current("repo-001");
+
+        let commit_epochs = Arc::clone(&epochs);
+        let dirty_path = workspace_root.join("src/lib.rs");
+        let result =
+            index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback(
+                "repo-001",
+                &workspace_root,
+                &db_path,
+                IndexMode::ChangedOnly,
+                &SemanticRuntimeConfig::default(),
+                &SemanticRuntimeCredentials::default(),
+                &[dirty_path],
+                |_plan| Ok(()),
+                move |_plan| {
+                    let mut epochs = commit_epochs
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    epochs.bump("repo-001");
+                    abort_watch_index_plan_if_dispatch_epoch_stale(
+                        &epochs,
+                        "repo-001",
+                        dispatch_epoch,
+                    )
+                },
+                |_| {},
+            );
+
+        assert!(
+            result.is_err(),
+            "stale dispatch epoch must abort immediately before storage commit"
+        );
+        assert!(
+            result
+                .expect_err("stale dispatch epoch should return an error")
+                .to_string()
+                .contains(WATCH_STALE_DISPATCH_EPOCH_MESSAGE),
+            "stale dispatch epoch should surface the watch abort message"
+        );
+
+        let after_snapshot = Storage::new(&db_path)
+            .load_latest_manifest_for_repository("repo-001")
+            .expect("manifest should still load after aborted refresh")
+            .expect("baseline snapshot should remain")
+            .snapshot_id;
+        assert_eq!(
+            after_snapshot, baseline_snapshot,
+            "stale dispatch epoch must not commit sqlite after a successful plan callback"
         );
 
         let _ = fs::remove_dir_all(&workspace_root);

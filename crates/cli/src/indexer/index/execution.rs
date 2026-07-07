@@ -50,6 +50,7 @@ pub(super) fn execute_index_plan(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
+    on_before_commit: impl FnOnce() -> FriggResult<()>,
     on_progress: &mut impl FnMut(IndexProgressEvent),
 ) -> FriggResult<()> {
     emit_index_execution_progress(
@@ -59,6 +60,7 @@ pub(super) fn execute_index_plan(
         IndexProgressStatus::Starting,
     );
     let manifest_snapshot_started_at = Instant::now();
+    on_before_commit()?;
     let manifest_written = execute_manifest_snapshot_phase(storage_session, workspace_root, plan)?;
     on_progress(
         index_execution_progress_event(

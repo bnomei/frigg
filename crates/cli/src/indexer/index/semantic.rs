@@ -155,6 +155,34 @@ pub fn index_repository_with_runtime_config_and_dirty_paths_and_progress_callbac
     on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
     on_progress: impl FnMut(IndexProgressEvent),
 ) -> FriggResult<IndexSummary> {
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        dirty_path_hints,
+        on_plan,
+        |_| Ok(()),
+        on_progress,
+    )
+}
+
+/// Runs repository index with dirty-path hints and validates immediately before writes.
+#[allow(clippy::too_many_arguments)]
+pub fn index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: IndexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    dirty_path_hints: &[PathBuf],
+    on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
+    on_before_commit: impl FnOnce(&IndexPlan) -> FriggResult<()>,
+    on_progress: impl FnMut(IndexProgressEvent),
+) -> FriggResult<IndexSummary> {
     let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
     index_repository_with_semantic_executor_and_dirty_paths(
         repository_id,
@@ -166,6 +194,7 @@ pub fn index_repository_with_runtime_config_and_dirty_paths_and_progress_callbac
         dirty_path_hints,
         &executor,
         on_plan,
+        on_before_commit,
         on_progress,
     )
 }
@@ -190,6 +219,7 @@ pub(crate) fn index_repository_with_semantic_executor(
         &[],
         executor,
         |_| Ok(()),
+        |_| Ok(()),
         |_| {},
     )
 }
@@ -205,6 +235,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     dirty_path_hints: &[PathBuf],
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
+    on_before_commit: impl FnOnce(&IndexPlan) -> FriggResult<()>,
     mut on_progress: impl FnMut(IndexProgressEvent),
 ) -> FriggResult<IndexSummary> {
     let started_at = Instant::now();
@@ -359,6 +390,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         semantic_runtime,
         credentials,
         executor,
+        || on_before_commit(&plan),
         &mut on_progress,
     )?;
 

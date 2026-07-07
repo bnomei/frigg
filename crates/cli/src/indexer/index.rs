@@ -21,6 +21,7 @@ pub use semantic::{
     index_repository, index_repository_with_runtime_config,
     index_repository_with_runtime_config_and_dirty_paths,
     index_repository_with_runtime_config_and_dirty_paths_and_plan_callback,
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback,
     index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
     index_repository_with_runtime_config_and_plan_callback,
 };
