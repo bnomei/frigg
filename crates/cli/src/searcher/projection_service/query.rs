@@ -75,11 +75,13 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
         let adjacency = Arc::new(build_projected_graph_adjacency_index(relations));
         self.insert_cached_projection_entry(
             &self.projected_graph_adjacency_cache,
             cache_key,
             Arc::clone(&adjacency),
+            load_epoch,
         )?;
         Some(adjacency)
     }

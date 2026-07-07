@@ -1031,4 +1031,64 @@ fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSea
 }
 
 #[cfg(test)]
+mod projection_store_tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use crate::searcher::projection_service::ProjectionStoreService;
+    use crate::searcher::retrieval_projection::PATH_RELATION_PROJECTION_HEURISTIC_VERSION;
+    use crate::searcher::types::HybridPathWitnessProjectionCacheKey;
+    use crate::storage::PathRelationProjection;
+
+    #[test]
+    fn projection_store_cache_skips_insert_after_invalidation_epoch_changes() {
+        let service = ProjectionStoreService::new();
+        let repository_id = "repo-001";
+        let cache_key = HybridPathWitnessProjectionCacheKey {
+            repository_id: repository_id.to_owned(),
+            root: PathBuf::from("/tmp/repo-001"),
+            snapshot_id: "snapshot-001".to_owned(),
+            heuristic_version: PATH_RELATION_PROJECTION_HEURISTIC_VERSION,
+        };
+        let stale_projection = Arc::new(vec![PathRelationProjection {
+            src_path: "src/stale.rs".to_owned(),
+            dst_path: "src/other.rs".to_owned(),
+            relation_kind: "companion_surface".to_owned(),
+            evidence_source: "projection".to_owned(),
+            src_symbol_id: None,
+            dst_symbol_id: None,
+            src_family_bits: 0,
+            dst_family_bits: 0,
+            shared_terms: Vec::new(),
+            score_hint: 1,
+        }]);
+
+        service.insert_path_relation_cache_entry_observing_epoch(
+            cache_key.clone(),
+            Arc::clone(&stale_projection),
+            None,
+        );
+        assert_eq!(service.path_relation_cache_len(), 1);
+
+        let stale_epoch = 0;
+        service.invalidate_repository(repository_id);
+        service.insert_path_relation_cache_entry_observing_epoch(
+            cache_key.clone(),
+            stale_projection,
+            Some(stale_epoch),
+        );
+        assert!(
+            service.path_relation_cache_len() == 0,
+            "stale in-flight projection loads must not repopulate after invalidation"
+        );
+        assert!(
+            service
+                .cached_path_relation_projections(&cache_key)
+                .is_none(),
+            "subsequent projection lookups must miss after stale insert is skipped"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests;

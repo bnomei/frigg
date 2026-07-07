@@ -86,6 +86,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         let live_fallback = || {
             let candidate_paths = repository
                 .candidates
@@ -103,6 +105,7 @@ impl ProjectionStoreService {
                     &self.path_witness_cache,
                     cache_key.clone(),
                     Arc::clone(&projections),
+                    load_epoch,
                 )?;
             }
             Some(projections)
@@ -138,6 +141,7 @@ impl ProjectionStoreService {
                     &self.path_witness_cache,
                     cache_key,
                     Arc::clone(&projections),
+                    load_epoch,
                 )?;
                 return Some(projections);
             }
@@ -180,6 +184,7 @@ impl ProjectionStoreService {
             &self.path_witness_cache,
             cache_key,
             Arc::clone(&projections),
+            load_epoch,
         )?;
         Some(projections)
     }
@@ -231,6 +236,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         let live_fallback = || {
             let candidate_paths = repository
                 .candidates
@@ -247,6 +254,7 @@ impl ProjectionStoreService {
                     &self.test_subject_cache,
                     cache_key.clone(),
                     Arc::clone(&projections),
+                    load_epoch,
                 )?;
             }
             Some(projections)
@@ -286,6 +294,7 @@ impl ProjectionStoreService {
                     &self.test_subject_cache,
                     cache_key,
                     Arc::clone(&projections),
+                    load_epoch,
                 )?;
                 return Some(projections);
             }
@@ -324,6 +333,7 @@ impl ProjectionStoreService {
             &self.test_subject_cache,
             cache_key,
             Arc::clone(&projections),
+            load_epoch,
         )?;
         Some(projections)
     }
@@ -375,6 +385,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         let live_fallback = || {
             let candidate_paths = repository
                 .candidates
@@ -392,6 +404,7 @@ impl ProjectionStoreService {
                     &self.entrypoint_surface_cache,
                     cache_key.clone(),
                     Arc::clone(&projections),
+                    load_epoch,
                 )?;
             }
             Some(projections)
@@ -434,6 +447,7 @@ impl ProjectionStoreService {
                     &self.entrypoint_surface_cache,
                     cache_key,
                     Arc::clone(&projections),
+                    load_epoch,
                 )?;
                 return Some(projections);
             }
@@ -472,6 +486,7 @@ impl ProjectionStoreService {
             &self.entrypoint_surface_cache,
             cache_key,
             Arc::clone(&projections),
+            load_epoch,
         )?;
         Some(projections)
     }
@@ -523,6 +538,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
             && db_path.exists()
         {
@@ -549,6 +566,7 @@ impl ProjectionStoreService {
                         &self.path_relation_cache,
                         cache_key.clone(),
                         Arc::clone(&projections),
+                        load_epoch,
                     )?;
                     return Some(projections);
                 }
@@ -597,6 +615,7 @@ impl ProjectionStoreService {
                 &self.path_relation_cache,
                 cache_key,
                 Arc::clone(&projections),
+                load_epoch,
             )?;
         }
         Some(projections)
@@ -649,6 +668,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
             && db_path.exists()
         {
@@ -677,6 +698,7 @@ impl ProjectionStoreService {
                         &self.subtree_coverage_cache,
                         cache_key.clone(),
                         Arc::clone(&projections),
+                        load_epoch,
                     )?;
                     return Some(projections);
                 }
@@ -696,6 +718,7 @@ impl ProjectionStoreService {
                 &self.subtree_coverage_cache,
                 cache_key,
                 Arc::clone(&projections),
+                load_epoch,
             )?;
         }
         Some(projections)
@@ -748,6 +771,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
             && db_path.exists()
         {
@@ -780,6 +805,7 @@ impl ProjectionStoreService {
                         &self.path_surface_term_cache,
                         cache_key.clone(),
                         Arc::clone(&projections),
+                        load_epoch,
                     )?;
                     return Some(projections);
                 }
@@ -812,6 +838,7 @@ impl ProjectionStoreService {
                 &self.path_surface_term_cache,
                 cache_key,
                 Arc::clone(&projections),
+                load_epoch,
             )?;
         }
         Some(projections)
@@ -864,6 +891,8 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
+        let load_epoch = self.capture_projection_cache_epoch();
+
         if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
             && db_path.exists()
         {
@@ -892,6 +921,7 @@ impl ProjectionStoreService {
                         &self.path_anchor_sketch_cache,
                         cache_key.clone(),
                         Arc::clone(&projections),
+                        load_epoch,
                     )?;
                     return Some(projections);
                 }
@@ -921,6 +951,7 @@ impl ProjectionStoreService {
                 &self.path_anchor_sketch_cache,
                 cache_key,
                 Arc::clone(&projections),
+                load_epoch,
             )?;
         }
         Some(projections)
