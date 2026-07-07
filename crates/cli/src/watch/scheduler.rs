@@ -155,6 +155,7 @@ pub(super) struct RepositoryWatchState {
     semantic_followup: RefreshQueueState,
     recent_paths: VecDeque<PathBuf>,
     dirty_path_hints: BTreeSet<PathBuf>,
+    manifest_fast_inflight_paths: BTreeSet<PathBuf>,
     semantic_followup_paths: BTreeSet<PathBuf>,
 }
 
@@ -215,6 +216,7 @@ impl RepositoryWatchState {
                 self.manifest_fast.mark_started();
                 let started_paths = self.dirty_path_hints.iter().cloned().collect::<Vec<_>>();
                 self.dirty_path_hints.clear();
+                self.manifest_fast_inflight_paths = started_paths.iter().cloned().collect();
                 self.recent_paths.clear();
                 if !started_paths.is_empty() {
                     self.semantic_followup_paths = started_paths.iter().cloned().collect();
@@ -231,7 +233,10 @@ impl RepositoryWatchState {
     fn mark_succeeded(&mut self, class: WatchRefreshClass, now: Instant) {
         self.active_class = self.active_class.filter(|active| *active != class);
         match class {
-            WatchRefreshClass::ManifestFast => self.manifest_fast.mark_succeeded(now),
+            WatchRefreshClass::ManifestFast => {
+                self.manifest_fast_inflight_paths.clear();
+                self.manifest_fast.mark_succeeded(now);
+            }
             WatchRefreshClass::SemanticFollowup => {
                 self.semantic_followup.mark_succeeded(now);
                 if !self.semantic_followup.pending {
@@ -244,7 +249,12 @@ impl RepositoryWatchState {
     fn mark_failed(&mut self, class: WatchRefreshClass, now: Instant, retry: Duration) -> Duration {
         self.active_class = self.active_class.filter(|active| *active != class);
         match class {
-            WatchRefreshClass::ManifestFast => self.manifest_fast.mark_failed(now, retry),
+            WatchRefreshClass::ManifestFast => {
+                self.dirty_path_hints
+                    .extend(self.manifest_fast_inflight_paths.iter().cloned());
+                self.manifest_fast_inflight_paths.clear();
+                self.manifest_fast.mark_failed(now, retry)
+            }
             WatchRefreshClass::SemanticFollowup => self.semantic_followup.mark_failed(now, retry),
         }
     }
@@ -252,7 +262,10 @@ impl RepositoryWatchState {
     fn mark_blocked(&mut self, class: WatchRefreshClass) {
         self.active_class = self.active_class.filter(|active| *active != class);
         match class {
-            WatchRefreshClass::ManifestFast => self.manifest_fast.mark_blocked(),
+            WatchRefreshClass::ManifestFast => {
+                self.manifest_fast_inflight_paths.clear();
+                self.manifest_fast.mark_blocked();
+            }
             WatchRefreshClass::SemanticFollowup => {
                 self.semantic_followup.mark_blocked();
                 self.semantic_followup_paths.clear();
@@ -329,6 +342,7 @@ impl WatchSchedulerState {
                 semantic_followup: RefreshQueueState::default(),
                 recent_paths: VecDeque::new(),
                 dirty_path_hints: BTreeSet::new(),
+                manifest_fast_inflight_paths: BTreeSet::new(),
                 semantic_followup_paths: BTreeSet::new(),
             });
     }

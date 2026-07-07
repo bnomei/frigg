@@ -578,6 +578,32 @@ fn watch_panic_scheduler_latch_cleared_by_failed_completion() {
 }
 
 #[test]
+fn scheduler_manifest_fast_retry_restores_dirty_paths_after_failure() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let retry = Duration::from_millis(5_000);
+    let debounce = Duration::from_millis(750);
+    let changed_path = PathBuf::from("src/a.rs");
+
+    scheduler.record_path_change(0, changed_path.clone(), now, debounce);
+    let first_started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(first_started_paths, vec![changed_path.clone()]);
+
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, now, retry),
+        Some(retry)
+    );
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::ManifestFast));
+
+    let retry_started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        retry_started_paths,
+        vec![changed_path],
+        "failed manifest-fast retries must still receive the original dirty paths"
+    );
+}
+
+#[test]
 fn scheduler_failure_schedules_retry_without_parallel_restart() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();
