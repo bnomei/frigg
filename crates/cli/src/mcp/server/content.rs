@@ -728,7 +728,8 @@ impl FriggMcpServer {
                         ));
                     }
                     if let Some(cursor) = resume_from.as_ref()
-                        && (scan.total_lines == 0 || cursor.line > scan.total_lines)
+                        && cursor.line > scan.total_lines
+                        && !(scan.total_lines == 0 && cursor.line == 1)
                     {
                         return Err(Self::invalid_params(
                             "resume_from is outside file bounds",

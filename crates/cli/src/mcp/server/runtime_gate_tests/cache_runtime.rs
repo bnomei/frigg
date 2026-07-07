@@ -297,6 +297,179 @@ async fn explore_empty_file_scan_scope_stays_one_based() {
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[tokio::test]
+async fn explore_empty_file_resume_from_line_one_succeeds() {
+    let workspace_root = temp_workspace_root("explore-empty-resume-line-one");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/empty.rs"), "")
+        .expect("failed to write empty source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let response = server
+        .explore_impl(crate::mcp::types::ExploreParams {
+            path: "src/empty.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            operation: crate::mcp::types::ExploreOperation::Probe,
+            query: Some("needle".to_owned()),
+            pattern_type: Some(crate::mcp::types::SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(4),
+            resume_from: Some(crate::mcp::types::ExploreCursor {
+                line: 1,
+                column: 1,
+            }),
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("empty-file explore should accept resume_from line 1 sentinel");
+
+    assert_eq!(response.total_lines, 0);
+    assert_eq!(response.scan_scope.start_line, 1);
+    assert_eq!(response.scan_scope.end_line, 0);
+    assert_eq!(response.total_matches, 0);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn explore_empty_file_resume_from_outside_bounds_rejects_line_two() {
+    let workspace_root = temp_workspace_root("explore-empty-resume-line-two");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/empty.rs"), "")
+        .expect("failed to write empty source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let error = server
+        .explore_impl(crate::mcp::types::ExploreParams {
+            path: "src/empty.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            operation: crate::mcp::types::ExploreOperation::Probe,
+            query: Some("needle".to_owned()),
+            pattern_type: Some(crate::mcp::types::SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(4),
+            resume_from: Some(crate::mcp::types::ExploreCursor {
+                line: 2,
+                column: 1,
+            }),
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect_err("empty files should reject out-of-range resume_from");
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error.message, "resume_from is outside file bounds");
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("total_lines")),
+        Some(&Value::from(0))
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn explore_resume_from_paginates_non_empty_probe() {
+    let workspace_root = temp_workspace_root("explore-resume-non-empty");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "alpha\nbeta\nalpha\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let first_page = server
+        .explore_impl(crate::mcp::types::ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            operation: crate::mcp::types::ExploreOperation::Probe,
+            query: Some("alpha".to_owned()),
+            pattern_type: Some(crate::mcp::types::SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(1),
+            resume_from: None,
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("first explore page should succeed");
+    assert_eq!(first_page.total_matches, 2);
+    assert!(first_page.truncated);
+    let resume_cursor = first_page
+        .resume_from
+        .expect("truncated explore should return resume_from");
+
+    let second_page = server
+        .explore_impl(crate::mcp::types::ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            operation: crate::mcp::types::ExploreOperation::Probe,
+            query: Some("alpha".to_owned()),
+            pattern_type: Some(crate::mcp::types::SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(1),
+            resume_from: Some(resume_cursor),
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("resumed explore page should succeed");
+    assert_eq!(second_page.total_matches, 1);
+    assert_eq!(second_page.matches.len(), 1);
+    assert!(!second_page.truncated);
+    assert_eq!(second_page.matches[0].start_line, 3);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn watch_leases_follow_session_adoption_counts() {
     let workspace_root = temp_workspace_root("watch-lease-counts");
