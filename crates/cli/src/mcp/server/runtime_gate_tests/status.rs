@@ -6,7 +6,9 @@ use super::*;
 use crate::agent_directive::FRIGG_FIRST_DIRECTIVE;
 use crate::mcp::types::{
     WorkspacePreciseCoverageMode, WorkspacePreciseIngestState, WorkspacePreciseState,
+    WorkspaceStorageIndexState,
 };
+use crate::storage::{Storage, VECTOR_TABLE_NAME};
 
 #[test]
 fn extended_only_tools_are_hidden_by_default_runtime_options() {
@@ -103,6 +105,72 @@ fn server_starts_detached_when_started_without_startup_roots() {
     let server = FriggMcpServer::new_with_runtime_options(config, false);
     assert!(server.attached_workspaces().is_empty());
     assert!(server.current_repository_id().is_none());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn workspace_semantic_index_summary_reports_error_when_storage_health_probe_fails() {
+    let workspace_root = temp_workspace_root("semantic-health-probe-failure");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+        .expect("failed to write source fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.semantic_runtime = semantic_runtime_enabled_openai();
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.runtime_repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    Storage::new(&workspace.db_path)
+        .replace_semantic_embeddings_for_repository(
+            &workspace.runtime_repository_id,
+            "snapshot-001",
+            "openai",
+            "text-embedding-3-small",
+            &[semantic_record(
+                &workspace.runtime_repository_id,
+                "snapshot-001",
+                "src/lib.rs",
+            )],
+        )
+        .expect("seed semantic embeddings should persist");
+
+    let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+    assert_eq!(storage.index_state, WorkspaceStorageIndexState::Ready);
+
+    let conn = rusqlite::Connection::open(&workspace.db_path)
+        .expect("workspace storage db should open for corruption fixture");
+    conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME}"))
+        .expect("vector table drop should corrupt semantic health probe");
+    drop(conn);
+
+    let semantic = server.workspace_semantic_index_summary(&workspace, &storage);
+    assert_eq!(semantic.state, WorkspaceIndexComponentState::Error);
+    assert!(
+        semantic
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("failed to count semantic vector rows")),
+        "semantic health probe failure should surface storage error detail, got {:?}",
+        semantic.reason
+    );
+    assert_eq!(semantic.snapshot_id.as_deref(), Some("snapshot-001"));
 
     let _ = fs::remove_dir_all(workspace_root);
 }

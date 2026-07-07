@@ -667,13 +667,6 @@ impl FriggMcpServer {
         let model_ref = model
             .as_deref()
             .expect("semantic model should exist after config validation");
-        let semantic_health = storage_reader
-            .collect_semantic_storage_health_for_repository_model(
-                &workspace.runtime_repository_id,
-                provider_ref,
-                model_ref,
-            )
-            .ok();
         let semantic_state = freshness.semantic.clone();
         match semantic_state {
             RepositorySemanticFreshness::MissingManifestSnapshot => {
@@ -709,10 +702,26 @@ impl FriggMcpServer {
                 let snapshot_id = freshness
                     .snapshot_id
                     .expect("ready semantic freshness should carry a snapshot id");
-                if semantic_health
-                    .as_ref()
-                    .is_some_and(|health| !health.vector_consistent)
-                {
+                let semantic_health = match storage_reader
+                    .collect_semantic_storage_health_for_repository_model(
+                        &workspace.runtime_repository_id,
+                        provider_ref,
+                        model_ref,
+                    ) {
+                    Ok(health) => health,
+                    Err(err) => {
+                        return WorkspaceIndexComponentSummary {
+                            state: WorkspaceIndexComponentState::Error,
+                            reason: Some(err.to_string()),
+                            snapshot_id: Some(snapshot_id),
+                            compatible_snapshot_id: None,
+                            provider: provider.clone(),
+                            model: model.clone(),
+                            artifact_count: None,
+                        };
+                    }
+                };
+                if !semantic_health.vector_consistent {
                     return WorkspaceIndexComponentSummary {
                         state: WorkspaceIndexComponentState::Error,
                         reason: Some("semantic_vector_partition_out_of_sync".to_owned()),
@@ -720,9 +729,7 @@ impl FriggMcpServer {
                         compatible_snapshot_id: None,
                         provider: provider.clone(),
                         model: model.clone(),
-                        artifact_count: semantic_health
-                            .as_ref()
-                            .map(|health| health.live_embedding_rows),
+                        artifact_count: Some(semantic_health.live_embedding_rows),
                     };
                 }
                 WorkspaceIndexComponentSummary {
@@ -732,19 +739,16 @@ impl FriggMcpServer {
                     compatible_snapshot_id: None,
                     provider: provider.clone(),
                     model: model.clone(),
-                    artifact_count: semantic_health
-                        .as_ref()
-                        .map(|health| health.live_embedding_rows)
-                        .or_else(|| {
-                            storage_reader
-                                .count_semantic_embeddings_for_repository_snapshot_model(
-                                    &workspace.runtime_repository_id,
-                                    &snapshot_id,
-                                    provider_ref,
-                                    model_ref,
-                                )
-                                .ok()
-                        }),
+                    artifact_count: Some(semantic_health.live_embedding_rows).or_else(|| {
+                        storage_reader
+                            .count_semantic_embeddings_for_repository_snapshot_model(
+                                &workspace.runtime_repository_id,
+                                &snapshot_id,
+                                provider_ref,
+                                model_ref,
+                            )
+                            .ok()
+                    }),
                 }
             }
             RepositorySemanticFreshness::MissingForActiveModel => {
