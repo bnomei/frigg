@@ -112,9 +112,7 @@ impl FriggMcpServer {
                     match self.effective_attach_directory_relative_to_session_root(path) {
                         Some(resolved_from) => resolved_from,
                         None => {
-                            match self
-                                .resolve_relative_attach_path_without_session_default(path)?
-                            {
+                            match self.resolve_relative_attach_path_without_session_default(path)? {
                                 Some(resolved_from) => resolved_from,
                                 None => Self::effective_attach_directory(path)?,
                             }
@@ -224,6 +222,9 @@ impl FriggMcpServer {
         let mut matches = Vec::new();
         for workspace in &attached_workspaces {
             let candidate = workspace.root.join(path);
+            if !candidate.exists() {
+                continue;
+            }
             let root_canonical = workspace.root.canonicalize().map_err(|err| {
                 Self::internal(
                     format!(

@@ -1858,3 +1858,44 @@ fn workspace_attach_rejects_ambiguous_relative_path_across_adopted_repositories(
     let _ = fs::remove_dir_all(workspace_root_a);
     let _ = fs::remove_dir_all(workspace_root_b);
 }
+
+#[test]
+fn workspace_attach_ignores_nonexistent_relative_matches_across_adopted_repositories() {
+    let workspace_root_a = temp_workspace_root("single-attach-repo-a");
+    let workspace_root_b = temp_workspace_root("single-attach-repo-b");
+    fs::create_dir_all(workspace_root_a.join("src")).expect("failed to create repo A fixture root");
+    fs::create_dir_all(workspace_root_b.join("src")).expect("failed to create repo B fixture root");
+    fs::write(workspace_root_b.join("src/only_b.rs"), "pub struct B;\n")
+        .expect("failed to write repo B source");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root_a.clone(), workspace_root_b.clone()])
+            .expect("workspace roots must produce valid config"),
+    );
+    for workspace in server.known_workspaces() {
+        server
+            .adopt_workspace(&workspace, false)
+            .expect("workspace should adopt");
+    }
+    server.set_current_repository_id(None);
+
+    let (_, resolved_from, resolution, _) = server
+        .resolve_workspace_target(Some("src/only_b.rs"), None, WorkspaceResolveMode::Direct)
+        .expect(
+            "relative attach should resolve when only one adopted repository contains the path",
+        );
+    assert_eq!(resolution, Some(WorkspaceResolveMode::Direct));
+    let expected_resolved_from = workspace_root_b
+        .join("src")
+        .canonicalize()
+        .expect("repo B src should canonicalize")
+        .display()
+        .to_string();
+    assert_eq!(
+        resolved_from.as_deref(),
+        Some(expected_resolved_from.as_str())
+    );
+
+    let _ = fs::remove_dir_all(workspace_root_a);
+    let _ = fs::remove_dir_all(workspace_root_b);
+}
