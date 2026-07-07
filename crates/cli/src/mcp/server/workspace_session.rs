@@ -111,7 +111,14 @@ impl FriggMcpServer {
                 let resolved_from = if path.is_relative() {
                     match self.effective_attach_directory_relative_to_session_root(path) {
                         Some(resolved_from) => resolved_from,
-                        None => Self::effective_attach_directory(path)?,
+                        None => {
+                            match self
+                                .resolve_relative_attach_path_without_session_default(path)?
+                            {
+                                Some(resolved_from) => resolved_from,
+                                None => Self::effective_attach_directory(path)?,
+                            }
+                        }
                     }
                 } else {
                     Self::effective_attach_directory(path)?
@@ -199,6 +206,61 @@ impl FriggMcpServer {
         let workspace = workspace?;
 
         Self::effective_attach_directory(&workspace.root.join(path)).ok()
+    }
+
+    fn resolve_relative_attach_path_without_session_default(
+        &self,
+        path: &Path,
+    ) -> Result<Option<PathBuf>, ErrorData> {
+        if self.current_repository_id().is_some() {
+            return Ok(None);
+        }
+
+        let attached_workspaces = self.attached_workspaces();
+        if attached_workspaces.len() < 2 {
+            return Ok(None);
+        }
+
+        let mut matches = Vec::new();
+        for workspace in &attached_workspaces {
+            let candidate = workspace.root.join(path);
+            let root_canonical = workspace.root.canonicalize().map_err(|err| {
+                Self::internal(
+                    format!(
+                        "failed to canonicalize root {}: {err}",
+                        workspace.root.display()
+                    ),
+                    None,
+                )
+            })?;
+            let Ok(resolved) = Self::effective_attach_directory(&candidate) else {
+                continue;
+            };
+            if resolved.starts_with(&root_canonical) {
+                matches.push((workspace.repository_id.clone(), resolved));
+            }
+        }
+
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(Some(
+                matches
+                    .into_iter()
+                    .next()
+                    .expect("single adopted workspace match")
+                    .1,
+            )),
+            _ => Err(Self::invalid_params(
+                "relative path is ambiguous across adopted repositories; pass repository_id",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "repository_ids": matches
+                        .iter()
+                        .map(|(repository_id, _)| repository_id)
+                        .collect::<Vec<_>>(),
+                })),
+            )),
+        }
     }
 
     pub(super) fn workspace_by_repository_id(

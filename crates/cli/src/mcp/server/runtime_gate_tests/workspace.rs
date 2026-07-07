@@ -1816,3 +1816,45 @@ async fn read_file_rejects_ambiguous_relative_path_across_adopted_repositories()
     let _ = fs::remove_dir_all(workspace_root_a);
     let _ = fs::remove_dir_all(workspace_root_b);
 }
+
+#[test]
+fn workspace_attach_rejects_ambiguous_relative_path_across_adopted_repositories() {
+    let workspace_root_a = temp_workspace_root("ambiguous-attach-repo-a");
+    let workspace_root_b = temp_workspace_root("ambiguous-attach-repo-b");
+    fs::create_dir_all(workspace_root_a.join("src")).expect("failed to create repo A fixture root");
+    fs::create_dir_all(workspace_root_b.join("src")).expect("failed to create repo B fixture root");
+    fs::write(workspace_root_a.join("src/shared.rs"), "pub struct A;\n")
+        .expect("failed to write repo A source");
+    fs::write(workspace_root_b.join("src/shared.rs"), "pub struct B;\n")
+        .expect("failed to write repo B source");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root_a.clone(), workspace_root_b.clone()])
+            .expect("workspace roots must produce valid config"),
+    );
+    for workspace in server.known_workspaces() {
+        server
+            .adopt_workspace(&workspace, false)
+            .expect("workspace should adopt");
+    }
+    server.set_current_repository_id(None);
+
+    let err = match server.resolve_workspace_target(
+        Some("src/shared.rs"),
+        None,
+        WorkspaceResolveMode::Direct,
+    ) {
+        Ok(_) => panic!(
+            "relative attach paths that match multiple adopted repositories should require repository_id"
+        ),
+        Err(err) => err,
+    };
+    assert!(
+        err.message
+            .contains("relative path is ambiguous across adopted repositories; pass repository_id"),
+        "unexpected error: {err:?}"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root_a);
+    let _ = fs::remove_dir_all(workspace_root_b);
+}
