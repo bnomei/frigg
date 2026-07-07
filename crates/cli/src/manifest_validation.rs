@@ -553,16 +553,26 @@ where
         &semantic_target.provider,
         &semantic_target.model,
     )?;
+    let semantic = if !has_rows {
+        RepositorySemanticFreshness::MissingForActiveModel
+    } else {
+        let health = storage.collect_semantic_storage_health_for_repository_model(
+            repository_id,
+            &semantic_target.provider,
+            &semantic_target.model,
+        )?;
+        if health.vector_consistent {
+            RepositorySemanticFreshness::Ready
+        } else {
+            RepositorySemanticFreshness::MissingForActiveModel
+        }
+    };
 
     Ok(RepositoryFreshnessStatus {
         snapshot_id: Some(snapshot.snapshot_id),
         manifest_entry_count,
         manifest: RepositoryManifestFreshness::Ready,
-        semantic: if has_rows {
-            RepositorySemanticFreshness::Ready
-        } else {
-            RepositorySemanticFreshness::MissingForActiveModel
-        },
+        semantic,
         validated_manifest_digests: Some(validated_manifest_digests),
         semantic_target: Some(semantic_target),
     })
@@ -572,6 +582,8 @@ where
 mod tests {
     use super::*;
     use crate::indexer::ManifestDiagnosticKind;
+    use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeProvider};
+    use crate::storage::{SemanticChunkEmbeddingRecord, VECTOR_TABLE_NAME};
     use std::fs;
 
     fn temp_workspace_root(test_name: &str) -> PathBuf {
@@ -867,6 +879,120 @@ mod tests {
             matches!(err, FriggError::StorageSchemaIncompatible { .. }),
             "expected typed storage schema error, got {err:?}"
         );
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    fn semantic_embedding_record(
+        chunk_id: &str,
+        repository_id: &str,
+        snapshot_id: &str,
+        path: &str,
+    ) -> SemanticChunkEmbeddingRecord {
+        SemanticChunkEmbeddingRecord {
+            chunk_id: chunk_id.to_owned(),
+            repository_id: repository_id.to_owned(),
+            snapshot_id: snapshot_id.to_owned(),
+            path: path.to_owned(),
+            language: "rust".to_owned(),
+            chunk_index: 0,
+            start_line: 1,
+            end_line: 10,
+            provider: "openai".to_owned(),
+            model: "text-embedding-3-small".to_owned(),
+            trace_id: Some("trace-001".to_owned()),
+            content_hash_blake3: format!("hash-{chunk_id}"),
+            content_text: format!("fn {chunk_id}() {{}}"),
+            embedding: vec![1.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn repository_freshness_status_rejects_ready_when_vector_partition_drifts() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("repository-freshness-vector-drift");
+        fs::create_dir_all(&workspace_root)
+            .expect("manifest-validation workspace root should be creatable");
+        let file_path = workspace_root.join("src.rs");
+        fs::write(&file_path, "fn alpha() {}\n")
+            .expect("manifest-validation fixture file should be writable");
+
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .expect("manifest-validation db path should have a parent"),
+        )
+        .expect("manifest-validation db parent should be creatable");
+        let storage = Storage::new(&db_path);
+        storage.initialize()?;
+        let repository_id = "repo-001";
+        let snapshot_id = "snapshot-001";
+        seed_manifest_snapshot(&storage, repository_id, snapshot_id, &file_path)?;
+        storage.replace_semantic_embeddings_for_repository(
+            repository_id,
+            snapshot_id,
+            "openai",
+            "text-embedding-3-small",
+            &[
+                semantic_embedding_record("chunk-a", repository_id, snapshot_id, "src.rs"),
+                semantic_embedding_record("chunk-b", repository_id, snapshot_id, "src.rs"),
+            ],
+        )?;
+
+        let conn = rusqlite::Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to open semantic vector corruption fixture db: {err}"
+            ))
+        })?;
+        conn.execute(
+            &format!(
+                "DELETE FROM {VECTOR_TABLE_NAME} WHERE repository_id = ?1 AND provider = ?2 AND model = ?3 AND chunk_id = ?4"
+            ),
+            (repository_id, "openai", "text-embedding-3-small", "chunk-b"),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to corrupt semantic vector partition for freshness test: {err}"
+            ))
+        })?;
+        drop(conn);
+
+        assert!(
+            storage.has_semantic_embeddings_for_repository_snapshot_model(
+                repository_id,
+                snapshot_id,
+                "openai",
+                "text-embedding-3-small",
+            )?,
+            "fixture should retain embedding rows while vector partition drifts"
+        );
+        let health = storage.collect_semantic_storage_health_for_repository_model(
+            repository_id,
+            "openai",
+            "text-embedding-3-small",
+        )?;
+        assert!(!health.vector_consistent);
+
+        let status = repository_freshness_status(
+            &storage,
+            repository_id,
+            &workspace_root,
+            &SemanticRuntimeConfig {
+                enabled: true,
+                provider: Some(SemanticRuntimeProvider::OpenAi),
+                model: None,
+                strict_mode: false,
+            },
+            |_| false,
+        )?;
+        assert_eq!(status.manifest, RepositoryManifestFreshness::Ready);
+        assert_eq!(
+            status.semantic,
+            RepositorySemanticFreshness::MissingForActiveModel,
+            "semantic freshness must not report Ready when vector partition is inconsistent"
+        );
+        assert!(status.should_refresh_watch());
 
         cleanup_workspace(&workspace_root);
         Ok(())
