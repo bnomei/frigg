@@ -215,15 +215,15 @@ fn desired_claude_pre_tool_use_entry() -> Value {
 pub(crate) fn classify_claude_hook(contents: &str) -> Result<ClaudeHookState, McpJsonError> {
     let root = parse_object_root(contents)?;
     let value = Value::Object(root);
-    if contains_desired_claude_hook(&value) {
-        Ok(ClaudeHookState::Desired)
-    } else if value
+    if value
         .get(CLAUDE_HOOKS_KEY)
         .and_then(|hooks| hooks.get(CLAUDE_PRE_TOOL_USE_KEY))
         .and_then(Value::as_array)
         .is_some_and(|pre_tool_use| pre_tool_use_contains_diverged_frigg_hook(pre_tool_use))
     {
         Ok(ClaudeHookState::Diverged)
+    } else if contains_desired_claude_hook(&value) {
+        Ok(ClaudeHookState::Desired)
     } else {
         Ok(ClaudeHookState::Missing)
     }
@@ -708,6 +708,16 @@ mod tests {
     }
 
     #[test]
+    fn claude_hook_classifies_mixed_desired_and_diverged_duplicates_as_diverged() {
+        let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5},{"type":"command","command":"frigg hook pretooluse","timeout":10}]}]}}"#;
+
+        assert_eq!(
+            classify_claude_hook(contents).expect("classify mixed duplicate claude hooks"),
+            super::ClaudeHookState::Diverged
+        );
+    }
+
+    #[test]
     fn upsert_claude_hook_replaces_diverged_frigg_hook() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"other"},{"type":"command","command":"frigg hook pretooluse","timeout":10}]}]}}"#;
 
@@ -728,8 +738,7 @@ mod tests {
     fn upsert_claude_hook_deduplicates_existing_frigg_pretooluse_commands() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":10},{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
 
-        let edit =
-            upsert_claude_hook(Some(contents)).expect("deduplicate diverged claude hooks");
+        let edit = upsert_claude_hook(Some(contents)).expect("deduplicate diverged claude hooks");
         let McpJsonEdit::Changed(updated) = edit else {
             panic!("expected changed edit");
         };
