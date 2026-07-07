@@ -8,6 +8,9 @@ use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 
 impl FriggMcpServer {
     pub(super) fn invalidate_repository_navigation_caches(&self, repository_id: &str) {
+        self.cache_state
+            .heuristic_reference_cache_epoch
+            .fetch_add(1, Ordering::Relaxed);
         let mut heuristic_reference_cache = self
             .cache_state
             .heuristic_reference_cache
@@ -54,6 +57,38 @@ impl FriggMcpServer {
         source_files_loaded: usize,
         source_bytes_loaded: u64,
     ) {
+        self.cache_heuristic_references_observing_epoch(
+            cache_key,
+            references,
+            source_files_discovered,
+            source_read_diagnostics_count,
+            source_files_loaded,
+            source_bytes_loaded,
+            None,
+        );
+    }
+
+    pub(super) fn cache_heuristic_references_observing_epoch(
+        &self,
+        cache_key: HeuristicReferenceCacheKey,
+        references: Vec<HeuristicReference>,
+        source_files_discovered: usize,
+        source_read_diagnostics_count: usize,
+        source_files_loaded: usize,
+        source_bytes_loaded: u64,
+        cache_epoch: Option<u64>,
+    ) {
+        if let Some(cache_epoch) = cache_epoch {
+            if self
+                .cache_state
+                .heuristic_reference_cache_epoch
+                .load(Ordering::Relaxed)
+                != cache_epoch
+            {
+                return;
+            }
+        }
+
         let mut cache = self
             .cache_state
             .heuristic_reference_cache

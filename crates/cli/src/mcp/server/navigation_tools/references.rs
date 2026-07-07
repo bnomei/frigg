@@ -186,6 +186,11 @@ impl FriggMcpServer {
             });
         }
 
+        let cache_epoch = self
+            .cache_state
+            .heuristic_reference_cache_epoch
+            .load(Ordering::Relaxed);
+
         let candidate_source_paths = self.heuristic_reference_candidate_paths(
             target_corpus,
             target_symbol,
@@ -335,13 +340,14 @@ impl FriggMcpServer {
         }
 
         let references = resolver.finish();
-        self.cache_heuristic_references(
+        self.cache_heuristic_references_observing_epoch(
             heuristic_cache_key,
             references.clone(),
             source_files_discovered,
             source_read_diagnostics_count,
             source_files_loaded,
             source_bytes_loaded,
+            Some(cache_epoch),
         );
         Ok(LoadedHeuristicReferences {
             references,

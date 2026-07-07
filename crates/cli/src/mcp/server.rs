@@ -416,6 +416,7 @@ struct FriggMcpCacheState {
         Arc<RwLock<BTreeMap<PreciseGeneratorProbeCacheKey, CachedPreciseGeneratorProbe>>>,
     heuristic_reference_cache:
         Arc<RwLock<BTreeMap<HeuristicReferenceCacheKey, CachedHeuristicReferences>>>,
+    heuristic_reference_cache_epoch: Arc<AtomicU64>,
     compiled_safe_regex_cache: Arc<RwLock<BTreeMap<String, regex::Regex>>>,
 }
 
@@ -539,6 +540,7 @@ impl FriggMcpServer {
                 repository_response_freshness_cache_epoch: Arc::new(AtomicU64::new(0)),
                 precise_generator_probe_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 heuristic_reference_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                heuristic_reference_cache_epoch: Arc::new(AtomicU64::new(0)),
                 compiled_safe_regex_cache: Arc::new(RwLock::new(BTreeMap::new())),
             },
         }

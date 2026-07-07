@@ -653,6 +653,66 @@ async fn watch_notify_invalidates_live_server_navigation_caches() {
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[test]
+fn heuristic_reference_cache_skips_insert_after_invalidation_epoch_changes() {
+    let server = FriggMcpServer::new(fixture_config());
+    let repository_id = "repo-001";
+    let cache_key = HeuristicReferenceCacheKey {
+        repository_id: repository_id.to_owned(),
+        symbol_id: "symbol-001".to_owned(),
+        corpus_signature: "corpus-001".to_owned(),
+        scip_signature: "scip-001".to_owned(),
+    };
+
+    server.cache_heuristic_references(
+        cache_key.clone(),
+        Vec::new(),
+        0,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(
+        server
+            .cache_state
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .len(),
+        1
+    );
+
+    let stale_epoch = server
+        .cache_state
+        .heuristic_reference_cache_epoch
+        .load(std::sync::atomic::Ordering::Relaxed);
+    server.invalidate_repository_navigation_caches(repository_id);
+    server.cache_heuristic_references_observing_epoch(
+        cache_key.clone(),
+        Vec::new(),
+        0,
+        0,
+        0,
+        0,
+        Some(stale_epoch),
+    );
+    assert!(
+        server
+            .cache_state
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .is_empty(),
+        "stale in-flight heuristic reference loads must not repopulate after invalidation"
+    );
+    assert!(
+        server
+            .cached_heuristic_references(&cache_key)
+            .is_none(),
+        "subsequent heuristic reference lookups must miss after stale insert is skipped"
+    );
+}
+
 #[tokio::test]
 async fn read_match_reads_from_cached_result_handle() {
     let workspace_root = temp_workspace_root("read-match-result-handle");
