@@ -604,6 +604,7 @@ async fn run_supervisor(
                                 &repository_id,
                                 class,
                                 result,
+                                &validated_manifest_candidate_cache,
                                 repository_cache_invalidation_callback.as_ref(),
                                 now,
                                 retry,
@@ -698,8 +699,6 @@ async fn run_supervisor(
             let completion_tx = command_tx.clone();
             let semantic_runtime = semantic_runtime.clone();
             let semantic_credentials = semantic_credentials.clone();
-            let validated_manifest_candidate_cache =
-                Arc::clone(&validated_manifest_candidate_cache);
             let repository_cache_invalidation_callback =
                 repository_cache_invalidation_callback.clone();
             let reporter = reporter.clone();
@@ -808,12 +807,6 @@ async fn run_supervisor(
                 } else {
                     RuntimeTaskStatus::Failed
                 };
-                if result.is_ok() && class == WatchRefreshClass::ManifestFast {
-                    validated_manifest_candidate_cache
-                        .write()
-                        .expect("validated manifest candidate cache poisoned")
-                        .invalidate_root(&repository.root);
-                }
                 if let Some(callback) = repository_cache_invalidation_callback.as_ref() {
                     callback(&repository.repository_id);
                 }
@@ -1013,6 +1006,22 @@ fn handle_notify_dropped(
     }
 }
 
+pub(crate) fn reconcile_validated_manifest_cache_after_manifest_fast_success(
+    scheduler: &WatchSchedulerState,
+    repository_id: &str,
+    root: &std::path::Path,
+    validated_manifest_candidate_cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
+) {
+    let mut cache = validated_manifest_candidate_cache
+        .write()
+        .expect("validated manifest candidate cache poisoned");
+    if scheduler.repository_pending(repository_id, WatchRefreshClass::ManifestFast) {
+        cache.mark_dirty_root(root);
+    } else {
+        cache.invalidate_root(root);
+    }
+}
+
 fn invalidate_caches_for_stale_completion(
     repository_id: &str,
     _result: &Result<crate::indexer::IndexSummary, WatchRefreshFailure>,
@@ -1032,6 +1041,7 @@ fn handle_index_completed(
     repository_id: &str,
     class: WatchRefreshClass,
     result: Result<crate::indexer::IndexSummary, WatchRefreshFailure>,
+    validated_manifest_candidate_cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
     now: Instant,
     retry: Duration,
@@ -1054,6 +1064,14 @@ fn handle_index_completed(
     match result {
         Ok(summary) => {
             scheduler.mark_succeeded(repository_id, class, now);
+            if class == WatchRefreshClass::ManifestFast {
+                reconcile_validated_manifest_cache_after_manifest_fast_success(
+                    scheduler,
+                    repository_id,
+                    &repository.root,
+                    validated_manifest_candidate_cache,
+                );
+            }
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -1647,12 +1665,15 @@ mod tests {
                 .expect("watch event log poisoned")
                 .push(event);
         });
+        let validated_manifest_candidate_cache =
+            Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
         handle_index_completed(
             &repositories,
             &mut scheduler,
             "repo-001",
             WatchRefreshClass::ManifestFast,
             Err(failure),
+            &validated_manifest_candidate_cache,
             None,
             now,
             retry,
@@ -1736,6 +1757,8 @@ mod tests {
                 .expect("watch event log poisoned")
                 .push(event);
         });
+        let validated_manifest_candidate_cache =
+            Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
         handle_index_completed(
             &repositories,
             &mut scheduler,
@@ -1745,6 +1768,7 @@ mod tests {
                 message: WATCH_INDEX_WORKER_PANIC_MESSAGE.to_owned(),
                 kind: WatchRefreshFailureKind::Retryable,
             }),
+            &validated_manifest_candidate_cache,
             None,
             now,
             retry,

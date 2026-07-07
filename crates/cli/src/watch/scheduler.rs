@@ -483,7 +483,6 @@ impl WatchSchedulerState {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn repository_pending(
         &self,
         repository_id: impl Into<RepositorySelector>,

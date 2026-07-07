@@ -9,7 +9,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use notify::{Event, EventKind};
 
 use super::scheduler::MAX_RETRY_BACKOFF_EXPONENT;
-use super::supervisor::queue_semantic_followup_if_needed;
+use super::supervisor::{
+    queue_semantic_followup_if_needed,
+    reconcile_validated_manifest_cache_after_manifest_fast_success,
+};
 use super::*;
 use crate::indexer::{IndexMode, ManifestStore, index_repository_with_runtime_config};
 use crate::manifest_validation::ValidatedManifestCandidateCache;
@@ -431,6 +434,82 @@ fn scheduler_resets_manifest_fast_debounce_cap_after_refresh_starts() {
             class: WatchRefreshClass::ManifestFast,
         })
     );
+}
+
+#[test]
+fn manifest_fast_success_keeps_dirty_root_when_rerun_is_pending() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let debounce = Duration::from_millis(750);
+    let workspace_root = temp_workspace_root("manifest-fast-stale-trust");
+    let cache = test_validated_manifest_candidate_cache();
+
+    scheduler.record_path_change(
+        0,
+        workspace_root.join("a.rs"),
+        now,
+        debounce,
+    );
+    cache
+        .write()
+        .expect("validated manifest candidate cache poisoned")
+        .mark_dirty_root(&workspace_root);
+
+    let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(started_paths, vec![workspace_root.join("a.rs")]);
+
+    scheduler.record_path_change(
+        0,
+        workspace_root.join("b.rs"),
+        now + Duration::from_millis(100),
+        debounce,
+    );
+    assert!(scheduler.root_rerun_requested(0, WatchRefreshClass::ManifestFast));
+
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::ManifestFast,
+        now + Duration::from_millis(200),
+    );
+    assert!(scheduler.root_pending(0, WatchRefreshClass::ManifestFast));
+
+    reconcile_validated_manifest_cache_after_manifest_fast_success(
+        &scheduler,
+        "repo-000",
+        &workspace_root,
+        &cache,
+    );
+    assert!(
+        cache
+            .read()
+            .expect("validated manifest candidate cache poisoned")
+            .is_dirty_root(&workspace_root),
+        "pending rerun must keep validated manifest cache untrusted after manifest_fast success"
+    );
+
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::ManifestFast,
+        now + Duration::from_millis(1_000),
+    );
+    assert!(!scheduler.root_pending(0, WatchRefreshClass::ManifestFast));
+
+    reconcile_validated_manifest_cache_after_manifest_fast_success(
+        &scheduler,
+        "repo-000",
+        &workspace_root,
+        &cache,
+    );
+    assert!(
+        !cache
+            .read()
+            .expect("validated manifest candidate cache poisoned")
+            .is_dirty_root(&workspace_root),
+        "manifest_fast success without pending rerun should clear dirty_root trust guard"
+    );
+
+    cleanup_workspace(&workspace_root);
 }
 
 #[test]
