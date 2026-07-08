@@ -303,13 +303,16 @@ impl FriggMcpServer {
                                         return Ok(Json(GoToDefinitionResponse {
                                             matches: precise_matches,
                                             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                             mode: FriggMcpServer::navigation_mode_from_precision_label(
                                                 Some(precision),
                                             ),
                                             target_selection: None,
                                             metadata,
                                             note,
-                                        }));
+                    recovery: RecoveryFields::default(),
+                }));
                                     }
                                 }
 
@@ -343,11 +346,14 @@ impl FriggMcpServer {
                                         return Ok(Json(GoToDefinitionResponse {
                                             matches: route_matches,
                                             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                             mode: NavigationMode::HeuristicNoPrecise,
                                             target_selection: None,
                                             metadata,
                                             note,
-                                        }));
+                    recovery: RecoveryFields::default(),
+                }));
                                     }
                                 }
                             }
@@ -415,11 +421,14 @@ impl FriggMcpServer {
                                         return Ok(Json(GoToDefinitionResponse {
                                             matches: Vec::new(),
                                             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                             mode: NavigationMode::UnavailableNoPrecise,
                                             target_selection,
                                             metadata,
                                             note,
-                                        }));
+                    recovery: RecoveryFields::default(),
+                }));
                                     }
                                 };
                                 target_selection_candidate_count =
@@ -540,13 +549,16 @@ impl FriggMcpServer {
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
                                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
-                                    })
+                    recovery: RecoveryFields::default(),
+                })
                                 } else {
                                     let mut matches = vec![Self::selected_target_navigation_location(
                                         target_corpus.as_ref(),
@@ -608,11 +620,14 @@ impl FriggMcpServer {
                                     Json(GoToDefinitionResponse {
                                         matches,
                                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                         mode: NavigationMode::HeuristicNoPrecise,
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
-                                    })
+                    recovery: RecoveryFields::default(),
+                })
                                 }
                             }
                         } else {
@@ -665,11 +680,14 @@ impl FriggMcpServer {
                                     return Ok(Json(GoToDefinitionResponse {
                                         matches: Vec::new(),
                                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                         mode: NavigationMode::UnavailableNoPrecise,
                                         target_selection,
                                         metadata,
                                         note,
-                                    }));
+                    recovery: RecoveryFields::default(),
+                }));
                                 }
                             };
                             target_selection_candidate_count =
@@ -789,13 +807,16 @@ impl FriggMcpServer {
                                 Json(GoToDefinitionResponse {
                                     matches: precise_matches,
                                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
                                     target_selection: target_selection.clone(),
                                     metadata,
                                     note,
-                                })
+                    recovery: RecoveryFields::default(),
+                })
                             } else {
                                 let mut matches = vec![Self::selected_target_navigation_location(
                                     target_corpus.as_ref(),
@@ -857,11 +878,14 @@ impl FriggMcpServer {
                                 Json(GoToDefinitionResponse {
                                     matches,
                                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                     mode: NavigationMode::HeuristicNoPrecise,
                                     target_selection: target_selection.clone(),
                                     metadata,
                                     note,
-                                })
+                    recovery: RecoveryFields::default(),
+                })
                             }
                         }
                     } else {
@@ -916,11 +940,14 @@ impl FriggMcpServer {
                                         return Ok(Json(GoToDefinitionResponse {
                                             matches: Vec::new(),
                                             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                             mode: NavigationMode::UnavailableNoPrecise,
                                             target_selection,
                                             metadata,
                                             note,
-                                        }));
+                    recovery: RecoveryFields::default(),
+                }));
                                     }
                                 };
                                 target_selection_candidate_count =
@@ -1037,13 +1064,16 @@ impl FriggMcpServer {
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
                                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                                             precision,
                                         )),
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
-                                    })
+                    recovery: RecoveryFields::default(),
+                })
                                 } else {
                                     let mut matches = vec![Self::selected_target_navigation_location(
                                         target_corpus.as_ref(),
@@ -1105,11 +1135,14 @@ impl FriggMcpServer {
                                     Json(GoToDefinitionResponse {
                                         matches,
                                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                         mode: NavigationMode::HeuristicNoPrecise,
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
-                                    })
+                    recovery: RecoveryFields::default(),
+                })
                                 }
                             }
                             Err(error) if error_code_tag(&error) == Some("resource_not_found") => {
@@ -1172,13 +1205,16 @@ impl FriggMcpServer {
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
                                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
                                         target_selection: None,
                                         metadata,
                                         note,
-                                    })
+                    recovery: RecoveryFields::default(),
+                })
                                 } else {
                                     return Err(error);
                                 }

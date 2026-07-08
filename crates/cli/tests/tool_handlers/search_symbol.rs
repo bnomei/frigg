@@ -128,7 +128,8 @@ async fn search_symbol_returns_blade_symbols_from_runtime_corpus() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "dashboard.panel".to_owned(),
             repository_id: Some("repo-001".to_owned()),
-            path_class: None,
+            // Blade views classify as support; opt in past runtime-first default.
+            path_class: Some(SearchSymbolPathClass::Support),
             path_regex: None,
             limit: Some(20),
             response_mode: Some(ResponseMode::Full),
@@ -405,8 +406,8 @@ async fn search_symbol_resolves_php_canonical_queries() {
 }
 
 #[tokio::test]
-async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
-    let workspace_root = temp_workspace_root("search-symbol-runtime-first");
+async fn search_symbol_defaults_to_runtime_path_class() {
+    let workspace_root = temp_workspace_root("search-symbol-runtime-default");
     fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
     fs::create_dir_all(workspace_root.join("tests")).expect("failed to create tests fixture");
     fs::create_dir_all(workspace_root.join("benches")).expect("failed to create benches fixture");
@@ -418,7 +419,7 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
         .expect("failed to write bench symbol fixture");
 
     let server = server_for_workspace_root(&workspace_root).await;
-    let response = server
+    let default_response = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "run".to_owned(),
             repository_id: Some("repo-001".to_owned()),
@@ -428,10 +429,37 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("search_symbol should succeed")
+        .expect("default search_symbol should succeed")
         .0;
 
-    let paths = response
+    let default_paths = default_response
+        .matches
+        .iter()
+        .map(|matched| matched.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(default_paths, vec!["src/lib.rs"]);
+    assert!(
+        default_response
+            .matches
+            .iter()
+            .all(|matched| matched.column.is_some() && matched.excerpt.is_some()),
+        "symbol rows should expose column and excerpt when indexed"
+    );
+
+    let any_response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "run".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: Some(SearchSymbolPathClass::Any),
+            path_regex: None,
+            limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("path_class=any search_symbol should succeed")
+        .0;
+
+    let paths = any_response
         .matches
         .iter()
         .map(|matched| matched.path.as_str())
@@ -440,7 +468,7 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
     assert!(paths.contains(&"tests/support.rs"));
     assert!(paths.contains(&"benches/bench.rs"));
     assert!(
-        response
+        any_response
             .matches
             .iter()
             .all(|matched| matched.stable_symbol_id.is_some()),
@@ -502,7 +530,8 @@ async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "simulator".to_owned(),
             repository_id: Some("repo-001".to_owned()),
-            path_class: None,
+            // Opt out of runtime-first default to include inline test symbols.
+            path_class: Some(SearchSymbolPathClass::Any),
             path_regex: Some("^src/".to_owned()),
             limit: Some(20),
             response_mode: Some(ResponseMode::Full),

@@ -2,7 +2,7 @@
 //!
 //! Recovery fields are designed for compact mode (top-level, optional, skip-when-empty) so agents
 //! get actionable next steps without requesting `response_mode=full`. Builders cover the common
-//! situations from `docs/futura.md` §15; full zero-hit diagnostics wiring lands in 2.2.
+//! situations from `docs/futura.md` §15, including structured zero-hit diagnostics (`FUT-006`).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,128 @@ impl SuggestedNext {
     }
 }
 
+/// Applied search/navigation scope echo for zero-hit diagnostics (`FUT-006`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ZeroHitScope {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_regex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glob: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_by_policy: Vec<String>,
+}
+
+impl ZeroHitScope {
+    /// True when no scope fields would serialize.
+    pub fn is_empty(&self) -> bool {
+        self.path_regex.is_none()
+            && self.glob.is_none()
+            && self.path_class.is_none()
+            && self.repository_id.is_none()
+            && self.excluded_by_policy.is_empty()
+    }
+
+    pub fn with_path_regex(mut self, path_regex: impl Into<String>) -> Self {
+        let value = path_regex.into();
+        if !value.is_empty() {
+            self.path_regex = Some(value);
+        }
+        self
+    }
+
+    pub fn with_glob(mut self, glob: impl Into<String>) -> Self {
+        let value = glob.into();
+        if !value.is_empty() {
+            self.glob = Some(value);
+        }
+        self
+    }
+
+    pub fn with_path_class(mut self, path_class: impl Into<String>) -> Self {
+        let value = path_class.into();
+        if !value.is_empty() {
+            self.path_class = Some(value);
+        }
+        self
+    }
+
+    pub fn with_repository_id(mut self, repository_id: impl Into<String>) -> Self {
+        let value = repository_id.into();
+        if !value.is_empty() {
+            self.repository_id = Some(value);
+        }
+        self
+    }
+
+    pub fn with_excluded_by_policy(mut self, excluded: impl IntoIterator<Item = String>) -> Self {
+        self.excluded_by_policy = excluded.into_iter().filter(|v| !v.is_empty()).collect();
+        self
+    }
+}
+
+/// Index freshness block for zero-hit diagnostics (`FUT-006`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ZeroHitIndex {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_index_success_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_tree_dirty: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_paths_since_snapshot: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_warning: Option<String>,
+}
+
+impl ZeroHitIndex {
+    /// True when no index fields would serialize.
+    pub fn is_empty(&self) -> bool {
+        self.index_state.is_none()
+            && self.last_index_success_at.is_none()
+            && self.working_tree_dirty.is_none()
+            && self.changed_paths_since_snapshot.is_empty()
+            && self.stale_warning.is_none()
+    }
+}
+
+/// Optional scope + index diagnostics bundled for zero-hit responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ZeroHitDiagnostics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ZeroHitScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<ZeroHitIndex>,
+}
+
+impl ZeroHitDiagnostics {
+    pub fn is_empty(&self) -> bool {
+        self.scope.as_ref().is_none_or(ZeroHitScope::is_empty)
+            && self.index.as_ref().is_none_or(ZeroHitIndex::is_empty)
+    }
+}
+
+/// Inputs for composing a structured zero-hit recovery payload.
+#[derive(Debug, Clone, Default)]
+pub struct ZeroHitInput<'a> {
+    /// Tool that returned zero hits (`search_text`, `search_symbol`, …).
+    pub tool: &'a str,
+    /// Original query / symbol when available.
+    pub query: Option<&'a str>,
+    /// When `Some(true)`, the request used literal matching (default for search_text).
+    pub pattern_type_is_literal: Option<bool>,
+    /// Optional applied scope echo.
+    pub scope: Option<ZeroHitScope>,
+    /// Optional index freshness block.
+    pub index: Option<ZeroHitIndex>,
+    /// Force a specific reason when the caller already classified the zero.
+    pub reason_override: Option<ZeroHitReason>,
+}
+
 /// Embeddable recovery grammar shared by empty/failed search, navigation, and read paths.
 ///
 /// Prefer flattening onto tool responses so compact JSON exposes recovery fields at the top
@@ -156,9 +278,15 @@ pub struct RecoveryFields {
     /// Concrete follow-up tool invocations with optional params.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_next: Vec<SuggestedNext>,
-    /// Optional zero-hit diagnostic enum for later 2.2 full contract wiring.
+    /// Structured zero-hit reason when the result set is empty (`FUT-006`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zero_hit_reason: Option<ZeroHitReason>,
+    /// Echo of applied scope filters for zero-hit trust (`FUT-006`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ZeroHitScope>,
+    /// Index freshness block for zero-hit trust (`FUT-006`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<ZeroHitIndex>,
 }
 
 impl RecoveryFields {
@@ -170,6 +298,66 @@ impl RecoveryFields {
             && self.related_tools.is_empty()
             && self.suggested_next.is_empty()
             && self.zero_hit_reason.is_none()
+            && self.scope.as_ref().is_none_or(ZeroHitScope::is_empty)
+            && self.index.as_ref().is_none_or(ZeroHitIndex::is_empty)
+    }
+
+    /// Attach optional scope + index diagnostics without clobbering recovery text.
+    pub fn with_diagnostics(mut self, diagnostics: ZeroHitDiagnostics) -> Self {
+        if let Some(scope) = diagnostics.scope.filter(|scope| !scope.is_empty()) {
+            self.scope = Some(scope);
+        }
+        if let Some(index) = diagnostics.index.filter(|index| !index.is_empty()) {
+            self.index = Some(index);
+        }
+        self
+    }
+
+    /// When a non-recursive glob produced zero hits, suggest a recursive `**` form (`FUT-009`).
+    pub fn with_non_recursive_glob_hint(mut self, query: &str, glob: &str) -> Self {
+        let glob = glob.trim();
+        if glob.is_empty() || glob.contains("**") {
+            return self;
+        }
+        let recursive = if glob.starts_with("**/") {
+            glob.to_owned()
+        } else if let Some(stripped) = glob.strip_prefix("*/") {
+            format!("**/{stripped}")
+        } else {
+            format!("**/{glob}")
+        };
+        let query = query.trim();
+        self.suggested_next.insert(
+            0,
+            SuggestedNext::tool("search_text")
+                .with_query(query)
+                .with_glob(recursive.clone())
+                .with_reason("non-recursive glob zero; retry with recursive ** form"),
+        );
+        if self
+            .correction_hint
+            .as_ref()
+            .is_none_or(|hint| !hint.contains("**"))
+        {
+            self.correction_hint = Some(format!(
+                "glob {glob:?} has no recursive ** segment; retry with glob={recursive:?}."
+            ));
+        }
+        self
+    }
+
+    fn attach_scope_index(
+        mut self,
+        scope: Option<ZeroHitScope>,
+        index: Option<ZeroHitIndex>,
+    ) -> Self {
+        if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
+            self.scope = Some(scope);
+        }
+        if let Some(index) = index.filter(|index| !index.is_empty()) {
+            self.index = Some(index);
+        }
+        self
     }
 
     /// Returns `true` when a literal `search_text` query looks like the agent meant regex.
@@ -202,12 +390,313 @@ impl RecoveryFields {
     /// Recovery for a `search_text` zero-hit given the requested pattern mode.
     ///
     /// `pattern_type_is_literal` should reflect the caller-requested mode (default literal),
-    /// not an internal rewrite from `ignore_case` / `word` flags.
+    /// not an internal rewrite from `ignore_case` / `word` flags. Every search zero is
+    /// actionable (`FUT-006`): regex trap, scoped miss, or complete indexed miss.
     pub fn for_search_text_zero_hit(query: &str, pattern_type_is_literal: bool) -> Self {
-        if pattern_type_is_literal && Self::query_looks_like_regex(query) {
-            Self::literal_looks_like_regex(query)
+        Self::for_zero_hit(ZeroHitInput {
+            tool: "search_text",
+            query: Some(query),
+            pattern_type_is_literal: Some(pattern_type_is_literal),
+            scope: None,
+            index: None,
+            reason_override: None,
+        })
+    }
+
+    /// Structured zero-hit recovery for search and navigation empty results (`FUT-006`).
+    ///
+    /// Always returns non-empty `message`, `correction_hint`, `suggested_next`, and a
+    /// `zero_hit_reason` so agents can re-plan without shell confirmation.
+    pub fn for_zero_hit(input: ZeroHitInput<'_>) -> Self {
+        let query = input.query.map(str::trim).filter(|value| !value.is_empty());
+        let scope = input.scope.filter(|scope| !scope.is_empty());
+        let index = input.index.filter(|index| !index.is_empty());
+        let tool = if input.tool.trim().is_empty() {
+            "search_text"
         } else {
-            Self::default()
+            input.tool.trim()
+        };
+
+        if let Some(reason) = input.reason_override {
+            return Self::for_zero_hit_reason(tool, query, reason, scope, index);
+        }
+
+        let pattern_type_is_literal = input.pattern_type_is_literal.unwrap_or(true);
+        if matches!(tool, "search_text" | "search_hybrid" | "explore")
+            && pattern_type_is_literal
+            && query.is_some_and(Self::query_looks_like_regex)
+        {
+            return Self::literal_looks_like_regex(query.unwrap_or(""))
+                .attach_scope_index(scope, index);
+        }
+
+        let scope_is_tight = scope.as_ref().is_some_and(|scope| {
+            scope.path_regex.is_some() || scope.glob.is_some() || scope.path_class.is_some()
+        });
+        if scope_is_tight {
+            let path_regex = scope
+                .as_ref()
+                .and_then(|scope| scope.path_regex.as_deref());
+            let path_class = scope
+                .as_ref()
+                .and_then(|scope| scope.path_class.as_deref());
+            return Self::scoped_miss(query.unwrap_or(""), path_regex, path_class)
+                .attach_scope_index(scope, index);
+        }
+
+        let index_stale = index.as_ref().is_some_and(|index| {
+            index.working_tree_dirty == Some(true)
+                || index.stale_warning.is_some()
+                || !index.changed_paths_since_snapshot.is_empty()
+        });
+        if index_stale {
+            let changed = index
+                .as_ref()
+                .map(|index| index.changed_paths_since_snapshot.as_slice())
+                .unwrap_or(&[]);
+            return Self::stale_dirty_paths(changed).attach_scope_index(scope, index);
+        }
+
+        // Default complete zero: indexed search finished with no matches.
+        Self::indexed_search_complete(tool, query).attach_scope_index(scope, index)
+    }
+
+    fn for_zero_hit_reason(
+        tool: &str,
+        query: Option<&str>,
+        reason: ZeroHitReason,
+        scope: Option<ZeroHitScope>,
+        index: Option<ZeroHitIndex>,
+    ) -> Self {
+        let recovery = match reason {
+            ZeroHitReason::QueryLooksLikeRegex => {
+                Self::literal_looks_like_regex(query.unwrap_or(""))
+            }
+            ZeroHitReason::ScopeExcludedAllCandidates => {
+                let path_regex = scope
+                    .as_ref()
+                    .and_then(|scope| scope.path_regex.as_deref());
+                let path_class = scope
+                    .as_ref()
+                    .and_then(|scope| scope.path_class.as_deref());
+                Self::scoped_miss(query.unwrap_or(""), path_regex, path_class)
+            }
+            ZeroHitReason::IndexStalePossible => {
+                let changed = index
+                    .as_ref()
+                    .map(|index| index.changed_paths_since_snapshot.as_slice())
+                    .unwrap_or(&[]);
+                Self::stale_dirty_paths(changed)
+            }
+            ZeroHitReason::WrongRepositoryPossible => Self::wrong_repo_possible(None),
+            ZeroHitReason::NoIndexCoverage => Self::detached_session(),
+            ZeroHitReason::ToolUnavailable => Self::tool_unavailable(tool),
+            ZeroHitReason::PreciseGraphUnavailable => {
+                Self::precise_graph_unavailable(tool, query)
+            }
+            ZeroHitReason::PathClassNotIndexed => {
+                Self::path_class_not_indexed(query, scope.as_ref())
+            }
+            ZeroHitReason::QueryMiss => Self::query_miss(tool, query),
+            ZeroHitReason::IndexedSearchComplete => Self::indexed_search_complete(tool, query),
+        };
+        recovery.attach_scope_index(scope, index)
+    }
+
+    /// Indexed search completed with zero matches inside the applied scope.
+    pub fn indexed_search_complete(tool: &str, query: Option<&str>) -> Self {
+        let tool = tool.trim();
+        let query_label = query.unwrap_or("<empty>");
+        let mut suggested_next = vec![
+            SuggestedNext::tool("workspace")
+                .with_reason("confirm repository adoption and index freshness"),
+        ];
+        if let Some(query) = query {
+            if tool == "search_symbol" {
+                suggested_next.push(
+                    SuggestedNext::tool("search_text")
+                        .with_query(query)
+                        .with_reason("textual fallback after symbol zero"),
+                );
+                suggested_next.push(
+                    SuggestedNext::tool("search_symbol")
+                        .with_symbol(query)
+                        .with_path_class("project")
+                        .with_reason("broaden path_class after runtime-first zero"),
+                );
+            } else if tool == "search_hybrid" {
+                suggested_next.push(
+                    SuggestedNext::tool("search_symbol")
+                        .with_query(query)
+                        .with_path_class("runtime")
+                        .with_reason("exact symbol pivot after hybrid zero"),
+                );
+                suggested_next.push(
+                    SuggestedNext::tool("search_text")
+                        .with_query(query)
+                        .with_reason("exact text pivot after hybrid zero"),
+                );
+            } else if matches!(tool, "find_references" | "go_to_definition" | "find_declarations") {
+                suggested_next.push(
+                    SuggestedNext::tool("search_symbol")
+                        .with_symbol(query)
+                        .with_path_class("runtime")
+                        .with_reason("resolve symbol before navigation retry"),
+                );
+                suggested_next.push(
+                    SuggestedNext::tool("search_text")
+                        .with_query(query)
+                        .with_reason("textual fallback after navigation zero"),
+                );
+            } else {
+                suggested_next.push(
+                    SuggestedNext::tool("search_text")
+                        .with_query(query)
+                        .with_path_regex("^src/")
+                        .with_reason("retry with an explicit runtime path_regex"),
+                );
+                suggested_next.push(
+                    SuggestedNext::tool("search_symbol")
+                        .with_query(query)
+                        .with_path_class("runtime")
+                        .with_reason("try symbol search if the query is a known name"),
+                );
+            }
+        } else {
+            suggested_next.push(
+                SuggestedNext::tool(tool).with_reason("retry with a more specific query or symbol"),
+            );
+        }
+        Self {
+            error_code: Some("ZERO_HIT".to_owned()),
+            message: Some(format!(
+                "Indexed search via {tool} returned no matches for {query_label:?}."
+            )),
+            correction_hint: Some(
+                "Trust this zero when scope and index look right; broaden path_regex/path_class, check workspace, or pivot tools before shell grep."
+                    .to_owned(),
+            ),
+            related_tools: vec![
+                tool.to_owned(),
+                "workspace".to_owned(),
+                "search_text".to_owned(),
+                "search_symbol".to_owned(),
+            ],
+            suggested_next,
+            zero_hit_reason: Some(ZeroHitReason::IndexedSearchComplete),
+            scope: None,
+            index: None,
+        }
+    }
+
+    /// Generic query miss when a stronger diagnostic does not apply.
+    pub fn query_miss(tool: &str, query: Option<&str>) -> Self {
+        let tool = tool.trim();
+        let query_label = query.unwrap_or("<empty>");
+        let mut suggested_next = vec![
+            SuggestedNext::tool("workspace")
+                .with_reason("confirm repository and freshness if the miss is surprising"),
+        ];
+        if let Some(query) = query {
+            suggested_next.push(
+                SuggestedNext::tool("search_text")
+                    .with_query(query)
+                    .with_reason("retry or rephrase as exact text"),
+            );
+        }
+        Self {
+            error_code: Some("QUERY_MISS".to_owned()),
+            message: Some(format!(
+                "No matches for {query_label:?} via {tool}."
+            )),
+            correction_hint: Some(
+                "Rephrase the query, drop tight filters, or call workspace if adoption may be wrong."
+                    .to_owned(),
+            ),
+            related_tools: vec![tool.to_owned(), "workspace".to_owned(), "search_text".to_owned()],
+            suggested_next,
+            zero_hit_reason: Some(ZeroHitReason::QueryMiss),
+            scope: None,
+            index: None,
+        }
+    }
+
+    /// Precise graph / SCIP data is unavailable for navigation.
+    pub fn precise_graph_unavailable(tool: &str, query: Option<&str>) -> Self {
+        let tool = tool.trim();
+        let mut suggested_next = vec![
+            SuggestedNext::tool("search_symbol")
+                .with_reason("heuristic symbol search when precise graph is absent"),
+            SuggestedNext::tool("search_text")
+                .with_reason("textual fallback when precise navigation is unavailable"),
+            SuggestedNext::tool("workspace")
+                .with_reason("check precise generation / index readiness"),
+        ];
+        if let Some(query) = query {
+            suggested_next[0] = SuggestedNext::tool("search_symbol")
+                .with_symbol(query)
+                .with_path_class("runtime")
+                .with_reason("heuristic symbol search when precise graph is absent");
+            suggested_next[1] = SuggestedNext::tool("search_text")
+                .with_query(query)
+                .with_reason("textual fallback when precise navigation is unavailable");
+        }
+        Self {
+            error_code: Some("PRECISE_GRAPH_UNAVAILABLE".to_owned()),
+            message: Some(format!(
+                "{tool} has no precise graph/SCIP data for this request."
+            )),
+            correction_hint: Some(
+                "Use search_symbol/search_text, or wait for precise generation via workspace when SCIP artifacts are expected."
+                    .to_owned(),
+            ),
+            related_tools: vec![
+                tool.to_owned(),
+                "search_symbol".to_owned(),
+                "search_text".to_owned(),
+                "workspace".to_owned(),
+            ],
+            suggested_next,
+            zero_hit_reason: Some(ZeroHitReason::PreciseGraphUnavailable),
+            scope: None,
+            index: None,
+        }
+    }
+
+    /// Requested path class is not covered by the index.
+    pub fn path_class_not_indexed(query: Option<&str>, scope: Option<&ZeroHitScope>) -> Self {
+        let path_class = scope
+            .and_then(|scope| scope.path_class.as_deref())
+            .unwrap_or("requested");
+        let mut suggested_next = vec![
+            SuggestedNext::tool("search_text")
+                .with_reason("search without path_class when class coverage is missing"),
+            SuggestedNext::tool("list_files")
+                .with_reason("verify which path classes are present"),
+        ];
+        if let Some(query) = query {
+            suggested_next[0] = SuggestedNext::tool("search_text")
+                .with_query(query)
+                .with_reason("search without path_class when class coverage is missing");
+        }
+        Self {
+            error_code: Some("PATH_CLASS_NOT_INDEXED".to_owned()),
+            message: Some(format!(
+                "Path class {path_class:?} is not covered by the index for this request."
+            )),
+            correction_hint: Some(
+                "Drop path_class, switch to project/support, or verify list_files under the intended roots."
+                    .to_owned(),
+            ),
+            related_tools: vec![
+                "search_symbol".to_owned(),
+                "search_text".to_owned(),
+                "list_files".to_owned(),
+            ],
+            suggested_next,
+            zero_hit_reason: Some(ZeroHitReason::PathClassNotIndexed),
+            scope: None,
+            index: None,
         }
     }
 
@@ -231,6 +720,8 @@ impl RecoveryFields {
                     .with_reason("literal query contains regex metacharacters"),
             ],
             zero_hit_reason: Some(ZeroHitReason::QueryLooksLikeRegex),
+            scope: None,
+            index: None,
         }
     }
 
@@ -261,6 +752,8 @@ impl RecoveryFields {
                     .with_reason("textual search when symbol class filter misses"),
             ],
             zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
+            scope: None,
+            index: None,
         }
     }
 
@@ -284,6 +777,8 @@ impl RecoveryFields {
             related_tools: vec!["workspace".to_owned(), "search_text".to_owned()],
             suggested_next: vec![next],
             zero_hit_reason: Some(ZeroHitReason::WrongRepositoryPossible),
+            scope: None,
+            index: None,
         }
     }
 
@@ -330,6 +825,8 @@ impl RecoveryFields {
             ],
             suggested_next,
             zero_hit_reason: Some(ZeroHitReason::IndexStalePossible),
+            scope: None,
+            index: None,
         }
     }
 
@@ -370,6 +867,8 @@ impl RecoveryFields {
             ],
             suggested_next,
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),
+            scope: None,
+            index: None,
         }
     }
 
@@ -400,6 +899,8 @@ impl RecoveryFields {
                     .with_reason("callers for blast radius"),
             ],
             zero_hit_reason: None,
+            scope: None,
+            index: None,
         }
     }
 
@@ -439,6 +940,8 @@ impl RecoveryFields {
             ],
             suggested_next,
             zero_hit_reason: None,
+            scope: None,
+            index: None,
         }
     }
 
@@ -494,6 +997,8 @@ impl RecoveryFields {
             ],
             suggested_next,
             zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
+            scope: None,
+            index: None,
         }
     }
 
@@ -515,6 +1020,8 @@ impl RecoveryFields {
                     .with_reason("attach or adopt a repository for this session"),
             ],
             zero_hit_reason: Some(ZeroHitReason::NoIndexCoverage),
+            scope: None,
+            index: None,
         }
     }
 
@@ -538,6 +1045,8 @@ impl RecoveryFields {
                     .with_reason("core exact search remains available on default surfaces"),
             ],
             zero_hit_reason: Some(ZeroHitReason::ToolUnavailable),
+            scope: None,
+            index: None,
         }
     }
 
@@ -566,6 +1075,8 @@ impl RecoveryFields {
                     .with_reason("retry with symbol=... or path+line"),
             ],
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),
+            scope: None,
+            index: None,
         }
     }
 
@@ -593,6 +1104,8 @@ impl RecoveryFields {
                     .with_reason("obtain a concrete line/column anchor first"),
             ],
             zero_hit_reason: None,
+            scope: None,
+            index: None,
         }
     }
 
@@ -621,6 +1134,8 @@ impl RecoveryFields {
                     .with_reason("path-based read when the path is still known"),
             ],
             zero_hit_reason: None,
+            scope: None,
+            index: None,
         }
     }
 
@@ -643,6 +1158,8 @@ impl RecoveryFields {
                     .with_reason("re-run search and use the paired handle + match_id"),
             ],
             zero_hit_reason: None,
+            scope: None,
+            index: None,
         }
     }
 }
@@ -670,6 +1187,13 @@ mod tests {
     use serde_json::json;
 
     fn assert_recovery_actionable(recovery: &RecoveryFields) {
+        assert!(
+            recovery
+                .message
+                .as_ref()
+                .is_some_and(|message| !message.trim().is_empty()),
+            "message must be non-empty: {recovery:?}"
+        );
         assert!(
             recovery
                 .correction_hint
@@ -728,13 +1252,89 @@ mod tests {
         assert_eq!(recovery.error_code.as_deref(), Some("QUERY_LOOKS_LIKE_REGEX"));
 
         let explicit_regex = RecoveryFields::for_search_text_zero_hit(r"foo|bar", false);
-        assert!(
-            explicit_regex.is_empty(),
+        assert_recovery_actionable(&explicit_regex);
+        assert_ne!(
+            explicit_regex.error_code.as_deref(),
+            Some("QUERY_LOOKS_LIKE_REGEX"),
             "explicit pattern_type=regex zero should not emit the literal-regex trap"
+        );
+        assert_eq!(
+            explicit_regex.zero_hit_reason,
+            Some(ZeroHitReason::IndexedSearchComplete)
         );
 
         let plain = RecoveryFields::for_search_text_zero_hit("catalog_entries", true);
-        assert!(plain.is_empty(), "plain literal zero has no regex-trap recovery yet");
+        assert_recovery_actionable(&plain);
+        assert_eq!(
+            plain.zero_hit_reason,
+            Some(ZeroHitReason::IndexedSearchComplete)
+        );
+    }
+
+    #[test]
+    fn recovery_for_zero_hit_includes_scope_echo_and_actionable_fields() {
+        let recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+            tool: "search_text",
+            query: Some("catalog_entries"),
+            pattern_type_is_literal: Some(true),
+            scope: Some(
+                ZeroHitScope::default()
+                    .with_path_regex("^src/catalog/")
+                    .with_glob("**/*.rs")
+                    .with_path_class("runtime")
+                    .with_repository_id("repo-1"),
+            ),
+            index: Some(ZeroHitIndex {
+                index_state: Some("ready".to_owned()),
+                last_index_success_at: None,
+                working_tree_dirty: Some(false),
+                changed_paths_since_snapshot: Vec::new(),
+                stale_warning: None,
+            }),
+            reason_override: None,
+        });
+        assert_recovery_actionable(&recovery);
+        assert_eq!(
+            recovery.zero_hit_reason,
+            Some(ZeroHitReason::ScopeExcludedAllCandidates)
+        );
+        let scope = recovery.scope.as_ref().expect("scope echo");
+        assert_eq!(scope.path_regex.as_deref(), Some("^src/catalog/"));
+        assert_eq!(scope.glob.as_deref(), Some("**/*.rs"));
+        assert_eq!(scope.path_class.as_deref(), Some("runtime"));
+        assert_eq!(scope.repository_id.as_deref(), Some("repo-1"));
+        assert_eq!(
+            recovery.index.as_ref().and_then(|index| index.index_state.as_deref()),
+            Some("ready")
+        );
+
+        let value = serde_json::to_value(&recovery).expect("serialize zero-hit");
+        assert_eq!(value["zero_hit_reason"], "scope_excluded_all_candidates");
+        assert_eq!(value["scope"]["path_regex"], "^src/catalog/");
+        assert_eq!(value["index"]["index_state"], "ready");
+        assert!(value["message"].as_str().is_some_and(|m| !m.is_empty()));
+        assert!(value["correction_hint"].as_str().is_some_and(|m| !m.is_empty()));
+        assert!(value["suggested_next"].as_array().is_some_and(|v| !v.is_empty()));
+    }
+
+    #[test]
+    fn recovery_for_zero_hit_nav_and_symbol_are_actionable() {
+        for tool in ["search_symbol", "search_hybrid", "find_references", "go_to_definition"] {
+            let recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool,
+                query: Some("MissingSymbol"),
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override: None,
+            });
+            assert_recovery_actionable(&recovery);
+            assert_eq!(
+                recovery.zero_hit_reason,
+                Some(ZeroHitReason::IndexedSearchComplete),
+                "tool={tool}"
+            );
+        }
     }
 
     #[test]

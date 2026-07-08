@@ -109,6 +109,15 @@ pub struct SymbolMatch {
     pub kind: String,
     pub path: String,
     pub line: usize,
+    /// 1-based column when indexed (`FUT-011` navigation handoff).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    /// Short excerpt or signature snippet when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    /// Path class (`runtime` / `project` / `support`) when classified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

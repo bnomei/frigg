@@ -41,7 +41,12 @@ impl FriggMcpServer {
                         })?),
                         None => None,
                     };
-                    let path_class_filter = params_for_blocking.path_class;
+                    // Runtime-first default when path_class is omitted (`FUT-011`).
+                    let path_class_filter = Some(
+                        params_for_blocking
+                            .path_class
+                            .unwrap_or(SearchSymbolPathClass::Runtime),
+                    );
                     let query_lower = query.to_ascii_lowercase();
                     let query_looks_canonical =
                         query.contains('\\') || query.contains("::") || query.contains('$');
@@ -255,17 +260,22 @@ impl FriggMcpServer {
                         "path_class": path_class_filter.map(|value| value.as_str()),
                         "path_regex": params_for_blocking.path_regex.clone(),
                         "path_class_sort": "runtime_first",
+                        "path_class_default": "runtime",
                     });
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     let response = SearchSymbolResponse {
                         matches,
                         result_handle: None,
+                        handle_scope: None,
+                        handle_expires: None,
                         metadata,
                         note,
+                        recovery: RecoveryFields::default(),
                     };
                     Ok(Json(server.present_search_symbol_response(
                         response,
                         params_for_blocking.response_mode,
+                        Some(&params_for_blocking),
                     )))
                 })();
 

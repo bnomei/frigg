@@ -143,10 +143,13 @@ impl FriggMcpServer {
                 Json(GoToDefinitionResponse {
                     matches: precise_matches,
                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                     mode: Self::navigation_mode_from_precision_label(Some(&precision)),
                     target_selection: None,
                     metadata,
                     note,
+                    recovery: RecoveryFields::default(),
                 }),
                 corpus.repository_id.clone(),
                 precise_target.symbol,

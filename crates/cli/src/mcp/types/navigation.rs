@@ -65,6 +65,12 @@ pub struct FindReferencesResponse {
     pub matches: Vec<ReferenceMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
+    /// Short scope label for `match_id` values (for example `nav`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_scope: Option<String>,
+    /// Handle lifetime. Session-scoped handles use `"session"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_expires: Option<String>,
     pub mode: NavigationMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
@@ -73,6 +79,9 @@ pub struct FindReferencesResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty reference results (`FUT-006` / `FUT-016`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
 }
 
 /// Parameters for `go_to_definition`.
@@ -118,6 +127,12 @@ pub struct GoToDefinitionResponse {
     pub matches: Vec<NavigationLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
+    /// Short scope label for `match_id` values (for example `nav`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_scope: Option<String>,
+    /// Handle lifetime. Session-scoped handles use `"session"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_expires: Option<String>,
     pub mode: NavigationMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
@@ -126,6 +141,9 @@ pub struct GoToDefinitionResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty definition results (`FUT-006` / `FUT-016`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
 }
 
 /// Parameters for `find_declarations`.

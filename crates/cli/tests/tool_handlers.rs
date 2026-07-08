@@ -17,8 +17,9 @@ use frigg::mcp::types::{
     OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadMatchParams,
     ReadPresentationMode, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
     SearchHybridRankReason, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
-    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
-    StructuralResultMode, SyntaxTreeNodeItem, WorkspaceAttachAction, WorkspaceAttachParams,
+    RecoveryFields, SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse,
+    SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem, WorkspaceAttachAction,
+    WorkspaceAttachParams,
     WorkspaceCurrentParams, WorkspaceParams, WorkspacePreciseState, WorkspaceResolveMode,
     WorkspaceStorageIndexState,
 };
@@ -180,9 +181,12 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
         &SearchSymbolResponse {
             matches: Vec::new(),
             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
             metadata: None,
             note: None,
-        },
+                    recovery: RecoveryFields::default(),
+                },
     );
     assert_omits_absent_metadata_and_note(
         "find_references",
@@ -190,22 +194,28 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             total_matches: 0,
             matches: Vec::new(),
             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
             mode: NavigationMode::UnavailableNoPrecise,
             target_selection: None,
             metadata: None,
             note: None,
-        },
+                    recovery: RecoveryFields::default(),
+                },
     );
     assert_omits_absent_metadata_and_note(
         "go_to_definition",
         &GoToDefinitionResponse {
             matches: Vec::new(),
             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
             mode: NavigationMode::UnavailableNoPrecise,
             target_selection: None,
             metadata: None,
             note: None,
-        },
+                    recovery: RecoveryFields::default(),
+                },
     );
     assert_omits_absent_metadata_and_note(
         "find_declarations",
@@ -537,8 +547,10 @@ mod document_symbols;
 mod navigation;
 #[path = "tool_handlers/references.rs"]
 mod references;
+#[path = "tool_handlers/search_batch.rs"]
 #[path = "tool_handlers/search_symbol.rs"]
 mod search_symbol;
+#[path = "tool_handlers/search_text_futura.rs"]
 #[path = "tool_handlers/structural.rs"]
 mod structural;
 #[path = "tool_handlers/workspace.rs"]

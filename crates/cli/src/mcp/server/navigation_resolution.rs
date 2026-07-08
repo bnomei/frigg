@@ -140,6 +140,7 @@ impl FriggMcpServer {
         let symbol = &corpus.symbols[symbol_index];
         let path = Self::relative_display_path(&corpus.root, &symbol.path);
         if let Some(path_class_filter) = path_class_filter
+            && path_class_filter.is_concrete_filter()
             && Self::navigation_path_class(&path) != path_class_filter.as_str()
         {
             return None;
@@ -160,6 +161,10 @@ impl FriggMcpServer {
         }
         let path_class = Self::navigation_path_class(&path);
         let (container, signature) = Self::symbol_context_for_index(corpus, symbol_index);
+        let column = (symbol.span.start_column > 0).then_some(symbol.span.start_column);
+        let excerpt = signature
+            .clone()
+            .or_else(|| Some(format!("{} {}", symbol.kind.as_str(), symbol.name)));
         Some(RankedSymbolMatch {
             rank,
             path_class_rank: Self::navigation_path_class_rank(path_class),
@@ -178,6 +183,9 @@ impl FriggMcpServer {
                 kind: symbol.kind.as_str().to_owned(),
                 path,
                 line: symbol.line,
+                column,
+                excerpt,
+                path_class: Some(path_class.to_owned()),
                 container,
                 signature,
             },

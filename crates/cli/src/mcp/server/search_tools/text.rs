@@ -174,20 +174,65 @@ impl FriggMcpServer {
                         total_matches,
                         matches,
                         result_handle: None,
+                        handle_scope: None,
+                        handle_expires: None,
+                        count_only: params_for_blocking
+                            .count_only
+                            .filter(|value| *value)
+                            .or(None),
+                        latency_class: None,
                         metadata,
                         recovery: RecoveryFields::default(),
                     };
-                    // Compact-mode recovery: literal queries that look like regex often
-                    // zero because `pattern_type` defaults to literal (`FUT-016` / 2.1).
+                    if params_for_blocking.count_only == Some(true) {
+                        response.count_only = Some(true);
+                    }
+                    // Structured zero-hit for every empty search (`FUT-006` / `FUT-016`).
                     if response.total_matches == 0 {
                         let pattern_type_is_literal = !matches!(
                             params_for_blocking.pattern_type,
                             Some(SearchPatternType::Regex)
                         );
-                        response.recovery = RecoveryFields::for_search_text_zero_hit(
-                            &params_for_blocking.query,
-                            pattern_type_is_literal,
-                        );
+                        let mut scope = ZeroHitScope::default();
+                        if let Some(path_regex) = params_for_blocking.path_regex.as_ref() {
+                            scope = scope.with_path_regex(path_regex.clone());
+                        }
+                        if let Some(glob) = params_for_blocking.glob.as_ref() {
+                            scope = scope.with_glob(glob.clone());
+                        }
+                        if let Some(repository_id) = params_for_blocking.repository_id.as_ref() {
+                            scope = scope.with_repository_id(repository_id.clone());
+                        }
+                        response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                            tool: "search_text",
+                            query: Some(params_for_blocking.query.as_str()),
+                            pattern_type_is_literal: Some(pattern_type_is_literal),
+                            scope: Some(scope).filter(|scope| !scope.is_empty()),
+                            index: None,
+                            reason_override: None,
+                        });
+                        if let Some(glob) = params_for_blocking.glob.as_deref() {
+                            response.recovery = response
+                                .recovery
+                                .with_non_recursive_glob_hint(
+                                    params_for_blocking.query.as_str(),
+                                    glob,
+                                );
+                        }
+                    } else {
+                        let mut scope = ZeroHitScope::default();
+                        if let Some(path_regex) = params_for_blocking.path_regex.as_ref() {
+                            scope = scope.with_path_regex(path_regex.clone());
+                        }
+                        if let Some(glob) = params_for_blocking.glob.as_ref() {
+                            scope = scope.with_glob(glob.clone());
+                        }
+                        if let Some(repository_id) = params_for_blocking.repository_id.as_ref() {
+                            scope = scope.with_repository_id(repository_id.clone());
+                        }
+                        if !scope.is_empty() {
+                            response.recovery.scope = Some(scope);
+                        }
                     }
                     let compact_metadata_seed = response.metadata.clone();
                     response_source_refs = json!({

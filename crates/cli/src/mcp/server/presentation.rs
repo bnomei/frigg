@@ -7,6 +7,19 @@ use super::*;
 use crate::domain::model::TextMatch;
 use crate::mcp::types::{DocumentSymbolItem, SearchHybridDiagnosticsSummary, SearchHybridMetadata};
 
+/// Outcome of resolving a session `result_handle` + `match_id` pair for `read_match`.
+#[derive(Debug, Clone)]
+pub(in crate::mcp::server) enum SessionResultHandleLookup {
+    Found(crate::mcp::server_cache::ResultHandleMatchAnchor),
+    /// `result_handle` is missing (expired, never issued, or invalidated).
+    StaleHandle,
+    /// Handle exists but `match_id` does not belong to it (often mixed across calls).
+    MixedHandle {
+        foreign_handle_has_match: bool,
+        foreign_handle: Option<String>,
+    },
+}
+
 impl FriggMcpServer {
     pub(super) fn response_mode(mode: Option<ResponseMode>) -> ResponseMode {
         mode.unwrap_or(ResponseMode::Compact)
@@ -72,6 +85,19 @@ impl FriggMcpServer {
         result_handle: &str,
         match_id: &str,
     ) -> Option<crate::mcp::server_cache::ResultHandleMatchAnchor> {
+        match self.session_result_handle_lookup(result_handle, match_id) {
+            SessionResultHandleLookup::Found(anchor) => Some(anchor),
+            SessionResultHandleLookup::StaleHandle
+            | SessionResultHandleLookup::MixedHandle { .. } => None,
+        }
+    }
+
+    /// Classifies `read_match` handle failures as stale (missing handle) vs mixed (wrong match_id).
+    pub(super) fn session_result_handle_lookup(
+        &self,
+        result_handle: &str,
+        match_id: &str,
+    ) -> SessionResultHandleLookup {
         let now = Instant::now();
         let mut cache = self
             .session_state
@@ -80,12 +106,22 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         Self::prune_session_result_handles(&mut cache, now);
-        cache
-            .entries
-            .get(result_handle)?
-            .matches
-            .get(match_id)
-            .cloned()
+        let Some(entry) = cache.entries.get(result_handle) else {
+            return SessionResultHandleLookup::StaleHandle;
+        };
+        if let Some(anchor) = entry.matches.get(match_id).cloned() {
+            return SessionResultHandleLookup::Found(anchor);
+        }
+        let foreign_handle = cache.entries.iter().find_map(|(handle, other)| {
+            if handle == result_handle {
+                return None;
+            }
+            other.matches.contains_key(match_id).then(|| handle.clone())
+        });
+        SessionResultHandleLookup::MixedHandle {
+            foreign_handle_has_match: foreign_handle.is_some(),
+            foreign_handle,
+        }
     }
 
     pub(super) fn invalidate_session_result_handles_for_repository_ids<'a>(
@@ -115,14 +151,49 @@ impl FriggMcpServer {
             .retain(|handle| retained_handles.contains(handle));
     }
 
+    /// Maps tool names to short `match_id` scope prefixes (`search:m1`, `nav:m1`, …).
+    pub(super) fn result_handle_scope_for_tool(tool_name: &str) -> &'static str {
+        match tool_name {
+            "search_text" => "search",
+            "search_symbol" | "document_symbols" => "symbols",
+            "search_hybrid" => "hybrid",
+            "find_references"
+            | "go_to_definition"
+            | "find_declarations"
+            | "find_implementations"
+            | "incoming_calls"
+            | "outgoing_calls" => "nav",
+            _ => "search",
+        }
+    }
+
+    fn scoped_match_id(scope: &str, index: usize) -> String {
+        format!("{scope}:m{}", index + 1)
+    }
+
+    fn attach_handle_metadata(
+        result_handle: &Option<String>,
+        tool_name: &str,
+    ) -> (Option<String>, Option<String>) {
+        if result_handle.is_some() {
+            (
+                Some(Self::result_handle_scope_for_tool(tool_name).to_owned()),
+                Some("session".to_owned()),
+            )
+        } else {
+            (None, None)
+        }
+    }
+
     fn assign_result_handle_for_text_matches(
         &self,
         tool_name: &'static str,
         matches: &mut [TextMatch],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
@@ -142,16 +213,17 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [SymbolMatch],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
                     repository_id: found.repository_id.clone(),
                     path: found.path.clone(),
                     line: found.line,
-                    column: None,
+                    column: found.column,
                 },
             );
             found.match_id = Some(match_id);
@@ -164,9 +236,10 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [SearchHybridMatch],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
@@ -186,9 +259,10 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [ReferenceMatch],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
@@ -208,9 +282,10 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [NavigationLocation],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
@@ -230,9 +305,10 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [ImplementationMatch],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
@@ -252,9 +328,10 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [CallHierarchyMatch],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = format!("m{}", index + 1);
+            let match_id = Self::scoped_match_id(scope, index);
             stored.insert(
                 match_id.clone(),
                 crate::mcp::server_cache::ResultHandleMatchAnchor {
@@ -274,13 +351,15 @@ impl FriggMcpServer {
         tool_name: &'static str,
         symbols: &mut [DocumentSymbolItem],
     ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
         fn visit(
+            scope: &str,
             symbols: &mut [DocumentSymbolItem],
             next_id: &mut usize,
             stored: &mut BTreeMap<String, crate::mcp::server_cache::ResultHandleMatchAnchor>,
         ) {
             for symbol in symbols {
-                let match_id = format!("m{}", *next_id);
+                let match_id = format!("{scope}:m{}", *next_id);
                 *next_id = next_id.saturating_add(1);
                 stored.insert(
                     match_id.clone(),
@@ -292,13 +371,13 @@ impl FriggMcpServer {
                     },
                 );
                 symbol.match_id = Some(match_id);
-                visit(&mut symbol.children, next_id, stored);
+                visit(scope, &mut symbol.children, next_id, stored);
             }
         }
 
         let mut stored = BTreeMap::new();
         let mut next_id = 1usize;
-        visit(symbols, &mut next_id, &mut stored);
+        visit(scope, symbols, &mut next_id, &mut stored);
         self.store_session_result_handle(tool_name, stored)
     }
 
@@ -377,6 +456,12 @@ impl FriggMcpServer {
         if params.count_only == Some(true) {
             response.matches.clear();
             response.result_handle = None;
+            response.handle_scope = None;
+            response.handle_expires = None;
+            response.count_only = Some(true);
+            if response.latency_class.is_none() {
+                response.latency_class = Some(crate::mcp::types::LatencyClass::Hot);
+            }
             if !Self::should_return_full_response(params.response_mode) {
                 response.metadata = None;
             }
@@ -414,19 +499,134 @@ impl FriggMcpServer {
 
         response.result_handle =
             self.assign_result_handle_for_text_matches("search_text", &mut response.matches);
+        let (handle_scope, handle_expires) =
+            Self::attach_handle_metadata(&response.result_handle, "search_text");
+        response.handle_scope = handle_scope;
+        response.handle_expires = handle_expires;
+        if response.latency_class.is_none() {
+            response.latency_class = Some(Self::search_text_latency_class(params, response.total_matches));
+        }
+        if response.total_matches == 0 && response.recovery.is_empty() {
+            let pattern_type_is_literal =
+                !matches!(params.pattern_type, Some(SearchPatternType::Regex));
+            let mut scope = ZeroHitScope::default();
+            if let Some(path_regex) = params.path_regex.as_ref() {
+                scope = scope.with_path_regex(path_regex.clone());
+            }
+            if let Some(glob) = params.glob.as_ref() {
+                scope = scope.with_glob(glob.clone());
+            }
+            if let Some(repository_id) = params.repository_id.as_ref() {
+                scope = scope.with_repository_id(repository_id.clone());
+            }
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "search_text",
+                query: Some(params.query.as_str()),
+                pattern_type_is_literal: Some(pattern_type_is_literal),
+                scope: Some(scope).filter(|scope| !scope.is_empty()),
+                index: None,
+                reason_override: None,
+            });
+            if let Some(glob) = params.glob.as_deref() {
+                response.recovery =
+                    response
+                        .recovery
+                        .with_non_recursive_glob_hint(params.query.as_str(), glob);
+            }
+        } else if response.recovery.scope.is_none() {
+            // Scope echo on non-empty hits when filters were applied (`FUT-009`).
+            let mut scope = ZeroHitScope::default();
+            if let Some(path_regex) = params.path_regex.as_ref() {
+                scope = scope.with_path_regex(path_regex.clone());
+            }
+            if let Some(glob) = params.glob.as_ref() {
+                scope = scope.with_glob(glob.clone());
+            }
+            if let Some(repository_id) = params.repository_id.as_ref() {
+                scope = scope.with_repository_id(repository_id.clone());
+            }
+            if !scope.is_empty() {
+                response.recovery.scope = Some(scope);
+            }
+        }
         if !Self::should_return_full_response(params.response_mode) {
             response.metadata = None;
         }
         Ok(response)
     }
 
+    fn search_text_latency_class(
+        params: &SearchTextParams,
+        total_matches: usize,
+    ) -> crate::mcp::types::LatencyClass {
+        use crate::mcp::types::LatencyClass;
+        if params.count_only == Some(true) || params.files_with_matches == Some(true) {
+            return LatencyClass::Hot;
+        }
+        let scoped = params.path_regex.is_some()
+            || params.glob.is_some()
+            || params.repository_id.is_some();
+        if scoped && total_matches < 50 {
+            LatencyClass::Hot
+        } else if scoped {
+            LatencyClass::Warm
+        } else {
+            LatencyClass::Cold
+        }
+    }
+
     pub(super) fn present_search_hybrid_response(
         &self,
         mut response: SearchHybridResponse,
         response_mode: Option<ResponseMode>,
+        query: Option<&str>,
     ) -> SearchHybridResponse {
         response.result_handle =
             self.assign_result_handle_for_hybrid_matches("search_hybrid", &mut response.matches);
+        let (handle_scope, handle_expires) =
+            Self::attach_handle_metadata(&response.result_handle, "search_hybrid");
+        response.handle_scope = handle_scope;
+        response.handle_expires = handle_expires;
+        // Compact discovery pivots — always present; never treat hybrid as proof (`FUT-010`).
+        if response.ranking_note.is_none() {
+            response.ranking_note =
+                Some("discovery_only; confirm with exact search".to_owned());
+        }
+        if response.best_pivot_path.is_none() {
+            response.best_pivot_path = response
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.utility.as_ref())
+                .and_then(|utility| utility.best_pivot_path.clone())
+                .or_else(|| {
+                    response
+                        .matches
+                        .iter()
+                        .find(|matched| {
+                            matched
+                                .navigation_hint
+                                .as_ref()
+                                .is_some_and(|hint| hint.pivotable)
+                        })
+                        .or_else(|| response.matches.first())
+                        .map(|matched| matched.path.clone())
+                });
+        }
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "search_hybrid",
+                query,
+                pattern_type_is_literal: Some(true),
+                scope: None,
+                index: None,
+                reason_override: None,
+            });
+        } else if !response.matches.is_empty() && response.recovery.suggested_next.is_empty() {
+            response.recovery = RecoveryFields::hybrid_discovery_exact_pivot(
+                query.unwrap_or(""),
+                response.best_pivot_path.as_deref(),
+            );
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = response.metadata.and_then(|mut metadata| {
                 let lexical_only_mode = metadata.lexical_only_mode;
@@ -475,9 +675,62 @@ impl FriggMcpServer {
         &self,
         mut response: SearchSymbolResponse,
         response_mode: Option<ResponseMode>,
+        params: Option<&SearchSymbolParams>,
     ) -> SearchSymbolResponse {
         response.result_handle =
             self.assign_result_handle_for_symbol_matches("search_symbol", &mut response.matches);
+        let (handle_scope, handle_expires) =
+            Self::attach_handle_metadata(&response.result_handle, "search_symbol");
+        response.handle_scope = handle_scope;
+        response.handle_expires = handle_expires;
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            let query = params.map(|params| params.query.as_str());
+            let mut scope = ZeroHitScope::default();
+            let effective_path_class = params
+                .and_then(|params| params.path_class)
+                .unwrap_or(SearchSymbolPathClass::Runtime);
+            if let Some(params) = params {
+                if let Some(path_regex) = params.path_regex.as_ref() {
+                    scope = scope.with_path_regex(path_regex.clone());
+                }
+                scope = scope.with_path_class(effective_path_class.as_str());
+                if let Some(repository_id) = params.repository_id.as_ref() {
+                    scope = scope.with_repository_id(repository_id.clone());
+                }
+            } else {
+                scope = scope.with_path_class(effective_path_class.as_str());
+            }
+            // Runtime-first empty recovery for known names (`FUT-011`).
+            let scope = Some(scope).filter(|scope| !scope.is_empty());
+            response.recovery = if effective_path_class == SearchSymbolPathClass::Runtime {
+                if let Some(name) = query {
+                    RecoveryFields::runtime_zero_name_known(name).with_diagnostics(
+                        ZeroHitDiagnostics {
+                            scope,
+                            index: None,
+                        },
+                    )
+                } else {
+                    RecoveryFields::for_zero_hit(ZeroHitInput {
+                        tool: "search_symbol",
+                        query,
+                        pattern_type_is_literal: None,
+                        scope,
+                        index: None,
+                        reason_override: None,
+                    })
+                }
+            } else {
+                RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "search_symbol",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope,
+                    index: None,
+                    reason_override: None,
+                })
+            };
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -492,6 +745,28 @@ impl FriggMcpServer {
     ) -> FindReferencesResponse {
         response.result_handle = self
             .assign_result_handle_for_reference_matches("find_references", &mut response.matches);
+        let (handle_scope, handle_expires) =
+            Self::attach_handle_metadata(&response.result_handle, "find_references");
+        response.handle_scope = handle_scope;
+        response.handle_expires = handle_expires;
+        if (response.total_matches == 0 || response.matches.is_empty())
+            && response.recovery.is_empty()
+        {
+            let query = response
+                .target_selection
+                .as_ref()
+                .map(|selection| selection.symbol_query.as_str());
+            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                .then_some(ZeroHitReason::PreciseGraphUnavailable);
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "find_references",
+                query,
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override,
+            });
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -508,6 +783,26 @@ impl FriggMcpServer {
             "go_to_definition",
             &mut response.matches,
         );
+        let (handle_scope, handle_expires) =
+            Self::attach_handle_metadata(&response.result_handle, "go_to_definition");
+        response.handle_scope = handle_scope;
+        response.handle_expires = handle_expires;
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            let query = response
+                .target_selection
+                .as_ref()
+                .map(|selection| selection.symbol_query.as_str());
+            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                .then_some(ZeroHitReason::PreciseGraphUnavailable);
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "go_to_definition",
+                query,
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override,
+            });
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -664,6 +959,10 @@ mod tests {
                         witness_provenance_ids: None,
                     }],
                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
                     metadata: None,
                     recovery: RecoveryFields::default(),
                 },
@@ -723,6 +1022,10 @@ mod tests {
                         sample_text_match("repo-001", "src/b.rs"),
                     ],
                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
                     metadata: None,
                     recovery: RecoveryFields::default(),
                 },
@@ -749,6 +1052,10 @@ mod tests {
                     total_matches: 1,
                     matches: vec![sample_text_match("repo-001", "src/a.rs")],
                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
                     metadata: None,
                     recovery: RecoveryFields::default(),
                 },
@@ -764,5 +1071,175 @@ mod tests {
         assert_eq!(response.matches.len(), 0);
         assert_eq!(response.total_matches, 0);
         assert!(response.result_handle.is_none());
+    }
+
+    #[test]
+    fn search_text_zero_hit_serializes_recovery_at_top_level() {
+        let server = presentation_test_server();
+        let response = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 0,
+                    matches: Vec::new(),
+                    result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
+                    metadata: None,
+                    recovery: RecoveryFields::default(),
+                },
+                &SearchTextParams {
+                    query: "zzznomatch_unique_token".to_owned(),
+                    path_regex: Some("^src/".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .expect("zero-hit search_text should shape");
+
+        assert!(!response.recovery.is_empty());
+        assert!(response.recovery.zero_hit_reason.is_some());
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert!(value.get("zero_hit_reason").is_some());
+        assert!(value.get("message").is_some());
+        assert!(value.get("correction_hint").is_some());
+        assert!(value.get("suggested_next").is_some());
+        assert_eq!(value["scope"]["path_regex"], "^src/");
+        assert!(value.get("recovery").is_none(), "recovery must be flattened");
+    }
+
+    #[test]
+    fn scoped_match_ids_and_handle_metadata_are_assigned() {
+        let server = presentation_test_server();
+        let response = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 1,
+                    matches: vec![sample_text_match("repo-001", "src/a.rs")],
+                    result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
+                    metadata: None,
+                    recovery: RecoveryFields::default(),
+                },
+                &SearchTextParams {
+                    query: "needle".to_owned(),
+                    limit: Some(5),
+                    ..Default::default()
+                },
+            )
+            .expect("search_text with matches should shape");
+
+        assert_eq!(response.matches[0].match_id.as_deref(), Some("search:m1"));
+        assert_eq!(response.handle_scope.as_deref(), Some("search"));
+        assert_eq!(response.handle_expires.as_deref(), Some("session"));
+        let handle = response.result_handle.expect("handle");
+
+        // Same handle + correct match_id resolves.
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle, "search:m1"),
+            SessionResultHandleLookup::Found(_)
+        ));
+        // Missing handle is stale.
+        assert!(matches!(
+            server.session_result_handle_lookup("result-missing", "search:m1"),
+            SessionResultHandleLookup::StaleHandle
+        ));
+        // Existing handle + foreign match_id is mixed.
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle, "nav:m9"),
+            SessionResultHandleLookup::MixedHandle { .. }
+        ));
+    }
+
+    #[test]
+    fn hybrid_and_symbol_zero_hit_include_recovery() {
+        let server = presentation_test_server();
+        let hybrid = server.present_search_hybrid_response(
+            SearchHybridResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                    ranking_note: None,
+                    best_pivot_path: None,
+                metadata: None,
+                recovery: RecoveryFields::default(),
+            },
+            None,
+            Some("where is catalog"),
+        );
+        assert!(!hybrid.recovery.is_empty());
+        let hybrid_value = serde_json::to_value(&hybrid).expect("serialize hybrid");
+        assert!(hybrid_value.get("zero_hit_reason").is_some());
+
+        let symbol = server.present_search_symbol_response(
+            SearchSymbolResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                metadata: None,
+                note: None,
+                recovery: RecoveryFields::default(),
+            },
+            None,
+            Some(&SearchSymbolParams {
+                query: "MissingSymbol".to_owned(),
+                path_class: Some(SearchSymbolPathClass::Runtime),
+                ..Default::default()
+            }),
+        );
+        assert!(!symbol.recovery.is_empty());
+        let symbol_value = serde_json::to_value(&symbol).expect("serialize symbol");
+        assert_eq!(symbol_value["scope"]["path_class"], "runtime");
+        assert!(symbol_value.get("suggested_next").is_some());
+    }
+
+    #[test]
+    fn find_references_and_go_to_definition_zero_hit_include_recovery() {
+        let server = presentation_test_server();
+        let refs = server.present_find_references_response(
+            FindReferencesResponse {
+                total_matches: 0,
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                mode: NavigationMode::UnavailableNoPrecise,
+                target_selection: None,
+                metadata: None,
+                note: None,
+                recovery: RecoveryFields::default(),
+            },
+            None,
+        );
+        assert_eq!(
+            refs.recovery.zero_hit_reason,
+            Some(ZeroHitReason::PreciseGraphUnavailable)
+        );
+        let refs_value = serde_json::to_value(&refs).expect("serialize refs");
+        assert!(refs_value.get("zero_hit_reason").is_some());
+        assert!(refs_value.get("correction_hint").is_some());
+
+        let defs = server.present_go_to_definition_response(
+            GoToDefinitionResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                mode: NavigationMode::HeuristicNoPrecise,
+                target_selection: None,
+                metadata: None,
+                note: None,
+                recovery: RecoveryFields::default(),
+            },
+            None,
+        );
+        assert!(!defs.recovery.is_empty());
+        let defs_value = serde_json::to_value(&defs).expect("serialize defs");
+        assert!(defs_value.get("zero_hit_reason").is_some());
     }
 }

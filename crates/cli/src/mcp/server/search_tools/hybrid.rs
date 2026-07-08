@@ -330,10 +330,27 @@ impl FriggMcpServer {
                         )),
                     });
 
+                    let utility = Self::search_hybrid_utility_summary(&matches);
+                    let best_pivot_path = utility.best_pivot_path.clone();
+                    let recovery = if matches.is_empty() {
+                        RecoveryFields::default()
+                    } else {
+                        RecoveryFields::hybrid_discovery_exact_pivot(
+                            &query,
+                            best_pivot_path.as_deref(),
+                        )
+                    };
                     let response = SearchHybridResponse {
                         matches,
                         result_handle: None,
+                        handle_scope: None,
+                        handle_expires: None,
+                        ranking_note: Some(
+                            "discovery_only; confirm with exact search".to_owned(),
+                        ),
+                        best_pivot_path,
                         metadata,
+                        recovery,
                     };
                     let mut response_source_refs_value = serde_json::to_value(
                         response
@@ -365,6 +382,7 @@ impl FriggMcpServer {
                     Ok(Json(server.present_search_hybrid_response(
                         response,
                         params_for_blocking.response_mode,
+                        Some(params_for_blocking.query.as_str()),
                     )))
                 })();
                 let fallback_reason =

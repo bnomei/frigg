@@ -599,13 +599,16 @@ impl FriggMcpServer {
                                     total_matches: matches.len(),
                                     matches,
                                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
                                     target_selection: None,
                                     metadata,
                                     note,
-                                }));
+                    recovery: RecoveryFields::default(),
+                }));
                             }
                             return Err(error);
                         }
@@ -648,11 +651,14 @@ impl FriggMcpServer {
                             total_matches: 0,
                             matches: Vec::new(),
                             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                             mode: NavigationMode::UnavailableNoPrecise,
                             target_selection,
                             metadata,
                             note,
-                        }));
+                    recovery: RecoveryFields::default(),
+                }));
                     }
                 };
                 target_selection_candidate_count = target_resolution.candidate_count;
@@ -921,13 +927,16 @@ impl FriggMcpServer {
                         total_matches: matches.len(),
                         matches,
                         result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                         mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                             precision,
                         )),
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    }));
+                    recovery: RecoveryFields::default(),
+                }));
                 }
 
                 let loaded = server.load_heuristic_references(
@@ -1070,10 +1079,13 @@ impl FriggMcpServer {
                     total_matches: matches.len(),
                     matches,
                     result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
                     mode: NavigationMode::HeuristicNoPrecise,
                     target_selection: target_selection.clone(),
                     metadata,
                     note,
+                    recovery: RecoveryFields::default(),
                 }))
             })();
             let precision_mode =

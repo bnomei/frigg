@@ -178,18 +178,42 @@ pub struct SearchTextParams {
 ///
 /// Empty results may include flattened recovery fields (`error_code`,
 /// `correction_hint`, `related_tools`, `suggested_next`, optional
-/// `zero_hit_reason`) for compact-mode re-planning (`FUT-016`).
+/// `zero_hit_reason`, `scope`, `index`) for compact-mode re-planning
+/// (`FUT-006` / `FUT-016`).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
     pub total_matches: usize,
     pub matches: Vec<TextMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
+    /// Short scope label for `match_id` values (for example `search`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_scope: Option<String>,
+    /// Handle lifetime. Session-scoped handles use `"session"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_expires: Option<String>,
+    /// Echo of `count_only` when the request asked for counts without match rows (`FUT-009`).
+    /// When true, empty `matches[]` is intentional — read `total_matches`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count_only: Option<bool>,
+    /// Approximate search latency class for agent tool-cost guidance (`FUT-017` partial).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_class: Option<LatencyClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchTextMetadata>,
     /// Shared recovery composer fields; omitted when empty so existing clients stay compatible.
+    /// Applied scope echo lives on `recovery.scope` (`ZeroHitScope`) when path filters are set.
     #[serde(flatten, default)]
     pub recovery: RecoveryFields,
+}
+
+/// Coarse latency/cost class for compact search responses (`FUT-017`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LatencyClass {
+    Hot,
+    Warm,
+    Cold,
 }
 
 /// Lexical search backend mix reported in text and hybrid metadata.
@@ -569,9 +593,25 @@ pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
+    /// Short scope label for `match_id` values (for example `hybrid`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_scope: Option<String>,
+    /// Handle lifetime. Session-scoped handles use `"session"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_expires: Option<String>,
+    /// Always-on compact note: hybrid is discovery-only, not final proof (`FUT-010`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranking_note: Option<String>,
+    /// Best live-navigation pivot path when available (`FUT-010`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_pivot_path: Option<String>,
     /// Diagnostics metadata; compact mode omits it unless context-efficiency is requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchHybridMetadata>,
+    /// Flattened recovery fields (`suggested_next`, zero-hit) for compact re-planning
+    /// (`FUT-006` / `FUT-010` / `FUT-016`).
+    #[serde(flatten, default)]
+    pub recovery: RecoveryFields,
 }
 
 /// Parameters for `search_symbol`.
@@ -597,20 +637,34 @@ pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
+    /// Short scope label for `match_id` values (for example `symbols`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_scope: Option<String>,
+    /// Handle lifetime. Session-scoped handles use `"session"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_expires: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "super::metadata_object_field_schema")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty symbol results (`FUT-006` / `FUT-016`).
+    #[serde(flatten, default)]
+    pub recovery: RecoveryFields,
 }
 
 /// Path-class filter for symbol search over runtime, project, or support files.
+///
+/// Default when omitted is [`SearchSymbolPathClass::Runtime`] (runtime-first, tests
+/// require opt-in via [`SearchSymbolPathClass::Support`] or [`SearchSymbolPathClass::Any`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchSymbolPathClass {
     Runtime,
     Project,
     Support,
+    /// Opt-in: all path classes (runtime, project, and support/tests).
+    Any,
 }
 
 impl SearchSymbolPathClass {
@@ -619,7 +673,13 @@ impl SearchSymbolPathClass {
             Self::Runtime => "runtime",
             Self::Project => "project",
             Self::Support => "support",
+            Self::Any => "any",
         }
+    }
+
+    /// True when this filter restricts to a single concrete path class.
+    pub fn is_concrete_filter(self) -> bool {
+        !matches!(self, Self::Any)
     }
 }
 
