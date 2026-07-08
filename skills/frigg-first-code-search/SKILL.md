@@ -151,16 +151,19 @@ Each card: **Trigger / Habit / Frigg path / Fallback / Proof / Done / Product su
 | --- | --- |
 | **Trigger** | Several plausible strings or symbols; would fire 3–6 greps in one turn |
 | **Habit** | Parallel `grep`/`rg`/`Grep` in one message |
-| **Frigg path** | Prefer `search_batch([...])` when available. **Interim only (until batch lands):** same-turn parallel `search_text` / `search_symbol` probes, then merge mentally. After batch ships, prefer batch. |
+| **Frigg path** | Prefer `search_batch([...])` (shipped). Same-turn parallel `search_text` / `search_symbol` only if batch is unavailable on the live surface. |
 | **Fallback** | Shell only if Frigg unregistered or path unindexed |
 | **Proof** | `read_match` on best merged hit |
 | **Done** | Multi-hypothesis answer cites Frigg proof; no parallel shell on indexed source |
-| **Product support** | `search_batch` (Phase 3), probe summaries, dedupe, `suggested_next`, handles |
+| **Product support** | `search_batch` shipped — probe summaries, dedupe, `suggested_next`, handles |
 
 ```text
-PREFERRED (when available): search_batch([...])
+PREFERRED: search_batch([
+  { id, kind: text|symbol|hybrid, query, path_regex?, glob?, path_class? },
+  ...  // 2..=8 probes
+])
 
-ELSE — interim, same turn, parallel Frigg only:
+ELSE — only if tools/list lacks search_batch:
   search_text(probe_1, path_regex=^src/)
   search_text(probe_2, glob=**/*.{rs,toml,yaml})
   search_symbol(guessed_name, path_class=runtime)
@@ -516,7 +519,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 | Situation | Tool |
 | --- | --- |
 | Git / build / generated / unindexed / Frigg down | shell |
-| Several guesses at once | `search_batch` or parallel Frigg probes (interim) |
+| Several guesses at once | `search_batch` (prefer); parallel Frigg probes only if batch missing |
 | Vague “where is X?” | `search_hybrid` → exact pivot |
 | Known identifier | `search_symbol` (`path_class=runtime`) |
 | Known string / regex / rg-shaped | `search_text` |
