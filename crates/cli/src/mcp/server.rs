@@ -121,7 +121,7 @@ use crate::mcp::types::{
     ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RecoveryFields,
     ZeroHitDiagnostics, ZeroHitInput, ZeroHitReason, ZeroHitScope,
     RepositorySummary, ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus,
-    RuntimeTaskSummary, SearchHybridChannelWeightsParams,
+    RuntimeTaskSummary, SearchBatchParams, SearchBatchResponse, SearchHybridChannelWeightsParams,
     SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
     SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
     SearchSymbolResponse, SearchTextParams, SearchTextResponse,
@@ -1918,6 +1918,22 @@ impl FriggMcpServer {
         params: Parameters<SearchSymbolParams>,
     ) -> Result<Json<SearchSymbolResponse>, ErrorData> {
         self.search_symbol_impl(params.0).await
+    }
+
+    #[tool(
+        name = "search_batch",
+        description = "Multi-probe search (2–8 text/symbol/hybrid probes) that replaces parallel grep as a latency strategy. Returns merged, deduped matches with probe_id(s), probe_summary[], and suggested_next. Prefer over same-turn parallel search_text fan-out.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn search_batch(
+        &self,
+        params: Parameters<SearchBatchParams>,
+    ) -> Result<Json<SearchBatchResponse>, ErrorData> {
+        self.search_batch_impl(params.0).await
     }
 
     #[tool(

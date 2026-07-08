@@ -157,6 +157,7 @@ impl FriggMcpServer {
             "search_text" => "search",
             "search_symbol" | "document_symbols" => "symbols",
             "search_hybrid" => "hybrid",
+            "search_batch" => "batch",
             "find_references"
             | "go_to_definition"
             | "find_declarations"
@@ -212,6 +213,29 @@ impl FriggMcpServer {
         &self,
         tool_name: &'static str,
         matches: &mut [SymbolMatch],
+    ) -> Option<String> {
+        let scope = Self::result_handle_scope_for_tool(tool_name);
+        let mut stored = BTreeMap::new();
+        for (index, found) in matches.iter_mut().enumerate() {
+            let match_id = Self::scoped_match_id(scope, index);
+            stored.insert(
+                match_id.clone(),
+                crate::mcp::server_cache::ResultHandleMatchAnchor {
+                    repository_id: found.repository_id.clone(),
+                    path: found.path.clone(),
+                    line: found.line,
+                    column: found.column,
+                },
+            );
+            found.match_id = Some(match_id);
+        }
+        self.store_session_result_handle(tool_name, stored)
+    }
+
+    pub(super) fn assign_result_handle_for_batch_matches(
+        &self,
+        tool_name: &'static str,
+        matches: &mut [crate::mcp::types::SearchBatchMatch],
     ) -> Option<String> {
         let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();

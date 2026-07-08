@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use super::{MetadataObject, ReadPresentationMode, RecoveryFields, ResponseMode};
+use super::{
+    MetadataObject, ReadPresentationMode, RecoveryFields, ResponseMode, SuggestedNext,
+    ZeroHitReason, ZeroHitScope,
+};
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
     model::TextMatch,
@@ -681,6 +684,144 @@ impl SearchSymbolPathClass {
     pub fn is_concrete_filter(self) -> bool {
         !matches!(self, Self::Any)
     }
+}
+
+/// Probe kind for multi-hypothesis `search_batch` (`FUT-008`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchBatchProbeKind {
+    Text,
+    Symbol,
+    Hybrid,
+}
+
+impl SearchBatchProbeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Symbol => "symbol",
+            Self::Hybrid => "hybrid",
+        }
+    }
+}
+
+/// Merge strategy for `search_batch` results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchBatchMergeMode {
+    /// Prefer probes with more/stronger hits; symbol > text > hybrid tie-break.
+    #[default]
+    RankByProbeHitStrength,
+}
+
+/// One typed probe inside a `search_batch` request.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchBatchProbe {
+    /// Stable probe id echoed on matches and probe_summary rows.
+    pub id: String,
+    /// Which underlying search tool to invoke.
+    pub kind: SearchBatchProbeKind,
+    /// Query / symbol / hybrid question text.
+    pub query: String,
+    /// Optional repository scope (overrides batch-level when set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
+    /// Optional path regex scope (text/symbol).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_regex: Option<String>,
+    /// Optional include glob (text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glob: Option<String>,
+    /// Optional path class (symbol; also echoed for text when set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_class: Option<SearchSymbolPathClass>,
+    /// Optional pattern type for text probes (default literal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern_type: Option<SearchPatternType>,
+}
+
+/// Parameters for `search_batch` multi-probe search (`FUT-008`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchBatchParams {
+    /// 2..=8 typed probes executed and merged in one call.
+    pub probes: Vec<SearchBatchProbe>,
+    /// Merge policy. Defaults to `rank_by_probe_hit_strength`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<SearchBatchMergeMode>,
+    /// Max merged match rows to return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    /// Optional shared repository scope for probes that omit `repository_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
+    /// Response detail profile. Omit to default to `compact`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_mode: Option<ResponseMode>,
+    /// Continuation cursor for paginated batch results (match index).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<usize>,
+}
+
+/// One merged match row from `search_batch`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchBatchMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
+    /// Contributing probe ids (deduped multi-probe hits list all).
+    pub probe_ids: Vec<String>,
+    /// Primary probe kind that produced this row (first contributor).
+    pub kind: SearchBatchProbeKind,
+    pub repository_id: String,
+    pub path: String,
+    pub line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_class: Option<String>,
+    /// Relative strength score used for ranking (higher is better).
+    pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+}
+
+/// Per-probe summary row for `search_batch`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchBatchProbeSummary {
+    pub id: String,
+    pub kind: SearchBatchProbeKind,
+    pub hits: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_hit_reason: Option<ZeroHitReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correction_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_next: Vec<SuggestedNext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ZeroHitScope>,
+}
+
+/// Response from `search_batch`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchBatchResponse {
+    pub matches: Vec<SearchBatchMatch>,
+    pub probe_summary: Vec<SearchBatchProbeSummary>,
+    pub returned: usize,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle_expires: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_class: Option<LatencyClass>,
+    /// Flattened recovery on all-zero batches and batch-level next steps.
+    #[serde(flatten, default)]
+    pub recovery: RecoveryFields,
 }
 
 #[cfg(test)]

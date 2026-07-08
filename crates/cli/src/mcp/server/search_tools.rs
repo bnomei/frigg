@@ -21,6 +21,7 @@ use crate::searcher::{
     hybrid_match_source_class, hybrid_match_surface_families,
 };
 
+mod batch;
 mod cache;
 mod document_symbols;
 mod files;

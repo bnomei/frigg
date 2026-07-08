@@ -548,9 +548,11 @@ mod navigation;
 #[path = "tool_handlers/references.rs"]
 mod references;
 #[path = "tool_handlers/search_batch.rs"]
+mod search_batch;
 #[path = "tool_handlers/search_symbol.rs"]
 mod search_symbol;
 #[path = "tool_handlers/search_text_futura.rs"]
+mod search_text_futura;
 #[path = "tool_handlers/structural.rs"]
 mod structural;
 #[path = "tool_handlers/workspace.rs"]
