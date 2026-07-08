@@ -26,6 +26,7 @@ pub async fn run_all(report: &Mutex<harness::BenchReport>) {
     run_count_only(report, &fixture).await;
     run_zero_hit(report, &fixture).await;
     run_handle_path(report, &fixture).await;
+    crate::slo::run_search_text_latency(report, &fixture).await;
 }
 
 async fn run_regex_trap(report: &Mutex<harness::BenchReport>, fixture: &std::path::Path) {

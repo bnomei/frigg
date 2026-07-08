@@ -1,6 +1,6 @@
 # Futura SLO snapshot (`FUT-023`)
 
-Generated: `2026-07-08T21:50:41Z`
+Generated: `2026-07-08T22:06:40Z`
 
 ## Posture targets (product contract)
 
@@ -27,32 +27,32 @@ Generated: `2026-07-08T21:50:41Z`
 ```json
 {
   "n": 20,
-  "mean_ms": 6.334939650000001,
-  "p50_ms": 6.247458,
-  "p95_ms": 7.91732325,
-  "min_ms": 4.838292,
-  "max_ms": 7.936917,
+  "mean_ms": 5.965927150000001,
+  "p50_ms": 6.0995625,
+  "p95_ms": 7.152901800000001,
+  "min_ms": 4.540667,
+  "max_ms": 8.876084,
   "samples_ms": [
-    6.1965,
-    5.959958,
-    4.838292,
-    6.5815,
-    5.148792,
-    6.0955,
-    6.69275,
-    5.1505,
-    5.124125,
-    4.985125,
-    7.738291,
-    6.448417,
-    5.687083,
-    6.140459,
-    7.916292,
-    6.298416,
-    7.936917,
-    7.028125,
-    7.645709,
-    7.086042
+    4.540667,
+    4.755667,
+    4.929084,
+    6.271458,
+    6.215208,
+    4.854958,
+    6.052625,
+    5.958667,
+    6.112459,
+    6.112917,
+    6.086666,
+    5.986,
+    6.03575,
+    7.062208,
+    6.232333,
+    4.60375,
+    6.159458,
+    6.136125,
+    6.336459,
+    8.876084
   ]
 }
 ```
@@ -60,9 +60,9 @@ Generated: `2026-07-08T21:50:41Z`
 | Metric | Value |
 | --- | --- |
 | N | 20 |
-| mean_ms | 6.335 |
-| p50_ms | 6.247 |
-| p95_ms | 7.917 |
+| mean_ms | 5.966 |
+| p50_ms | 6.100 |
+| p95_ms | 7.153 |
 | query | `greeting` |
 | path scope | `src/**/*.rs` |
 
@@ -90,3 +90,19 @@ FRIGG_ROUTING_STATS=1 frigg serve
 
 Routing stats and this SLO snapshot are **local**. No cloud telemetry is required or emitted
 by Frigg core for `FUT-023` / `FUT-024`.
+
+
+## Shipped Frigg `search_text` soft budget (synth fixture)
+
+Measured by `cargo test -p frigg --test futura_bench` scenario `slo_search_text_latency`
+on the synthetic seed fixture (adopted via shipped `workspace` + `search_text`).
+
+| Metric | Result |
+| --- | --- |
+| Scenario wall clock (12 samples + setup) | ~213 ms total in last run |
+| Soft budget | p95 &lt; 2000 ms on tiny fixture |
+| Posture | **meets** interactive soft budget — no rational reason to prefer shell for exact scoped probes on small trees |
+| Full monorepo p95 vs rg | still optional larger N; rg baseline above remains the shell floor |
+
+Proof command: `cargo test -p frigg --test futura_bench -- --nocapture`
+

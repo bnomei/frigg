@@ -26,6 +26,8 @@ mod dogfood;
 mod harness;
 #[path = "futura_bench/lang.rs"]
 mod lang;
+#[path = "futura_bench/slo.rs"]
+mod slo;
 #[path = "futura_bench/synth.rs"]
 mod synth;
 
