@@ -29,9 +29,24 @@ Typical next move:
 - `read_file` when you already know the canonical repository-relative path
 - shell listing only for non-code, generated/unindexed, or unavailable Frigg cases
 
+## Multi-hypothesis probes (`search_batch` / parallel)
+
+When you would fire 3–6 shell greps in one turn:
+
+- **Preferred:** `search_batch` with 2–8 typed probes when the live tool list exposes it (merged, deduped results + probe summaries).
+- **Interim only (until batch lands):** same-turn parallel `search_text` and/or `search_symbol` calls, then pick the best hit.
+- Do **not** mix parallel shell grep with Frigg search on indexed source while Frigg is healthy.
+
+After multi-probe discovery, proof still goes through `read_match` / `read_file` (or navigation), never hybrid rank-1 alone.
+
 ## `search_hybrid`
 
 Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step or the cleanest direct-string lookup. Use `search_text` for known literal, safe-regex, or `rg`-shaped text scans, and use `search_symbol` for known identifiers.
+
+Anti-patterns:
+
+- `BAD: search_hybrid → answer from rank-1` (or hybrid → shell grep as "precision")
+- `GOOD: search_hybrid → suggested_next / search_symbol / search_text → read_match`
 
 Important inputs:
 - `query`
@@ -131,8 +146,9 @@ Notes:
 - Frigg may use its native scanner, its ripgrep accelerator, or a mixed path depending on configuration and file content
 - on macOS and Linux, Frigg may use `rg` internally as a lexical accelerator when it is available
 - that does not change the public flow: Frigg still owns candidate scope, ordering, metadata, and fallback behavior
-- shell `rg` remains appropriate for explicit live-disk verification or ripgrep-specific flags outside `search_text`
+- shell `rg` remains appropriate for explicit live-disk verification, unindexed/generated paths, or when Frigg is unavailable — not as a throwaway "confirm" pass on indexed source after a Frigg zero
 - for review-style work, `search_text` is often the best first proof surface when the repo has stable narrative terms, API names, or deterministic contract phrases
+- prefer `path_regex` under runtime roots for implementation questions; unscoped hits may rank docs/skills first
 
 Important inputs:
 - `query`: pattern argument equivalent to `rg -n PATTERN`; use literal text by default and do not include shell quotes

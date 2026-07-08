@@ -1,62 +1,69 @@
 # Frigg Workflows
 
-Use the lightest tool that preserves the right semantics. Shell tools are still good for non-code files, git/filesystem inspection, and trivial local checks, but Frigg is the default for code search when you want repository scoping, canonical paths, or direct MCP follow-up.
+Use the lightest tool that preserves the right semantics. Shell tools remain correct for git, build/test output, generated/unindexed paths, explicit live-disk checks, and Frigg-unavailable cases. Frigg is the default for indexed source discovery, search, navigation, and proof. Canonical scenario routing lives in the skill top screen (`SKILL.md`); this file expands narrative loops only.
+
+Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is attached — use scoped `search_text` instead.
 
 ## Bug Trace
 
-1. `workspace`
-2. If the session is detached or the default repo is wrong, call `workspace` with a target path or repository id
-3. `search_hybrid` for the failure symptom
-4. `search_symbol` for the central API or type
-5. `find_references` or call hierarchy for impact
-6. Use compact responses first; only ask for `response_mode=full` when you need diagnostics or selection detail
-7. `read_match` on the strongest witnesses when a prior Frigg result already gave you `result_handle` plus `match_id`; otherwise `read_file` or a shell slice is still fine
-8. If call hierarchy or nav underfills, check `mode`, `availability`, and `workspace` runtime status before assuming the code path is absent
+1. `workspace` only if adoption or repo default is uncertain (gate, not preamble)
+2. `search_text` on the exact error fragment with `path_regex` such as `^(src|tests)/`
+3. `search_text` on the test name when the failure is test-driven
+4. `search_symbol` for the stack-frame or central API (`path_class=runtime`)
+5. `find_references` or `incoming_calls` for impact
+6. Use compact responses first; `response_mode=full` only for diagnostics
+7. `read_match` on the strongest witnesses when a prior Frigg result gave `result_handle` plus `match_id`; otherwise `read_file`
+8. Use `search_hybrid` only when the symptom has no exact string
+9. If call hierarchy or nav underfills, check `mode`, recovery fields, and `workspace` before assuming the code path is absent
 
 ## Refactor Impact
 
-1. `search_symbol` for the API to change
-2. `find_references` for call sites
+1. `search_symbol` for the API to change (`path_class=runtime`)
+2. `find_references` for call sites (`include_definition=false` when listing usages)
 3. `find_implementations` when the change hits an interface or trait boundary
-4. Use `read_match` for bounded follow-up on the most relevant hits, or `read_file` when you already know the canonical path
-5. Use `search_text` with `path_regex` when canonical paths, scoped MCP results, or direct follow-up matter; keep shell `rg` or `git grep` for nearby throwaway checks that do not need repository-aware evidence
+4. `incoming_calls` for caller graph; treat `outgoing_calls` as provisional until body proof
+5. `read_match` / `read_file` on each cluster before editing
+6. Optional `search_text` with `path_regex='^tests/'` for an explicit test pass
+7. Prefer `impact_bundle` when available; individual tools remain source of truth
+8. Never shell `rg` for throwaway indexed-source checks — use scoped `search_text`
 
 ## Technical Review
 
-1. `search_text` for the contract phrase, API name, or narrative anchor you want to prove
-2. `go_to_definition` or `find_declarations` for the concrete implementation anchor
-3. `find_references` to show how the contract propagates into callers, tests, or helpers
-4. `incoming_calls` if you need believable entry paths
-5. `search_structural` for cross-cutting proof that is too awkward or noisy in plain text search
-6. `read_match` or `read_file` for the final source proof
-7. Treat `outgoing_calls` as provisional until another tool confirms the edge
+1. `search_text` for the contract phrase, API name, or narrative anchor
+2. `search_symbol` / `go_to_definition` / `find_declarations` for the implementation anchor
+3. `find_references` and `incoming_calls` for propagation and entry paths
+4. `read_match` or `read_file` for final source proof; attach path/line witnesses (evidence packet when multi-claim)
+5. `search_structural` only for cross-cutting AST proof that is too awkward in plain text (tier-3)
+6. Treat `outgoing_calls` as provisional until another tool confirms the edge
+7. Git diff and build/test output stay shell-owned; return to Frigg for source impact
 
 ## Onboarding And Architecture
 
 1. `search_hybrid` with the feature or subsystem question
-2. Treat mixed docs, tests, and runtime hits as expected
-3. Pivot to `search_symbol` once the likely runtime anchor is visible
-4. Use `go_to_definition` or `document_symbols(top_level_only=true)` to pin the actual implementation entrypoints
+2. Treat mixed docs, tests, and runtime hits as expected discovery noise
+3. Do **not** answer from hybrid rank-1 alone — pivot to `search_symbol` / `search_text`
+4. Use `go_to_definition` or `document_symbols(top_level_only=true)` to pin entrypoints after exact anchors exist
 
 ## Multi-Repository Investigation
 
-1. `workspace`
-2. Call `workspace` with the main repo path or id when you need to change the session default
-3. Use `search_hybrid` or `search_symbol` without `repository_id` when the question may cross repo boundaries
-4. Re-anchor with explicit `repository_id` once the target repo is clear
-5. Use `read_file` or navigation tools on the resolved repo-specific paths
+1. `workspace(path=...)` when session default may not match the task repo
+2. Re-anchor with explicit `repository_id` once the target repo is clear
+3. Search and navigate with the adopted default or explicit id; wrong-repo zeros → workspace recovery, not shell grep
+4. Use `read_file` or navigation on the resolved repo-specific paths
 
 ## Structural Query Recovery
 
 1. `document_symbols` or `read_file` on a representative file
-2. `inspect_syntax_tree` on the actual cursor location
+2. `inspect_syntax_tree` on the actual cursor location (**line and column together**; `column: 1` if unknown)
 3. Write the `search_structural` query from real node kinds, not guessed shapes
 4. Add `path_regex` when the scan should stay inside one slice
+5. Tier-3 only — not a substitute for `search_text` / `search_symbol`
 
 ## Security Or Pattern Sweep
 
-1. Start with `search_text` for direct literal, safe-regex, or `rg`-shaped code patterns when repository-backed results and follow-up matter
-2. Upgrade to safe regex only when the literal underfills
-3. Use `search_text` with `path_regex` when you need repository scoping or canonical-path results
-4. Use `read_match` or `read_file` to validate true positives; shell slices are still fine for throwaway local checks
-5. `find_references` or call hierarchy to measure blast radius
+1. Prefer `search_batch` with multiple text/symbol (and optional hybrid) probes when available
+2. **Interim until batch lands:** same-turn parallel Frigg `search_text` / `search_symbol` probes (not parallel shell grep)
+3. Scope runtime with `path_regex` / `path_class`; upgrade to safe regex only when literal underfills
+4. `read_match` or `read_file` to validate true positives on indexed source
+5. `find_references` or call hierarchy to measure blast radius of confirmed sinks
+6. Package multi-finding reports as evidence packets with path/line witnesses

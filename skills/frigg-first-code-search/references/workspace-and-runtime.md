@@ -63,6 +63,10 @@ For explicit semantic troubleshooting only, inspect `workspace.runtime`.
 
 ## Practical Guidance
 
+- `workspace` is a **gate, not a preamble**: call it when adoption is uncertain, paths look wrong, zeros are surprising, multi-repo default may be wrong, or post-edit freshness matters. Skip it when the first search already hits expected paths and the index is ready.
 - If a tool says it cannot resolve a repository, call `workspace` with `path=<repo root or any file inside it>`.
-- Use `workspace` to see the session default and runtime tasks only when debugging poor navigation quality.
+- Use `workspace` to see the session default and runtime tasks when debugging wrong-repo or freshness issues.
+- After edits: check workspace freshness, then either re-search with Frigg or use **path-scoped** live reads for touched files only — never treat live-disk as a license for repo-wide shell grep.
+- Prefer **HTTP** for shared and long-running multi-client work; stdio is for one local client that owns the process.
+- Harness-specific MCP registration/schema flukes are outside Frigg's product contract; trust live `tools/list` over stale host schema caches.
 - Use CLI `frigg index` only intentionally, usually when you explicitly want to refresh repository-derived data.
