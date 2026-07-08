@@ -3152,6 +3152,68 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         !response.symbols.is_empty(),
         "impact_bundle should include symbol hits: {response:?}"
     );
+
+    // FUT-025 composition: symbols + (refs or mode/recovery note) + (callers or provisional note).
+    let refs_ok = !response.references.is_empty()
+        || matches!(
+            response.references_mode,
+            NavigationMode::HeuristicNoPrecise
+                | NavigationMode::UnavailableNoPrecise
+                | NavigationMode::PrecisePartial
+        )
+        || response.recovery.correction_hint.is_some()
+        || response
+            .suggested_next
+            .iter()
+            .any(|step| step.tool == "find_references" || step.tool == "search_text");
+    assert!(
+        refs_ok,
+        "impact_bundle must surface references or explain graph/heuristic mode: refs={}, mode={:?}, recovery={:?}, suggested_next={:?}",
+        response.references.len(),
+        response.references_mode,
+        response.recovery,
+        response.suggested_next
+    );
+
+    let callers_ok = !response.incoming_calls.is_empty()
+        || matches!(
+            response.incoming_calls_mode,
+            NavigationMode::HeuristicNoPrecise
+                | NavigationMode::UnavailableNoPrecise
+                | NavigationMode::PrecisePartial
+        )
+        || response
+            .suggested_next
+            .iter()
+            .any(|step| step.tool == "incoming_calls" || step.tool == "read_file");
+    assert!(
+        callers_ok,
+        "impact_bundle must surface incoming_calls or provisional/mode guidance: callers={}, mode={:?}, suggested_next={:?}",
+        response.incoming_calls.len(),
+        response.incoming_calls_mode,
+        response.suggested_next
+    );
+
+    // Prefer real refs/callers when the fixture supports SCIP/heuristic resolution.
+    if !response.references.is_empty() {
+        assert!(
+            response.references.iter().any(|r| r.path.contains("lib.rs")),
+            "fixture references should point at lib.rs: {:?}",
+            response.references
+        );
+    }
+    if !response.incoming_calls.is_empty() {
+        assert!(
+            response.incoming_calls.iter().any(|c| {
+                c.path.contains("lib.rs")
+                    || c.source_symbol.contains("caller")
+                    || c.target_symbol.contains("caller")
+            }),
+            "fixture callers should include caller()/lib.rs: {:?}",
+            response.incoming_calls
+        );
+    }
+
     assert!(
         !response.suggested_next.is_empty(),
         "impact_bundle should suggest tests pass + proof reads"

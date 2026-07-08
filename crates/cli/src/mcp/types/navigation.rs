@@ -525,6 +525,14 @@ pub struct EvidencePacketClaim {
     pub result_handle: Option<String>,
 }
 
+/// Optional multi-claim evidence packet envelope for review/security (`FUT-022`).
+///
+/// Mirrors the skill-documented JSON shape; not a live MCP tool response.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EvidencePacket {
+    pub claims: Vec<EvidencePacketClaim>,
+}
+
 /// Whether `search_structural` returns grouped match rows or raw capture rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -599,4 +607,90 @@ pub struct SearchStructuralResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvidencePacket, EvidencePacketClaim};
+
+    #[test]
+    fn evidence_packet_claim_serde_round_trip() {
+        let claim = EvidencePacketClaim {
+            claim: "catalog_entries registers callable operations".to_owned(),
+            tool: "search_symbol".to_owned(),
+            path: "src/catalog/mod.rs".to_owned(),
+            start_line: 40,
+            end_line: 72,
+            match_id: Some("symbols:m1".to_owned()),
+            result_handle: Some("result-000001".to_owned()),
+        };
+
+        let json = serde_json::to_string(&claim).expect("claim should serialize");
+        let back: EvidencePacketClaim =
+            serde_json::from_str(&json).expect("claim should deserialize");
+        assert_eq!(back.claim, claim.claim);
+        assert_eq!(back.tool, "search_symbol");
+        assert_eq!(back.path, "src/catalog/mod.rs");
+        assert_eq!(back.start_line, 40);
+        assert_eq!(back.end_line, 72);
+        assert_eq!(back.match_id.as_deref(), Some("symbols:m1"));
+        assert_eq!(back.result_handle.as_deref(), Some("result-000001"));
+    }
+
+    #[test]
+    fn evidence_packet_claim_omits_optional_handle_fields_when_none() {
+        let claim = EvidencePacketClaim {
+            claim: "path/line witness only".to_owned(),
+            tool: "read_file".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            start_line: 1,
+            end_line: 3,
+            match_id: None,
+            result_handle: None,
+        };
+        let value = serde_json::to_value(&claim).expect("serialize");
+        assert!(value.get("match_id").is_none());
+        assert!(value.get("result_handle").is_none());
+        assert_eq!(value["path"], "src/lib.rs");
+        assert_eq!(value["tool"], "read_file");
+    }
+
+    #[test]
+    fn evidence_packet_skill_shaped_multi_claim_json_deserializes() {
+        // Skill-documented multi-claim envelope (FUT-022).
+        let skill_json = r#"{
+          "claims": [
+            {
+              "claim": "catalog_entries registers callable operations",
+              "tool": "search_symbol",
+              "path": "src/catalog/mod.rs",
+              "start_line": 40,
+              "end_line": 72,
+              "match_id": "symbols:m1",
+              "result_handle": "result-aaa"
+            },
+            {
+              "claim": "caller reaches catalog_entries from the HTTP surface",
+              "tool": "incoming_calls",
+              "path": "src/http/routes.rs",
+              "start_line": 88,
+              "end_line": 110,
+              "match_id": "nav:m2",
+              "result_handle": "result-bbb"
+            }
+          ]
+        }"#;
+
+        let packet: EvidencePacket =
+            serde_json::from_str(skill_json).expect("skill-shaped packet should deserialize");
+        assert_eq!(packet.claims.len(), 2);
+        assert_eq!(packet.claims[0].tool, "search_symbol");
+        assert_eq!(packet.claims[0].path, "src/catalog/mod.rs");
+        assert_eq!(packet.claims[0].start_line, 40);
+        assert_eq!(packet.claims[1].tool, "incoming_calls");
+        assert_eq!(packet.claims[1].match_id.as_deref(), Some("nav:m2"));
+
+        let round = serde_json::to_value(&packet).expect("packet should re-serialize");
+        assert_eq!(round["claims"].as_array().map(|a| a.len()), Some(2));
+    }
 }

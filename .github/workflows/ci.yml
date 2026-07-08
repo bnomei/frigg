@@ -74,7 +74,10 @@ jobs:
           shared-key: ci-${{ runner.os }}-${{ runner.arch }}
           save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
-      # Release profile binds FUT-023 (strict frigg_p95 <= rg_p95). Debug still runs
+      # FUT-023 head-to-head requires local `rg` for the subprocess baseline.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      # Release profile binds FUT-023 (competitive frigg_p95 <= 1.25× rg). Debug still runs
       # contract scenarios locally; soft budget only in debug_assertions.
       - name: Run frigg-futura-bench (release)
         env:

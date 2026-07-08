@@ -561,6 +561,8 @@ mod core;
 mod document_symbols;
 #[path = "tool_handlers/freshness_ignore.rs"]
 mod freshness_ignore;
+#[path = "tool_handlers/handles_futura.rs"]
+mod handles_futura;
 #[path = "tool_handlers/navigation.rs"]
 mod navigation;
 #[path = "tool_handlers/references.rs"]

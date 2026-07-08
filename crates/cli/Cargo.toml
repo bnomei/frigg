@@ -137,5 +137,9 @@ name = "tool_handlers"
 path = "tests/tool_handlers.rs"
 
 [[test]]
+name = "futura_routing_scorecard"
+path = "tests/futura_routing_scorecard.rs"
+
+[[test]]
 name = "futura_bench"
 path = "tests/futura_bench.rs"
