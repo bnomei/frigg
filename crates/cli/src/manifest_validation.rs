@@ -283,6 +283,29 @@ impl ValidatedManifestCandidateCache {
         )
     }
 
+    /// Ready entry for a root without requiring a snapshot id from storage.
+    /// Used for the warm `search_text` path so we can skip opening SQLite (`FUT-023`).
+    pub(crate) fn ready_for_root(
+        &mut self,
+        root: &Path,
+    ) -> Option<(String, Arc<Vec<FileDigest>>)> {
+        let key = Self::cache_key(root);
+        match self.entries.get(&key) {
+            Some(ValidatedManifestCandidateCacheEntry::Ready {
+                snapshot_id,
+                digests,
+            }) => {
+                self.stats.hits += 1;
+                Some((snapshot_id.clone(), Arc::clone(digests)))
+            }
+            Some(ValidatedManifestCandidateCacheEntry::Dirty) => {
+                self.stats.dirty_bypasses += 1;
+                None
+            }
+            None => None,
+        }
+    }
+
     fn cache_key(root: &Path) -> ValidatedManifestCandidateCacheKey {
         ValidatedManifestCandidateCacheKey {
             root: root.to_path_buf(),
@@ -337,6 +360,22 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
 ) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
+    // Warm path (`FUT-023`): serve Ready digests without opening SQLite. Dirty/miss fall through.
+    if let Some(cache) = cache {
+        let mut guard = cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((snapshot_id, digests)) = guard.ready_for_root(root) {
+            return Ok(Some(SharedValidatedManifestSnapshot {
+                snapshot_id,
+                digests: Arc::new(file_metadata_digests_from_file_digests(digests.as_ref())),
+            }));
+        }
+        if guard.is_dirty_root(root) {
+            return Ok(None);
+        }
+    }
+
     let Some(latest) = storage.load_latest_manifest_for_repository(repository_id)? else {
         return Ok(None);
     };
@@ -349,10 +388,7 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
             .lookup(root, &snapshot_id);
         match lookup {
             ValidatedManifestCandidateCacheLookup::Hit(digests) => {
-                // Warm-path trust (`FUT-023`): a Ready cache entry is only present while the root
-                // is not Dirty. Returning digests without a full live manifest rebuild is what
-                // makes small-repo exact `search_text` competitive with shell `rg`. Watch/index
-                // paths mark Dirty and force revalidation on the next miss.
+                // Snapshot-id-matched Ready entry (rare after ready_for_root short-circuit).
                 return Ok(Some(SharedValidatedManifestSnapshot {
                     snapshot_id,
                     digests: Arc::new(file_metadata_digests_from_file_digests(digests.as_ref())),
