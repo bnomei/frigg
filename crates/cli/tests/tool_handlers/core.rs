@@ -1299,7 +1299,16 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .expect("compact search_hybrid should succeed")
         .0;
 
-    assert!(response.metadata.is_none());
+    // Compact may retain thin lexical_only_mode disclosure when semantic is off (`FUT-010`).
+    if let Some(metadata) = response.metadata.as_ref() {
+        assert_eq!(metadata.lexical_only_mode, Some(true));
+        assert!(metadata.channels.is_empty());
+        assert!(metadata.utility.is_none());
+    }
+    assert_eq!(
+        response.ranking_note.as_deref(),
+        Some("discovery_only; confirm with exact search")
+    );
     assert!(
         response.result_handle.is_some(),
         "compact search_hybrid should return a result handle"
@@ -1326,7 +1335,14 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .await
         .expect("compact search_hybrid with explicit false context efficiency should succeed")
         .0;
-    assert!(explicit_false.metadata.is_none());
+    if let Some(metadata) = explicit_false.metadata.as_ref() {
+        assert_eq!(metadata.lexical_only_mode, Some(true));
+        assert!(metadata.context_efficiency.is_none());
+    }
+    assert_eq!(
+        explicit_false.ranking_note.as_deref(),
+        Some("discovery_only; confirm with exact search")
+    );
 }
 
 #[tokio::test]
@@ -1626,7 +1642,14 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
         .expect("compact search_hybrid should succeed for code-shaped query")
         .0;
 
-    assert!(compact.metadata.is_none());
+    if let Some(metadata) = compact.metadata.as_ref() {
+        assert_eq!(metadata.lexical_only_mode, Some(true));
+        assert!(metadata.channels.is_empty());
+    }
+    assert_eq!(
+        compact.ranking_note.as_deref(),
+        Some("discovery_only; confirm with exact search")
+    );
     assert_eq!(compact.matches[0].path, "src/lib.rs");
     assert_eq!(
         compact.matches[0].rank_reasons,
@@ -1892,7 +1915,11 @@ async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: true,
     };
-    let server = server_for_config(config);
+    // Force empty process credentials so ambient OPENAI_API_KEY cannot satisfy startup.
+    let server = server_for_config_with_semantic_runtime_credentials(
+        config,
+        SemanticRuntimeCredentials::default(),
+    );
     attach_session_repositories(&server).await;
 
     let error = match server
@@ -2300,7 +2327,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
     assert_eq!(error_code_tag(&text_probe_error), Some("invalid_params"));
     assert_eq!(
         text_probe_error.message,
-        "presentation_mode=text is only supported for zoom"
+        "presentation_mode=text and presentation_mode=citation are only supported for zoom"
     );
 
     cleanup_workspace_root(&workspace_root);

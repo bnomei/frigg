@@ -474,14 +474,16 @@ async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
         .expect("workspace_attach should succeed for schema-only storage")
         .0;
 
+    // `workspace_attach` uses Ensure indexing: schema-only storage is promoted to Ready
+    // after attach ensures a manifest snapshot exists for the adopted repository.
     assert_eq!(
         response.storage.index_state,
-        WorkspaceStorageIndexState::Uninitialized
+        WorkspaceStorageIndexState::Ready
     );
     assert!(response.storage.exists);
     assert!(
         response.storage.initialized,
-        "storage summary should still report that the schema exists even when no manifest snapshot has been indexed"
+        "storage summary should report initialized schema after attach Ensure"
     );
 
     fs::remove_dir_all(&workspace_root).expect("temporary workspace should clean up");

@@ -1,6 +1,6 @@
 # Futura SLO snapshot (`FUT-023`)
 
-Generated: `2026-07-08T21:42:26Z`
+Generated: `2026-07-08T21:50:41Z`
 
 ## Posture targets (product contract)
 
@@ -15,7 +15,7 @@ Generated: `2026-07-08T21:42:26Z`
 ## Methodology (this probe)
 
 - **Fixture:** tiny temp tree (`src/lib.rs`, `src/util.rs`, gitignored `*.tmp`) — not full monorepo dogfood.
-- **Samples:** N=15 sequential runs (small N; not a full CI p95 gate).
+- **Samples:** N=20 sequential runs (small N; not a full CI p95 gate).
 - **Baseline tool:** local `rg -n --glob '*.rs' 'greeting' <fixture>/src`.
 - **Honest scope:** this snapshot records the **rg** baseline on the fixture. Full Frigg MCP
   `search_text` p95 needs a warm `frigg serve` process and client loop (Phase 7 bench).
@@ -26,38 +26,43 @@ Generated: `2026-07-08T21:42:26Z`
 
 ```json
 {
-  "n": 15,
-  "mean_ms": 5.8624138000000015,
-  "p50_ms": 6.037958,
-  "p95_ms": 6.680978699999999,
-  "min_ms": 4.708959,
-  "max_ms": 7.45025,
+  "n": 20,
+  "mean_ms": 6.334939650000001,
+  "p50_ms": 6.247458,
+  "p95_ms": 7.91732325,
+  "min_ms": 4.838292,
+  "max_ms": 7.936917,
   "samples_ms": [
-    4.890583,
-    6.198334,
-    6.213416,
-    5.148708,
-    6.06825,
-    6.075917,
-    5.960791,
-    6.351291,
-    7.45025,
-    5.5425,
-    6.052334,
-    4.708959,
-    5.958875,
-    6.037958,
-    5.278041
+    6.1965,
+    5.959958,
+    4.838292,
+    6.5815,
+    5.148792,
+    6.0955,
+    6.69275,
+    5.1505,
+    5.124125,
+    4.985125,
+    7.738291,
+    6.448417,
+    5.687083,
+    6.140459,
+    7.916292,
+    6.298416,
+    7.936917,
+    7.028125,
+    7.645709,
+    7.086042
   ]
 }
 ```
 
 | Metric | Value |
 | --- | --- |
-| N | 15 |
-| mean_ms | 5.862 |
-| p50_ms | 6.038 |
-| p95_ms | 6.681 |
+| N | 20 |
+| mean_ms | 6.335 |
+| p50_ms | 6.247 |
+| p95_ms | 7.917 |
 | query | `greeting` |
 | path scope | `src/**/*.rs` |
 
