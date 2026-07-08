@@ -4,6 +4,7 @@
 //! Enforces workspace path containment on reads and reuses file-content windows within a tool
 //! execution scope to limit duplicate IO.
 
+use super::presentation::SessionResultHandleLookup;
 use super::*;
 use crate::mcp::types::ContextEfficiencyMetadata;
 use serde::Serialize;
@@ -370,15 +371,72 @@ impl FriggMcpServer {
         params: ReadMatchParams,
     ) -> Result<ReadMatchResponse, ErrorData> {
         let started_at = Instant::now();
-        let anchor = match self.session_result_handle_match(&params.result_handle, &params.match_id)
+        let anchor = match self
+            .session_result_handle_lookup(&params.result_handle, &params.match_id)
         {
-            Some(anchor) => anchor,
-            None => {
+            SessionResultHandleLookup::Found(anchor) => anchor,
+            SessionResultHandleLookup::StaleHandle => {
+                let recovery = RecoveryFields::stale_handle(
+                    Some(params.result_handle.as_str()),
+                    Some(params.match_id.as_str()),
+                );
+                let message = recovery
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "result_handle not found".to_owned());
                 let result: Result<ReadMatchResponse, ErrorData> = Err(Self::resource_not_found(
-                    "result_handle or match_id not found",
+                    message,
                     Some(json!({
+                        "error_code": recovery.error_code.clone().unwrap_or_else(|| "STALE_HANDLE".to_owned()),
                         "result_handle": params.result_handle,
                         "match_id": params.match_id,
+                        "correction_hint": recovery.correction_hint,
+                        "related_tools": recovery.related_tools,
+                        "suggested_next": recovery.suggested_next,
+                    })),
+                ));
+                return self.finalize_with_provenance_timed(
+                    "read_match",
+                    started_at,
+                    result,
+                    Ok(()),
+                    None,
+                );
+            }
+            SessionResultHandleLookup::MixedHandle {
+                foreign_handle_has_match,
+                foreign_handle,
+            } => {
+                let recovery = RecoveryFields::mixed_handle(
+                    Some(params.result_handle.as_str()),
+                    Some(params.match_id.as_str()),
+                );
+                let message = if foreign_handle_has_match {
+                    format!(
+                        "match_id {:?} does not belong to result_handle {:?} (belongs to another handle{}).",
+                        params.match_id,
+                        params.result_handle,
+                        foreign_handle
+                            .as_ref()
+                            .map(|handle| format!(" {handle:?}"))
+                            .unwrap_or_default()
+                    )
+                } else {
+                    recovery
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "match_id does not belong to result_handle".to_owned())
+                };
+                let result: Result<ReadMatchResponse, ErrorData> = Err(Self::resource_not_found(
+                    message,
+                    Some(json!({
+                        "error_code": recovery.error_code.clone().unwrap_or_else(|| "MIXED_HANDLE".to_owned()),
+                        "result_handle": params.result_handle,
+                        "match_id": params.match_id,
+                        "foreign_handle": foreign_handle,
+                        "correction_hint": recovery.correction_hint,
+                        "related_tools": recovery.related_tools,
+                        "suggested_next": recovery.suggested_next,
                     })),
                 ));
                 return self.finalize_with_provenance_timed(

@@ -298,6 +298,9 @@ Prefer anchored path filters (`^ontology/`) over bare substrings (`ontology`).
 
 ```text
 match_id is valid ONLY with its own result_handle from the SAME call.
+match_id is scoped: search:m1, symbols:m1, hybrid:m1, nav:m1 (never reuse across tools).
+handle_scope + handle_expires="session" mark the pairing lifetime.
+Stale handle → re-run search; mixed/foreign match_id → use the matching handle from the same call.
 Text mode returns raw source (no line prefixes) — fine for internal proof.
 ```
 
@@ -500,7 +503,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 
 ## Compact response rules
 
-- `result_handle` + `match_id` → `read_match` (**same call only**).
+- `result_handle` + `match_id` → `read_match` (**same call only**; scoped ids like `search:m1`).
 - Text-first `read_file` / `read_match` / `explore(zoom)`: no line prefixes in text mode.
 - `presentation_mode=json` when you need `start_line`, `end_line`, bytes, or machine-readable fields.
 - Hybrid compact may omit rich scores — pivot to exact tools; do not grep.

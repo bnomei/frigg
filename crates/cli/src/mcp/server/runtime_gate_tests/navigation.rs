@@ -6,6 +6,7 @@ use super::*;
 use crate::domain::model::{ReferenceMatch, ReferenceMatchKind};
 use crate::mcp::server_state::NavigationTargetSelection;
 use crate::mcp::types::{
+    RecoveryFields,
     CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
     FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
     NavigationLocation, NavigationMode, OutgoingCallsResponse,
@@ -799,17 +800,20 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             total_matches: 1,
             matches: vec![reference_match()],
             result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
             mode: NavigationMode::HeuristicNoPrecise,
             target_selection: None,
             metadata,
             note,
-        },
+                    recovery: RecoveryFields::default(),
+                },
         None,
     );
     let serialized = assert_compact_shape("find_references", &references);
     assert_eq!(references.total_matches, 1);
     assert_eq!(references.mode, NavigationMode::HeuristicNoPrecise);
-    assert_eq!(references.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(references.matches[0].match_id.as_deref(), Some("nav:m1"));
     assert_compact_handle(&server, &references.result_handle, 11, Some(7));
     assert!(serialized.get("matches").is_some());
 
@@ -827,7 +831,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
     );
     assert_compact_shape("find_declarations", &declarations);
     assert_eq!(declarations.mode, NavigationMode::PrecisePartial);
-    assert_eq!(declarations.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(declarations.matches[0].match_id.as_deref(), Some("nav:m1"));
     assert_compact_handle(&server, &declarations.result_handle, 12, Some(4));
 
     let (metadata, note) = compact_metadata_note();
@@ -844,7 +848,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
     );
     assert_compact_shape("find_implementations", &implementations);
     assert_eq!(implementations.mode, NavigationMode::HeuristicNoPrecise);
-    assert_eq!(implementations.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(implementations.matches[0].match_id.as_deref(), Some("nav:m1"));
     assert_compact_handle(&server, &implementations.result_handle, 13, Some(5));
 
     let availability = NavigationAvailability {
@@ -867,7 +871,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
         None,
     );
     let serialized = assert_compact_shape("incoming_calls", &incoming);
-    assert_eq!(incoming.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(incoming.matches[0].match_id.as_deref(), Some("nav:m1"));
     assert_eq!(
         incoming
             .availability
@@ -898,7 +902,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
         None,
     );
     let serialized = assert_compact_shape("outgoing_calls", &outgoing);
-    assert_eq!(outgoing.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(outgoing.matches[0].match_id.as_deref(), Some("nav:m1"));
     assert_eq!(
         serialized
             .get("availability")
@@ -941,8 +945,8 @@ fn assert_compact_handle(
         .as_deref()
         .expect("compact presenter should return a result handle");
     let anchor = server
-        .session_result_handle_match(handle, "m1")
-        .expect("compact presenter should store match m1");
+        .session_result_handle_match(handle, "nav:m1")
+        .expect("compact presenter should store match nav:m1");
     assert_eq!(anchor.repository_id, "repo-compact");
     assert_eq!(anchor.path, "src/lib.rs");
     assert_eq!(anchor.line, line);
