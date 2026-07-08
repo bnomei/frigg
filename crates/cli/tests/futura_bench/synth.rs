@@ -1,11 +1,12 @@
 //! Synthetic fixture board (`surface=synth`) for forced zeros, regex trap, count_only, handles.
 
+use std::fs;
 use std::sync::Mutex;
 use std::time::Instant;
 
 use frigg::mcp::types::{
     ReadMatchParams, ReadMatchResponse, ReadPresentationMode, ResponseMode, SearchPatternType,
-    SearchTextParams,
+    SearchTextParams, WorkspaceGateAction, WorkspaceParams,
 };
 use rmcp::handler::server::wrapper::Parameters;
 
@@ -26,6 +27,7 @@ pub async fn run_all(report: &Mutex<harness::BenchReport>) {
     run_count_only(report, &fixture).await;
     run_zero_hit(report, &fixture).await;
     run_handle_path(report, &fixture).await;
+    run_post_edit_dirty_gate(report, &fixture).await;
     crate::slo::run_search_text_latency(report, &fixture).await;
 }
 
@@ -222,4 +224,100 @@ async fn run_handle_path(report: &Mutex<harness::BenchReport>, fixture: &std::pa
         .lock()
         .unwrap()
         .record("read_match_handle_synth", Surface::Synth, started, outcome);
+}
+
+/// FUT-020 post-edit gate: real file edit + production dirty signals (same path watch uses).
+///
+/// Watch is not started in bench; after the edit we mark the validated-manifest dirty root and
+/// record path-scoped pending dirty paths the way the watch/hot-reindex queue does, then assert
+/// `workspace` recommends path-scoped live-disk only (never a repo-wide shell license).
+async fn run_post_edit_dirty_gate(report: &Mutex<harness::BenchReport>, fixture: &std::path::Path) {
+    let started = Instant::now();
+    let root = materialize_fixture_workspace(fixture, "synth-post-edit-dirty");
+    let outcome = async {
+        let server = server_for_root(&root).await;
+        let before = server
+            .workspace(Parameters(WorkspaceParams {
+                path: Some(root.display().to_string()),
+                repository_id: None,
+                set_default: Some(true),
+                resolve_mode: None,
+            }))
+            .await
+            .map_err(|e| format!("workspace before edit failed: {e}"))?
+            .0;
+        let repository_id = before
+            .repository
+            .as_ref()
+            .map(|r| r.repository_id.clone())
+            .ok_or_else(|| "missing repository after adopt".to_owned())?;
+
+        // Real on-disk edit (agent post-edit path).
+        let edit_path = root.join("src/lib.rs");
+        let mut body = fs::read_to_string(&edit_path).map_err(|e| format!("read lib.rs: {e}"))?;
+        body.push_str("\n// FUTURA_POST_EDIT_MARKER\n");
+        fs::write(&edit_path, &body).map_err(|e| format!("write lib.rs: {e}"))?;
+
+        // Simulate watch/hot-reindex queue notifications after the edit (same APIs production uses).
+        server.test_mark_workspace_dirty_root(&root);
+        server.test_record_gate_dirty_paths(
+            &repository_id,
+            &[String::from("src/lib.rs")],
+            &[],
+        );
+
+        let response = server
+            .workspace(Parameters(WorkspaceParams {
+                path: Some(root.display().to_string()),
+                repository_id: None,
+                set_default: Some(true),
+                resolve_mode: None,
+            }))
+            .await
+            .map_err(|e| format!("workspace after edit failed: {e}"))?
+            .0;
+
+        require(
+            response.working_tree_dirty == Some(true),
+            format!("expected working_tree_dirty after edit: {response:?}"),
+        )?;
+        require(
+            response
+                .changed_paths_since_snapshot
+                .iter()
+                .any(|p| p == "src/lib.rs" || p.ends_with("lib.rs")),
+            format!(
+                "expected path-scoped changed path src/lib.rs: {:?}",
+                response.changed_paths_since_snapshot
+            ),
+        )?;
+        require(
+            matches!(
+                response.recommended_action,
+                Some(WorkspaceGateAction::UseLiveDiskForTouchedFiles)
+                    | Some(WorkspaceGateAction::WaitWatch)
+                    | Some(WorkspaceGateAction::Reindex)
+            ),
+            format!(
+                "post-edit gate should not stay Ready: {:?}",
+                response.recommended_action
+            ),
+        )?;
+        // Path-scoped only: never interpret gate as repo-wide shell grep license.
+        if let Some(fresh) = response.fresh_enough_for.as_ref() {
+            require(
+                fresh.iter().all(|t| t == "read_file" || t == "read_match" || t == "search_text"),
+                format!("fresh_enough_for should stay path-scoped tools: {fresh:?}"),
+            )?;
+        }
+        Ok(())
+    }
+    .await;
+    cleanup_workspace_root(&root);
+    report.lock().unwrap().record(
+        "post_edit_dirty_gate_path_scoped",
+        Surface::Synth,
+        started,
+        outcome,
+    );
 }

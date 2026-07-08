@@ -5,12 +5,14 @@
 # - materializes a tiny fixture
 # - times N warm FriggMcpServer::search_text samples (after warmup)
 # - times N subprocess `rg` samples on the same query/path
-# - fails if frigg.p95_ms > rg.p95_ms
-# - writes markdown when FUTURA_SLO_OUT is set
+# - release competitive gate: frigg.p95_ms <= rg.p95_ms * 1.25 (debug soft only)
+# - writes markdown when FUTURA_SLO_OUT is set (this script always sets it)
+# - requires local `rg` on PATH
 #
 # Usage:
 #   scripts/futura_slo_probe.sh [OUTPUT_MD]
 #   scripts/futura_slo_probe.sh crates/cli/assets/futura-slo-snapshot.md
+#   cargo futura-bench   # equivalent release bench (alias)
 
 set -euo pipefail
 

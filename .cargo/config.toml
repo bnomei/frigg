@@ -1,3 +1,3 @@
 [alias]
-# Binding FUT-019/FUT-023 path: release so strict frigg_p95<=rg_p95 is enforced.
+# Binding FUT-019/FUT-023 path: release so competitive frigg_p95<=1.25×rg is enforced.
 futura-bench = "test -p frigg --test futura_bench --release -- --nocapture"
