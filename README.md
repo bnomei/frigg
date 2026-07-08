@@ -159,9 +159,12 @@ Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a 
 ```bash
 frigg adopt --target agents-md --target mcp-project --dry-run
 frigg adopt --target agents-md --target mcp-project
+frigg adopt --target agents-md --policy expanded
 ```
 
 Useful targets include `agents-md`, `claude-md`, `gemini-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
+
+Managed markdown defaults to a **lightweight** Frigg-first pointer to the `frigg-first-code-search` skill. Pass `--policy expanded` for a compact routing policy (scenario picker + shell→Frigg one-liners) when you want more detail in-repo without loading the skill.
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 

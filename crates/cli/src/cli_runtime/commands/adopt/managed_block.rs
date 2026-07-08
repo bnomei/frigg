@@ -3,10 +3,11 @@
 //! Inserts or removes Frigg-managed markdown blocks in agent directive files without touching
 //! sibling content.
 
-use frigg::agent_directive;
+use frigg::agent_directive::{self, AgentsPolicy};
 
 pub(crate) const MANAGED_BLOCK_START: &str = agent_directive::MANAGED_BLOCK_START;
 pub(crate) const MANAGED_BLOCK_END: &str = agent_directive::MANAGED_BLOCK_END;
+const MANAGED_BLOCK_START_PREFIX: &str = "<!-- frigg-directive:start";
 const LEGACY_MANAGED_BLOCK_START_PREFIX: &str = "FRIGG:BEGIN v";
 const LEGACY_MANAGED_BLOCK_END: &str = "FRIGG:END";
 
@@ -32,9 +33,9 @@ impl std::fmt::Display for ManagedBlockError {
 
 impl std::error::Error for ManagedBlockError {}
 
-/// Returns the canonical managed markdown block rendered for agent directive targets.
-pub(crate) fn desired_markdown() -> String {
-    agent_directive::render_managed_block()
+/// Returns the managed markdown block for the selected adoption policy.
+pub(crate) fn desired_markdown(policy: AgentsPolicy) -> String {
+    agent_directive::render_managed_block_for_policy(policy)
 }
 
 pub(crate) fn has_managed_block(contents: &str) -> bool {
@@ -144,7 +145,10 @@ fn marker_positions(contents: &str, kind: MarkerKind) -> Vec<Span> {
         let trimmed = line.trim();
         let matched = match kind {
             MarkerKind::Start => {
+                // Accept any versioned HTML start marker so adopt can replace
+                // older managed blocks after a directive version bump.
                 trimmed == MANAGED_BLOCK_START
+                    || trimmed.starts_with(MANAGED_BLOCK_START_PREFIX)
                     || trimmed.starts_with(LEGACY_MANAGED_BLOCK_START_PREFIX)
             }
             MarkerKind::End => trimmed == MANAGED_BLOCK_END || trimmed == LEGACY_MANAGED_BLOCK_END,
@@ -202,10 +206,20 @@ fn removal_span(contents: &str, block: Span) -> Span {
 mod tests {
     #![allow(clippy::panic)]
 
+    use frigg::agent_directive::AgentsPolicy;
+
     use super::{
         MANAGED_BLOCK_END, MANAGED_BLOCK_START, ManagedBlockEdit, desired_markdown,
         has_managed_block, remove_managed_block, upsert_managed_block,
     };
+
+    fn lightweight_markdown() -> String {
+        desired_markdown(AgentsPolicy::Lightweight)
+    }
+
+    fn expanded_markdown() -> String {
+        desired_markdown(AgentsPolicy::Expanded)
+    }
 
     #[test]
     fn adopt_managed_block_markers_are_stable() {
@@ -214,8 +228,27 @@ mod tests {
     }
 
     #[test]
+    fn adopt_managed_block_default_policy_is_lightweight() {
+        let lightweight = lightweight_markdown();
+        assert!(lightweight.contains("frigg-first-code-search"));
+        assert!(!lightweight.contains("## Compact scenario picker"));
+        assert!(!lightweight.contains("Known string or regex -> search_text"));
+        assert_ne!(lightweight, expanded_markdown());
+    }
+
+    #[test]
+    fn adopt_managed_block_expanded_policy_includes_compact_routing() {
+        let expanded = expanded_markdown();
+        assert!(expanded.contains("## Compact scenario picker"));
+        assert!(expanded.contains("Known string or regex -> search_text"));
+        assert!(expanded.contains("Shell → Frigg"));
+        assert!(!expanded.contains("Hard anti-patterns"));
+        assert!(!expanded.contains("BAD: hybrid -> grep"));
+    }
+
+    #[test]
     fn adopt_managed_block_inserts_into_empty_file() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
 
         assert_eq!(
             upsert_managed_block("", &desired).expect("upsert block"),
@@ -225,7 +258,7 @@ mod tests {
 
     #[test]
     fn adopt_managed_block_inserts_into_non_empty_file() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
 
         assert_eq!(
             upsert_managed_block("# Existing\nTail", &desired).expect("upsert block"),
@@ -235,7 +268,7 @@ mod tests {
 
     #[test]
     fn adopt_managed_block_replaces_existing_current_marker_block() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let contents =
             format!("# Existing\n\n{MANAGED_BLOCK_START}\nold\n{MANAGED_BLOCK_END}\nTail");
 
@@ -246,8 +279,21 @@ mod tests {
     }
 
     #[test]
+    fn adopt_managed_block_replaces_prior_html_version_marker() {
+        let desired = lightweight_markdown();
+        let contents = format!(
+            "# Existing\n<!-- frigg-directive:start version=2026-07-01 -->\nold\n{MANAGED_BLOCK_END}\nTail"
+        );
+
+        assert_eq!(
+            upsert_managed_block(&contents, &desired).expect("upsert block"),
+            ManagedBlockEdit::Changed(format!("# Existing\n{desired}\nTail"))
+        );
+    }
+
+    #[test]
     fn adopt_managed_block_replaces_legacy_versioned_block() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let contents = "# Existing\nFRIGG:BEGIN v1\nold\nFRIGG:END\nTail";
 
         assert_eq!(
@@ -258,7 +304,7 @@ mod tests {
 
     #[test]
     fn adopt_managed_block_upsert_detects_unchanged_content() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let contents = format!("# Existing\n\n{desired}\n\nTail\n");
 
         assert!(has_managed_block(&contents));
@@ -269,8 +315,20 @@ mod tests {
     }
 
     #[test]
+    fn adopt_managed_block_upsert_detects_policy_drift() {
+        let lightweight = lightweight_markdown();
+        let expanded = expanded_markdown();
+        let contents = format!("# Existing\n\n{lightweight}\n\nTail\n");
+
+        assert!(matches!(
+            upsert_managed_block(&contents, &expanded).expect("upsert block"),
+            ManagedBlockEdit::Changed(_)
+        ));
+    }
+
+    #[test]
     fn adopt_managed_block_upsert_detects_drifted_content() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let contents = contents_with_drifted_block();
 
         assert!(has_managed_block(&contents));
@@ -282,7 +340,7 @@ mod tests {
 
     #[test]
     fn adopt_managed_block_removes_only_owned_block() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let contents = format!("# Existing\n\n{desired}\n\nTail\n");
 
         assert_eq!(
@@ -293,7 +351,7 @@ mod tests {
 
     #[test]
     fn adopt_managed_block_removes_separator_from_appended_block() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let contents = format!("# Existing\nTail\n\n{desired}\n");
 
         assert_eq!(
@@ -304,7 +362,7 @@ mod tests {
 
     #[test]
     fn adopt_managed_block_insert_then_remove_round_trips_non_empty_file() {
-        let desired = desired_markdown();
+        let desired = lightweight_markdown();
         let original = "# Existing\nTail";
         let ManagedBlockEdit::Changed(inserted) =
             upsert_managed_block(original, &desired).expect("upsert block")
@@ -332,7 +390,7 @@ mod tests {
             "{MANAGED_BLOCK_START}\nouter\n{MANAGED_BLOCK_START}\ninner\n{MANAGED_BLOCK_END}\n{MANAGED_BLOCK_END}\n"
         );
 
-        assert!(upsert_managed_block(&contents, &desired_markdown()).is_err());
+        assert!(upsert_managed_block(&contents, &lightweight_markdown()).is_err());
         assert!(remove_managed_block(&contents).is_err());
     }
 

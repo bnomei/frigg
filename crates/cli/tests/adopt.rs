@@ -74,7 +74,55 @@ fn adopt_cli_dry_run_prints_plan_and_writes_nothing() {
 
     assert_success(&output);
     assert!(stdout(&output).contains("action=create"));
+    assert!(stdout(&output).contains("policy=lightweight"));
     assert!(!root.join("AGENTS.md").exists());
+    cleanup_workspace(&root);
+}
+
+#[test]
+fn adopt_cli_default_markdown_is_lightweight_and_expanded_opt_in() {
+    let root = temp_workspace_root("policy-modes");
+    fs::create_dir_all(&root).expect("create temp root");
+
+    let lightweight = run_frigg(&root, &["adopt", "--target", "agents-md"]);
+    assert_success(&lightweight);
+    let agents = fs::read_to_string(root.join("AGENTS.md")).expect("read agents");
+    assert!(agents.contains("frigg-directive:start version=2026-07-08"));
+    assert!(agents.contains("frigg-first-code-search"));
+    assert!(!agents.contains("## Compact scenario picker"));
+    assert!(!agents.contains("Known string or regex -> search_text"));
+    assert!(!agents.contains("Hard anti-patterns"));
+
+    let expanded = run_frigg(
+        &root,
+        &["adopt", "--target", "agents-md", "--policy", "expanded"],
+    );
+    assert_success(&expanded);
+    let agents = fs::read_to_string(root.join("AGENTS.md")).expect("read expanded agents");
+    assert!(agents.contains("## Compact scenario picker"));
+    assert!(agents.contains("Known string or regex -> search_text"));
+    assert!(agents.contains("Shell → Frigg"));
+    assert!(!agents.contains("BAD: hybrid -> grep"));
+
+    let check_expanded = run_frigg(
+        &root,
+        &[
+            "adopt",
+            "--target",
+            "agents-md",
+            "--policy",
+            "expanded",
+            "--check",
+        ],
+    );
+    assert_success(&check_expanded);
+    assert!(stdout(&check_expanded).contains("action=unchanged"));
+    assert!(stdout(&check_expanded).contains("policy=expanded"));
+
+    let check_lightweight = run_frigg(&root, &["adopt", "--target", "agents-md", "--check"]);
+    assert_failure(&check_lightweight);
+    assert!(stdout(&check_lightweight).contains("status=pending"));
+
     cleanup_workspace(&root);
 }
 

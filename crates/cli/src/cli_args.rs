@@ -254,6 +254,13 @@ pub(crate) enum Command {
         /// Update every supported docs and MCP target.
         #[arg(long, default_value_t = false)]
         all: bool,
+        /// Managed markdown policy body for agent docs (`AGENTS.md`, `CLAUDE.md`, etc.).
+        ///
+        /// Default `lightweight` keeps a short Frigg-first pointer to the
+        /// `frigg-first-code-search` skill. Use `expanded` for a compact routing
+        /// policy (picker + shell→Frigg one-liners) without dumping the full skill.
+        #[arg(long = "policy", value_enum, default_value_t = AdoptAgentsPolicy::Lightweight)]
+        policy: AdoptAgentsPolicy,
         /// Remove Frigg-managed entries instead.
         #[arg(long, default_value_t = false)]
         uninstall: bool,
@@ -315,6 +322,25 @@ pub(crate) enum Command {
     },
 }
 
+/// Managed markdown policy size for `frigg adopt` agent-doc targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub(crate) enum AdoptAgentsPolicy {
+    /// Short Frigg-first rules plus a pointer to the production skill.
+    #[default]
+    Lightweight,
+    /// Compact routing policy for repos that want detail without loading the skill.
+    Expanded,
+}
+
+impl From<AdoptAgentsPolicy> for frigg::agent_directive::AgentsPolicy {
+    fn from(value: AdoptAgentsPolicy) -> Self {
+        match value {
+            AdoptAgentsPolicy::Lightweight => Self::Lightweight,
+            AdoptAgentsPolicy::Expanded => Self::Expanded,
+        }
+    }
+}
+
 /// Project files and configs that `frigg adopt` can install or remove managed Frigg entries in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum AdoptTarget {
@@ -349,7 +375,9 @@ mod tests {
 
     use clap::Parser;
 
-    use super::{AdoptTarget, Cli, Command, HiddenHookCli, HiddenHookCommand, HookEvent};
+    use super::{
+        AdoptAgentsPolicy, AdoptTarget, Cli, Command, HiddenHookCli, HiddenHookCommand, HookEvent,
+    };
 
     #[test]
     fn hash_command_parses_without_workspace_root() {
@@ -379,6 +407,7 @@ mod tests {
             Some(Command::Adopt {
                 target,
                 all,
+                policy,
                 uninstall,
                 check,
                 dry_run,
@@ -393,12 +422,27 @@ mod tests {
                     ]
                 );
                 assert!(!all);
+                assert_eq!(policy, AdoptAgentsPolicy::Lightweight);
                 assert!(uninstall);
                 assert!(check);
                 assert!(dry_run);
                 assert!(force);
             }
             other => panic!("expected adopt command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn adopt_command_parses_expanded_policy() {
+        let cli = Cli::try_parse_from(["frigg", "adopt", "--policy", "expanded"])
+            .expect("adopt command should parse expanded policy");
+
+        match cli.command {
+            Some(Command::Adopt {
+                policy: AdoptAgentsPolicy::Expanded,
+                ..
+            }) => {}
+            other => panic!("expected expanded adopt policy, got {other:?}"),
         }
     }
 

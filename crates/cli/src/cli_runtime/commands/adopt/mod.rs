@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use frigg::agent_directive::AgentsPolicy;
 use frigg::settings::FriggConfig;
 use frigg::storage::resolve_workspace_relative_write_path;
 
@@ -30,6 +31,7 @@ pub(crate) fn run_adopt_command_with_output(
     config: &FriggConfig,
     requested_targets: Vec<AdoptTarget>,
     all: bool,
+    policy: AgentsPolicy,
     uninstall: bool,
     check: bool,
     dry_run: bool,
@@ -37,6 +39,7 @@ pub(crate) fn run_adopt_command_with_output(
     mcp_server_url: &str,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
+    let policy_label = agents_policy_label(policy);
     output.progress_event(
         OutputLevel::Info,
         "adopt",
@@ -46,6 +49,7 @@ pub(crate) fn run_adopt_command_with_output(
             field("repos", config.repositories().len()),
             field("requested_targets", requested_targets.len()),
             field("all", all),
+            field("policy", policy_label),
             field("dry_run", dry_run),
             field("check", check),
             field("uninstall", uninstall),
@@ -58,6 +62,7 @@ pub(crate) fn run_adopt_command_with_output(
         config,
         &requested_targets,
         all,
+        policy,
         uninstall,
         force,
         mcp_server_url,
@@ -81,6 +86,7 @@ pub(crate) fn run_adopt_command_with_output(
                 config.repositories().len(),
                 &plan,
                 pending_changes,
+                policy_label,
                 dry_run,
                 check,
                 uninstall,
@@ -145,7 +151,7 @@ pub(crate) fn run_adopt_command_with_output(
         )?;
     }
 
-    let writes = apply_plan_entries(&plan, uninstall, force, mcp_server_url)?;
+    let writes = apply_plan_entries(&plan, policy, uninstall, force, mcp_server_url)?;
     output.summary_event(
         adopt_level_for_status(status),
         "adopt",
@@ -155,6 +161,7 @@ pub(crate) fn run_adopt_command_with_output(
             config.repositories().len(),
             &plan,
             pending_changes,
+            policy_label,
             dry_run,
             check,
             uninstall,
@@ -167,12 +174,20 @@ pub(crate) fn run_adopt_command_with_output(
     Ok(())
 }
 
+fn agents_policy_label(policy: AgentsPolicy) -> &'static str {
+    match policy {
+        AgentsPolicy::Lightweight => "lightweight",
+        AgentsPolicy::Expanded => "expanded",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn adopt_summary_fields(
     status: &str,
     repositories: usize,
     plan: &AdoptPlan,
     pending_changes: usize,
+    policy: &str,
     dry_run: bool,
     check: bool,
     uninstall: bool,
@@ -190,6 +205,7 @@ fn adopt_summary_fields(
         field("skipped", plan.action_count(AdoptPlanAction::Skipped)),
         field("error", plan.action_count(AdoptPlanAction::Error)),
         field("pending", pending_changes),
+        field("policy", policy),
         field("dry_run", dry_run),
         field("check", check),
         field("uninstall", uninstall),
@@ -231,6 +247,7 @@ fn build_adopt_plan(
     config: &FriggConfig,
     requested_targets: &[AdoptTarget],
     all: bool,
+    policy: AgentsPolicy,
     uninstall: bool,
     force: bool,
     mcp_server_url: &str,
@@ -257,7 +274,7 @@ fn build_adopt_plan(
 
         for target in select_targets(root, requested_targets, all) {
             let (action, reason) =
-                classify_target_action(root, target, uninstall, force, mcp_server_url);
+                classify_target_action(root, target, policy, uninstall, force, mcp_server_url);
             entries.push(AdoptPlanEntry {
                 repository_id: repo.repository_id.0.clone(),
                 root: root.to_path_buf(),
@@ -275,6 +292,7 @@ fn build_adopt_plan(
 fn classify_target_action(
     root: &Path,
     target: AdoptTarget,
+    policy: AgentsPolicy,
     uninstall: bool,
     force: bool,
     mcp_server_url: &str,
@@ -292,7 +310,7 @@ fn classify_target_action(
     } else if matches!(target, AdoptTarget::McpProject | AdoptTarget::McpCursor) {
         classify_mcp_target(&contents, uninstall, force, mcp_server_url)
     } else {
-        classify_markdown_target(&contents, uninstall)
+        classify_markdown_target(&contents, policy, uninstall)
     }
 }
 
@@ -381,8 +399,12 @@ fn classify_missing_target(uninstall: bool) -> (AdoptPlanAction, Option<String>)
     }
 }
 
-fn classify_markdown_target(contents: &str, uninstall: bool) -> (AdoptPlanAction, Option<String>) {
-    let desired = managed_block::desired_markdown();
+fn classify_markdown_target(
+    contents: &str,
+    policy: AgentsPolicy,
+    uninstall: bool,
+) -> (AdoptPlanAction, Option<String>) {
+    let desired = managed_block::desired_markdown(policy);
 
     if uninstall {
         return match managed_block::remove_managed_block(contents) {
@@ -428,6 +450,7 @@ fn classify_markdown_target(contents: &str, uninstall: bool) -> (AdoptPlanAction
 
 fn apply_plan_entries(
     plan: &AdoptPlan,
+    policy: AgentsPolicy,
     uninstall: bool,
     force: bool,
     mcp_server_url: &str,
@@ -454,7 +477,7 @@ fn apply_plan_entries(
             ) {
                 apply_mcp_json_edit(contents.as_deref(), uninstall, force, mcp_server_url)
             } else {
-                apply_markdown_edit(contents.as_deref(), uninstall)
+                apply_markdown_edit(contents.as_deref(), policy, uninstall)
             }?;
             Ok((write_path, edit))
         })();
@@ -555,8 +578,14 @@ fn apply_mcp_json_entries(
     force: bool,
     mcp_server_url: &str,
 ) -> io::Result<usize> {
-    apply_plan_entries(plan, uninstall, force, mcp_server_url)
-        .map_err(|err| io::Error::other(err.to_string()))
+    apply_plan_entries(
+        plan,
+        AgentsPolicy::Lightweight,
+        uninstall,
+        force,
+        mcp_server_url,
+    )
+    .map_err(|err| io::Error::other(err.to_string()))
 }
 
 fn resolve_entry_write_path(entry: &AdoptPlanEntry) -> Result<PathBuf, Box<dyn Error>> {
@@ -573,6 +602,7 @@ enum AdoptApplyEdit {
 
 fn apply_markdown_edit(
     contents: Option<&str>,
+    policy: AgentsPolicy,
     uninstall: bool,
 ) -> Result<AdoptApplyEdit, Box<dyn Error>> {
     if uninstall {
@@ -592,7 +622,7 @@ fn apply_markdown_edit(
         };
     }
 
-    let desired = managed_block::desired_markdown();
+    let desired = managed_block::desired_markdown(policy);
     let edit = managed_block::upsert_managed_block(contents.unwrap_or_default(), &desired)?;
     Ok(match edit {
         managed_block::ManagedBlockEdit::Changed(updated) => AdoptApplyEdit::Write(updated),
@@ -740,6 +770,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use frigg::agent_directive::AgentsPolicy;
     use frigg::settings::FriggConfig;
 
     use super::{apply_mcp_json_entries, apply_plan_entries, build_adopt_plan};
@@ -758,6 +789,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -777,7 +809,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(
             root.join("AGENTS.md"),
-            super::managed_block::desired_markdown(),
+            super::managed_block::desired_markdown(AgentsPolicy::Lightweight),
         )
         .expect("write agents");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
@@ -787,6 +819,7 @@ mod tests {
             &config,
             &[AdoptTarget::AgentsMd],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -813,6 +846,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -839,6 +873,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             true,
             false,
             TEST_MCP_SERVER_URL,
@@ -859,6 +894,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -889,6 +925,7 @@ mod tests {
             &config,
             &[AdoptTarget::AgentsMd],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -896,13 +933,89 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply markdown"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply markdown"),
             1
         );
+        let contents = fs::read_to_string(root.join("AGENTS.md")).expect("read agents");
         assert_eq!(
-            fs::read_to_string(root.join("AGENTS.md")).expect("read agents"),
-            super::managed_block::desired_markdown()
+            contents,
+            super::managed_block::desired_markdown(AgentsPolicy::Lightweight)
         );
+        assert!(contents.contains("frigg-first-code-search"));
+        assert!(!contents.contains("## Compact scenario picker"));
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_writes_expanded_policy_when_selected() {
+        let root = temp_dir("adopt-apply-expanded-markdown");
+        fs::create_dir_all(&root).expect("create temp root");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            AgentsPolicy::Expanded,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Expanded,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply expanded markdown"),
+            1
+        );
+        let contents = fs::read_to_string(root.join("AGENTS.md")).expect("read agents");
+        assert_eq!(
+            contents,
+            super::managed_block::desired_markdown(AgentsPolicy::Expanded)
+        );
+        assert!(contents.contains("## Compact scenario picker"));
+        assert!(contents.contains("Known string or regex -> search_text"));
+        assert!(!contents.contains("BAD: hybrid -> grep"));
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_plan_detects_drift_between_lightweight_and_expanded() {
+        let root = temp_dir("adopt-plan-policy-drift");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join("AGENTS.md"),
+            super::managed_block::desired_markdown(AgentsPolicy::Lightweight),
+        )
+        .expect("write lightweight agents");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            AgentsPolicy::Expanded,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Update);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 
@@ -912,7 +1025,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(
             root.join("AGENTS.md"),
-            super::managed_block::desired_markdown(),
+            super::managed_block::desired_markdown(AgentsPolicy::Lightweight),
         )
         .expect("write agents");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
@@ -921,6 +1034,7 @@ mod tests {
             &config,
             &[AdoptTarget::AgentsMd],
             false,
+            AgentsPolicy::Lightweight,
             true,
             false,
             TEST_MCP_SERVER_URL,
@@ -928,7 +1042,7 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, true, false, TEST_MCP_SERVER_URL).expect("apply uninstall"),
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, true, false, TEST_MCP_SERVER_URL).expect("apply uninstall"),
             1
         );
         assert!(!root.join("AGENTS.md").exists());
@@ -950,6 +1064,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -987,6 +1102,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             true,
             false,
             TEST_MCP_SERVER_URL,
@@ -1021,6 +1137,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpProject],
             false,
+            AgentsPolicy::Lightweight,
             true,
             false,
             TEST_MCP_SERVER_URL,
@@ -1055,6 +1172,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1066,7 +1184,7 @@ mod tests {
             Some("frigg-hook-diverged")
         );
         assert_eq!(
-            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
             1
         );
 
@@ -1084,6 +1202,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1109,6 +1228,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1120,7 +1240,7 @@ mod tests {
             Some("frigg-hook-diverged")
         );
         assert_eq!(
-            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
             1
         );
 
@@ -1138,6 +1258,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1158,6 +1279,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1165,7 +1287,7 @@ mod tests {
         .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
         assert_eq!(
-            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
             1
         );
 
@@ -1182,6 +1304,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1189,7 +1312,7 @@ mod tests {
         .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         assert_eq!(
-            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("reapply hook"),
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("reapply hook"),
             0
         );
         fs::remove_dir_all(root).expect("remove temp root");
@@ -1206,6 +1329,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             true,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1217,7 +1341,7 @@ mod tests {
                 .any(|entry| entry.target == AdoptTarget::Hook)
         );
 
-        apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply all with hook");
+        apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply all with hook");
         let value: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
         )
@@ -1244,6 +1368,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1251,7 +1376,7 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
             1
         );
         let value: serde_json::Value = serde_json::from_str(
@@ -1289,6 +1414,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             true,
             false,
             TEST_MCP_SERVER_URL,
@@ -1296,7 +1422,7 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, true, false, TEST_MCP_SERVER_URL)
+            apply_plan_entries(&plan, AgentsPolicy::Lightweight, true, false, TEST_MCP_SERVER_URL)
                 .expect("apply hook uninstall"),
             1
         );
@@ -1353,7 +1479,7 @@ mod tests {
             },
         ]);
 
-        let err = apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL)
+        let err = apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL)
             .expect_err("later invalid managed block should fail apply");
         assert!(
             err.to_string().contains("invalid nested or unmatched"),
@@ -1384,6 +1510,7 @@ mod tests {
             &config,
             &[AdoptTarget::Hook],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1419,6 +1546,7 @@ mod tests {
             &config,
             &[AdoptTarget::McpCursor],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
@@ -1462,7 +1590,7 @@ mod tests {
             reason: Some("test-forced-update".to_owned()),
         }]);
 
-        let err = apply_plan_entries(&plan, false, true, TEST_MCP_SERVER_URL)
+        let err = apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, true, TEST_MCP_SERVER_URL)
             .expect_err("symlinked target escape should fail before reading");
 
         let message = err.to_string();
@@ -1492,13 +1620,14 @@ mod tests {
             &config,
             &[AdoptTarget::Cursor],
             false,
+            AgentsPolicy::Lightweight,
             false,
             false,
             TEST_MCP_SERVER_URL,
         )
         .expect("build adopt plan");
 
-        let err = apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL)
+        let err = apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL)
             .expect_err("symlinked parent escape should fail");
 
         assert!(err.to_string().contains("escapes canonical workspace root"));

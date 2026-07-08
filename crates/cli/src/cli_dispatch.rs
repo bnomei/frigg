@@ -64,6 +64,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
             Command::Adopt {
                 target,
                 all,
+                policy,
                 uninstall,
                 check,
                 dry_run,
@@ -78,6 +79,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     &config,
                     target,
                     all,
+                    policy.into(),
                     uninstall,
                     check,
                     dry_run,

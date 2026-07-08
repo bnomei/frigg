@@ -1,13 +1,17 @@
 //! Canonical agent-facing Frigg directive text and render helpers.
 
 /// Version of the canonical Frigg-first directive contract.
-pub const FRIGG_DIRECTIVE_VERSION: &str = "2026-07-01";
+pub const FRIGG_DIRECTIVE_VERSION: &str = "2026-07-08";
 
-/// Canonical Frigg-first directive body shared by agent-facing surfaces.
+/// Canonical lightweight Frigg-first directive body shared by agent-facing surfaces.
 pub const FRIGG_FIRST_DIRECTIVE: &str = include_str!("../assets/frigg-directive.md");
 
+/// Opt-in expanded managed-policy body for `frigg adopt --policy expanded`.
+pub const FRIGG_FIRST_DIRECTIVE_EXPANDED: &str =
+    include_str!("../assets/frigg-directive-expanded.md");
+
 /// Opening marker for generated Frigg directive blocks.
-pub const MANAGED_BLOCK_START: &str = "<!-- frigg-directive:start version=2026-07-01 -->";
+pub const MANAGED_BLOCK_START: &str = "<!-- frigg-directive:start version=2026-07-08 -->";
 
 /// Closing marker for generated Frigg directive blocks.
 pub const MANAGED_BLOCK_END: &str = "<!-- frigg-directive:end -->";
@@ -15,15 +19,40 @@ pub const MANAGED_BLOCK_END: &str = "<!-- frigg-directive:end -->";
 /// Short nudge text suitable for hook output.
 pub const HOOK_NUDGE: &str = "Frigg is the default for code discovery, file listing, navigation, exact code search, and bounded source reads.";
 
-/// Renders the canonical directive inside stable managed-block markers.
+/// Policy body size for managed markdown adoption targets (`AGENTS.md`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentsPolicy {
+    /// Lightweight pointer: core Frigg-first rules plus skill reference.
+    #[default]
+    Lightweight,
+    /// Expanded compact routing policy without dumping the full skill.
+    Expanded,
+}
+
+impl AgentsPolicy {
+    /// Returns the directive body for this policy mode.
+    pub fn directive_body(self) -> &'static str {
+        match self {
+            Self::Lightweight => FRIGG_FIRST_DIRECTIVE,
+            Self::Expanded => FRIGG_FIRST_DIRECTIVE_EXPANDED,
+        }
+    }
+}
+
+/// Renders the default (lightweight) directive inside stable managed-block markers.
 pub fn render_managed_block() -> String {
+    render_managed_block_for_policy(AgentsPolicy::Lightweight)
+}
+
+/// Renders the directive for the selected adoption policy inside managed-block markers.
+pub fn render_managed_block_for_policy(policy: AgentsPolicy) -> String {
     format!(
         "{MANAGED_BLOCK_START}\n{}\n{MANAGED_BLOCK_END}",
-        FRIGG_FIRST_DIRECTIVE.trim()
+        policy.directive_body().trim()
     )
 }
 
-/// Composes MCP instructions from the canonical directive plus runtime-specific guidance.
+/// Composes MCP instructions from the canonical lightweight directive plus runtime-specific guidance.
 pub fn mcp_instructions(runtime_tail: &str) -> String {
     let directive = FRIGG_FIRST_DIRECTIVE.trim();
     let runtime_tail = runtime_tail.trim();
@@ -83,6 +112,44 @@ mod tests {
     }
 
     #[test]
+    fn render_managed_block_for_policy_selects_lightweight_or_expanded_body() {
+        let lightweight = render_managed_block_for_policy(AgentsPolicy::Lightweight);
+        let expanded = render_managed_block_for_policy(AgentsPolicy::Expanded);
+
+        assert_eq!(lightweight, render_managed_block());
+        assert!(lightweight.contains("frigg-first-code-search"));
+        assert!(!lightweight.contains("## Compact scenario picker"));
+        assert!(!lightweight.contains("Hard anti-patterns"));
+        assert!(!lightweight.contains("Known string or regex -> search_text"));
+
+        assert!(expanded.contains(FRIGG_FIRST_DIRECTIVE_EXPANDED.trim()));
+        assert!(expanded.contains("## Compact scenario picker"));
+        assert!(expanded.contains("Known string or regex -> search_text"));
+        assert!(expanded.contains("Shell → Frigg"));
+        assert!(!expanded.contains("BAD: hybrid -> grep"));
+        assert_core_sentences("expanded directive", &expanded);
+    }
+
+    #[test]
+    fn default_managed_block_is_lightweight_pointer() {
+        let rendered = render_managed_block();
+        assert_core_sentences("default managed block", &rendered);
+        assert!(rendered.contains("frigg-first-code-search"));
+        assert!(
+            !rendered.contains("## Compact scenario picker"),
+            "default AGENTS policy must not embed the expanded picker table"
+        );
+        assert!(
+            !rendered.contains("Hard anti-patterns"),
+            "default AGENTS policy must not dump skill hard anti-patterns"
+        );
+        assert!(
+            !rendered.contains("| Shell habit | Frigg call |"),
+            "default AGENTS policy must not embed the full shell translation card"
+        );
+    }
+
+    #[test]
     fn mcp_instructions_preserves_runtime_tail_after_directive() {
         let rendered =
             mcp_instructions("Runtime profile is `extended`.\nResource: `frigg://policy`.");
@@ -100,6 +167,7 @@ mod tests {
     #[test]
     fn agent_directive_core_sentences_are_in_canonical_asset() {
         assert_core_sentences("canonical directive", FRIGG_FIRST_DIRECTIVE);
+        assert_core_sentences("expanded directive asset", FRIGG_FIRST_DIRECTIVE_EXPANDED);
     }
 
     #[test]
@@ -125,5 +193,11 @@ mod tests {
             !openai_prompt.contains("Use shell tools for quick local inspection"),
             "OpenAI prompt should not return to shell-first code-search guidance"
         );
+    }
+
+    #[test]
+    fn managed_block_version_matches_directive_version_constant() {
+        assert!(MANAGED_BLOCK_START.contains(FRIGG_DIRECTIVE_VERSION));
+        assert_eq!(FRIGG_DIRECTIVE_VERSION, "2026-07-08");
     }
 }
