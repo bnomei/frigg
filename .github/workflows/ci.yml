@@ -77,8 +77,8 @@ jobs:
       # FUT-023 head-to-head requires local `rg` for the subprocess baseline.
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      # Release profile binds FUT-023 (competitive frigg_p95 <= 1.25× rg). Debug still runs
-      # contract scenarios locally; soft budget only in debug_assertions.
+      # Release profile binds FUT-023 (competitive frigg_p95 <= 1.5× rg noise budget).
+      # Debug still runs contract scenarios locally; soft 2s budget only under debug_assertions.
       - name: Run frigg-futura-bench (release)
         env:
           FUTURA_BENCH_OUT: ${{ runner.temp }}/futura-bench-summary.json

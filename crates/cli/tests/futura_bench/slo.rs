@@ -328,7 +328,7 @@ pub async fn run_search_text_latency(report: &Mutex<harness::BenchReport>, fixtu
         };
         let meets_exact = frigg.p95_ms <= rg.p95_ms;
         let meets_release = frigg.p95_ms <= rg.p95_ms * RELEASE_NOISE_RATIO;
-        // Snapshot Status tracks the **binding** release gate (≤1.25×), not flaky exact ≤.
+        // Snapshot Status tracks the **binding** release gate (≤1.5× noise budget), not flaky exact ≤.
         maybe_write_snapshot(&root, &rg, &frigg, meets_release)?;
 
         let comparison = serde_json::json!({
