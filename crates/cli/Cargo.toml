@@ -135,3 +135,7 @@ path = "tests/security.rs"
 [[test]]
 name = "tool_handlers"
 path = "tests/tool_handlers.rs"
+
+[[test]]
+name = "futura_bench"
+path = "tests/futura_bench.rs"

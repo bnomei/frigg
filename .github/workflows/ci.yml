@@ -60,6 +60,32 @@ jobs:
       - name: Run tests
         run: cargo test -p frigg --all-targets
 
+  futura-bench:
+    name: frigg-futura-bench (FUT-019)
+    needs: [fmt]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+      - name: Run frigg-futura-bench
+        env:
+          FUTURA_BENCH_OUT: ${{ runner.temp }}/futura-bench-summary.json
+        run: cargo test -p frigg --test futura_bench -- --nocapture
+      - name: Upload futura-bench summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futura-bench-summary
+          path: ${{ runner.temp }}/futura-bench-summary.json
+          if-no-files-found: ignore
+
   scorecard:
     name: Frigg Maintainability Scorecard
     needs: [fmt]
