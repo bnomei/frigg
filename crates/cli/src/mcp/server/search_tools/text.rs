@@ -170,12 +170,25 @@ impl FriggMcpServer {
                             found.repository_id = actual_repository_id.clone();
                         }
                     }
-                    let response = SearchTextResponse {
+                    let mut response = SearchTextResponse {
                         total_matches,
                         matches,
                         result_handle: None,
                         metadata,
+                        recovery: RecoveryFields::default(),
                     };
+                    // Compact-mode recovery: literal queries that look like regex often
+                    // zero because `pattern_type` defaults to literal (`FUT-016` / 2.1).
+                    if response.total_matches == 0 {
+                        let pattern_type_is_literal = !matches!(
+                            params_for_blocking.pattern_type,
+                            Some(SearchPatternType::Regex)
+                        );
+                        response.recovery = RecoveryFields::for_search_text_zero_hit(
+                            &params_for_blocking.query,
+                            pattern_type_is_literal,
+                        );
+                    }
                     let compact_metadata_seed = response.metadata.clone();
                     response_source_refs = json!({
                         "scoped_repository_ids": scoped_repository_ids.clone(),

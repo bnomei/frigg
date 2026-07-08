@@ -665,6 +665,7 @@ mod tests {
                     }],
                     result_handle: None,
                     metadata: None,
+                    recovery: RecoveryFields::default(),
                 },
                 &SearchTextParams {
                     query: "secret_token".to_owned(),
@@ -723,6 +724,7 @@ mod tests {
                     ],
                     result_handle: None,
                     metadata: None,
+                    recovery: RecoveryFields::default(),
                 },
                 &SearchTextParams {
                     query: "needle".to_owned(),
@@ -748,6 +750,7 @@ mod tests {
                     matches: vec![sample_text_match("repo-001", "src/a.rs")],
                     result_handle: None,
                     metadata: None,
+                    recovery: RecoveryFields::default(),
                 },
                 &SearchTextParams {
                     query: "needle".to_owned(),

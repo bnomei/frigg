@@ -206,6 +206,8 @@ mod navigation;
 #[cfg(feature = "playbook")]
 #[path = "types/playbook.rs"]
 mod playbook;
+#[path = "types/recovery.rs"]
+mod recovery;
 #[path = "types/repository.rs"]
 mod repository;
 #[path = "types/search.rs"]
@@ -216,6 +218,7 @@ mod workspace;
 pub use navigation::*;
 #[cfg(feature = "playbook")]
 pub use playbook::*;
+pub use recovery::*;
 pub use repository::*;
 pub use search::*;
 pub use workspace::*;

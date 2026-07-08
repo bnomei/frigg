@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{MetadataObject, ReadPresentationMode, ResponseMode};
+use super::{MetadataObject, ReadPresentationMode, RecoveryFields, ResponseMode};
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
     model::TextMatch,
@@ -175,6 +175,10 @@ pub struct SearchTextParams {
 }
 
 /// Response from `search_text` with optional `result_handle` for `read_match`.
+///
+/// Empty results may include flattened recovery fields (`error_code`,
+/// `correction_hint`, `related_tools`, `suggested_next`, optional
+/// `zero_hit_reason`) for compact-mode re-planning (`FUT-016`).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
     pub total_matches: usize,
@@ -183,6 +187,9 @@ pub struct SearchTextResponse {
     pub result_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchTextMetadata>,
+    /// Shared recovery composer fields; omitted when empty so existing clients stay compatible.
+    #[serde(flatten, default)]
+    pub recovery: RecoveryFields,
 }
 
 /// Lexical search backend mix reported in text and hybrid metadata.
