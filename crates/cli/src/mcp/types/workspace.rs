@@ -366,6 +366,10 @@ pub struct WorkspaceResponse {
     /// Tool classes that are fresh enough to trust without live-disk fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fresh_enough_for: Option<Vec<String>>,
+    /// Opt-in local routing stats when `FRIGG_ROUTING_STATS=1` (`FUT-024`).
+    /// Process-local only; never cloud telemetry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_stats: Option<crate::mcp::routing_stats::RoutingStatsSnapshot>,
 }
 
 /// Response from `workspace_attach` with storage and precise lifecycle state.
@@ -504,7 +508,8 @@ pub struct ReadFileParams {
     pub end_line: Option<usize>,
     /// Number of lines to return from `start_line`.
     pub line_count: Option<usize>,
-    /// Use `text` for source bytes only, or `json` for metadata and content fields.
+    /// Use `text` for source bytes only, `json` for metadata and content fields, or `citation`
+    /// for `LINE|content` text prefixes suitable for user-facing line citations.
     pub presentation_mode: Option<ReadPresentationMode>,
     /// Include context-efficiency metadata; requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
@@ -515,6 +520,12 @@ pub struct ReadFileParams {
 pub struct ReadFileResponse {
     pub repository_id: String,
     pub path: String,
+    /// First 1-based line of the returned window when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    /// Last 1-based line of the returned window when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
     pub bytes: usize,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -528,7 +539,8 @@ pub struct ReadMatchParams {
     pub match_id: String,
     pub before: Option<usize>,
     pub after: Option<usize>,
-    /// Use `text` for source bytes only, or `json` for metadata and content fields.
+    /// Use `text` for source bytes only, `json` for metadata and content fields, or `citation`
+    /// for `LINE|content` text prefixes suitable for user-facing line citations.
     pub presentation_mode: Option<ReadPresentationMode>,
     /// Include context-efficiency metadata; requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
@@ -636,6 +648,8 @@ mod tests {
         let value = serde_json::to_value(ReadFileResponse {
             repository_id: "repo-1".to_owned(),
             path: "src/lib.rs".to_owned(),
+            start_line: Some(1),
+            end_line: Some(1),
             bytes: 12,
             content: "hello world\n".to_owned(),
             context_efficiency: None,
@@ -643,6 +657,8 @@ mod tests {
         .expect("read_file response should serialize");
 
         assert!(value.get("context_efficiency").is_none());
+        assert_eq!(value.get("start_line").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(value.get("end_line").and_then(|v| v.as_u64()), Some(1));
     }
 
     #[test]
@@ -751,6 +767,7 @@ mod tests {
             changed_paths_since_snapshot: Vec::new(),
             watch_active: Some(false),
             fresh_enough_for: None,
+            routing_stats: None,
         };
         let value = serde_json::to_value(&response).expect("serialize workspace response");
         assert_eq!(value["recommended_action"], "adopt_repo");
@@ -758,5 +775,6 @@ mod tests {
         assert_eq!(value["watch_active"], false);
         assert!(value.get("changed_paths_since_snapshot").is_none());
         assert!(value.get("fresh_enough_for").is_none());
+        assert!(value.get("routing_stats").is_none());
     }
 }

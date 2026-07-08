@@ -184,6 +184,35 @@ impl FriggMcpServer {
             provenance_result: Result<(), ErrorData>,
         }
 
+        let has_symbol = params
+            .symbol
+            .as_ref()
+            .is_some_and(|symbol| !symbol.trim().is_empty());
+        let has_location = params
+            .path
+            .as_ref()
+            .is_some_and(|path| !path.trim().is_empty())
+            && params.line.is_some();
+        if !has_symbol && !has_location {
+            // Quick recovery for empty `{}` / missing symbol+path (`FUT-013`).
+            let response = GoToDefinitionResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                mode: NavigationMode::UnavailableNoPrecise,
+                target_selection: None,
+                metadata: None,
+                note: None,
+                location_warning: None,
+                recovery: RecoveryFields::empty_go_to_definition(),
+            };
+            return Ok(Json(self.present_go_to_definition_response(
+                response,
+                params.response_mode,
+            )));
+        }
+
         let execution_context =
             self.read_only_tool_execution_context("go_to_definition", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -311,6 +340,7 @@ impl FriggMcpServer {
                                             target_selection: None,
                                             metadata,
                                             note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 }));
                                     }
@@ -352,6 +382,7 @@ impl FriggMcpServer {
                                             target_selection: None,
                                             metadata,
                                             note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 }));
                                     }
@@ -427,6 +458,7 @@ impl FriggMcpServer {
                                             target_selection,
                                             metadata,
                                             note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 }));
                                     }
@@ -557,6 +589,7 @@ impl FriggMcpServer {
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                                 } else {
@@ -626,6 +659,7 @@ impl FriggMcpServer {
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                                 }
@@ -686,6 +720,7 @@ impl FriggMcpServer {
                                         target_selection,
                                         metadata,
                                         note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 }));
                                 }
@@ -815,6 +850,7 @@ impl FriggMcpServer {
                                     target_selection: target_selection.clone(),
                                     metadata,
                                     note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                             } else {
@@ -884,6 +920,7 @@ impl FriggMcpServer {
                                     target_selection: target_selection.clone(),
                                     metadata,
                                     note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                             }
@@ -946,6 +983,7 @@ impl FriggMcpServer {
                                             target_selection,
                                             metadata,
                                             note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 }));
                                     }
@@ -1072,6 +1110,7 @@ impl FriggMcpServer {
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                                 } else {
@@ -1141,6 +1180,7 @@ impl FriggMcpServer {
                                         target_selection: target_selection.clone(),
                                         metadata,
                                         note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                                 }
@@ -1213,6 +1253,7 @@ impl FriggMcpServer {
                                         target_selection: None,
                                         metadata,
                                         note,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 })
                                 } else {
@@ -1281,10 +1322,66 @@ impl FriggMcpServer {
             })
             .await?;
 
-        let result = execution.result.map(|Json(response)| {
+        let result = execution.result.map(|Json(mut response)| {
+            if !has_symbol && has_location && response.location_warning.is_none() {
+                response.location_warning =
+                    self.dense_location_warning_for_params(&params).or_else(|| {
+                        Some(
+                            "path+line without symbol can be ambiguous on dense lines; prefer symbol=<name> or pass column."
+                                .to_owned(),
+                        )
+                    });
+            }
             Json(self.present_go_to_definition_response(response, params.response_mode))
         });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
+    }
+
+    /// Soft warning when path+line without `symbol` sits on a dense/ambiguous line.
+    fn dense_location_warning_for_params(&self, params: &GoToDefinitionParams) -> Option<String> {
+        let path = params.path.as_deref()?;
+        let line = params.line?;
+        if line == 0 {
+            return None;
+        }
+        let read_params = ReadFileParams {
+            path: path.to_owned(),
+            repository_id: params.repository_id.clone(),
+            max_bytes: None,
+            start_line: Some(line),
+            end_line: Some(line),
+            line_count: None,
+            presentation_mode: None,
+            include_context_efficiency: None,
+        };
+        let (_, absolute_path, _) = self.resolve_file_path(&read_params).ok()?;
+        let source = fs::read_to_string(absolute_path).ok()?;
+        let line_text = source.lines().nth(line.saturating_sub(1))?;
+        let identifier_count = Self::count_identifier_tokens_on_line(line_text);
+        let dense_threshold = if params.column.is_some() { 5 } else { 3 };
+        if identifier_count < dense_threshold {
+            return None;
+        }
+        Some(format!(
+            "path+line without symbol looks dense/ambiguous ({identifier_count} identifier tokens on line {line}); pass symbol=<name> or a precise column."
+        ))
+    }
+
+    fn count_identifier_tokens_on_line(line: &str) -> usize {
+        let mut count = 0usize;
+        let mut in_ident = false;
+        for byte in line.bytes() {
+            let is_ident = byte.is_ascii_alphanumeric() || byte == b'_';
+            if is_ident {
+                if !in_ident {
+                    count = count.saturating_add(1);
+                    in_ident = true;
+                }
+            } else {
+                in_ident = false;
+            }
+        }
+        count
     }
 
     pub(in crate::mcp::server) async fn find_declarations_impl(
@@ -1382,7 +1479,9 @@ impl FriggMcpServer {
                                 target_selection,
                                 metadata,
                                 note,
-                            };
+                            
+            recovery: RecoveryFields::default(),
+        };
                             return Ok(Json(response));
                         }
                     };
@@ -1499,7 +1598,9 @@ impl FriggMcpServer {
                             target_selection: target_selection.clone(),
                             metadata,
                             note,
-                        };
+                        
+            recovery: RecoveryFields::default(),
+        };
                         return Ok(Json(response));
                     }
 
@@ -1564,7 +1665,9 @@ impl FriggMcpServer {
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    };
+                    
+            recovery: RecoveryFields::default(),
+        };
                     Ok(Json(response))
                 })();
 

@@ -143,6 +143,11 @@ impl FriggMcpServer {
                 Ok(Json(server.present_document_symbols_response(
                     DocumentSymbolsResponse {
                         symbols: outline,
+                        total_symbols: 0,
+                        returned: 0,
+                        truncated: false,
+                        resume_from: None,
+                        top_level_only: params_for_blocking.top_level_only.unwrap_or(true),
                         result_handle: None,
                         metadata,
                         note,

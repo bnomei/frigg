@@ -10,6 +10,7 @@ mod hash;
 mod hook;
 mod index;
 mod precise;
+mod stats;
 mod storage;
 
 pub(crate) use adopt::run_adopt_command_with_output;
@@ -20,6 +21,7 @@ pub(crate) use index::run_index_command_with_output;
 pub(crate) use precise::{
     CliPreciseGenerationCounters, precise_counter_fields, run_cli_precise_generation,
 };
+pub(crate) use stats::run_stats_command;
 pub(crate) use storage::{
     StorageMaintenanceCommand, report_storage_failure, run_storage_init_command_with_output,
     run_storage_maintenance_command_with_output,

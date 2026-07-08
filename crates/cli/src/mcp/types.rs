@@ -30,6 +30,7 @@ pub const PUBLIC_TOOL_NAMES: &[&str] = &[
     "document_symbols",
     "inspect_syntax_tree",
     "search_structural",
+    "impact_bundle",
     "playbook_run",
     "playbook_replay",
     "playbook_compose_citations",
@@ -55,6 +56,7 @@ pub const PUBLIC_TOOL_NAMES: &[&str] = &[
     "document_symbols",
     "inspect_syntax_tree",
     "search_structural",
+    "impact_bundle",
 ];
 /// Public tools declared read-only at the MCP hint layer. Frigg treats session state and ignored
 /// `.frigg/` state changes as read-only for this source-safety contract.
@@ -78,6 +80,7 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: &[&str] = &[
     "document_symbols",
     "inspect_syntax_tree",
     "search_structural",
+    "impact_bundle",
     "playbook_run",
     "playbook_replay",
     "playbook_compose_citations",
@@ -103,6 +106,7 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: &[&str] = &[
     "document_symbols",
     "inspect_syntax_tree",
     "search_structural",
+    "impact_bundle",
 ];
 /// Public tools whose behavior depends on per-session workspace attachment state.
 pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 1] = ["workspace"];
@@ -203,6 +207,9 @@ pub enum ReadPresentationMode {
     Text,
     /// Return a structured JSON object with explicit `content`, path, byte, and metadata fields.
     Json,
+    /// Return MCP text with `LINE|content` prefixes for citation-trained agents (`FUT-012`).
+    /// Line numbers are 1-based and align with the selected window's `start_line`.
+    Citation,
 }
 
 #[path = "types/navigation.rs"]

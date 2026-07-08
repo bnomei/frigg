@@ -320,6 +320,16 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Show local opt-in routing stats (`FUT-024`).
+    ///
+    /// Process-local counters only (no cloud). Enable recording on the MCP
+    /// process with `FRIGG_ROUTING_STATS=1`, then read this command or the
+    /// `frigg://stats/routing` MCP resource.
+    Stats {
+        /// Print the full JSON snapshot.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 /// Managed markdown policy size for `frigg adopt` agent-doc targets.

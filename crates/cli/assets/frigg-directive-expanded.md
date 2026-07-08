@@ -32,4 +32,10 @@ Git/build/generated/unindexed/Frigg missing -> shell fallback
 
 ## Positive fallback boundary
 
-Keep shell for git state and diffs, build/test output, generated or ignored paths, explicit live-disk checks, and when Frigg is unavailable. Do not run parallel shell grep on indexed source in the same turn as Frigg search.
+**Always shell or host tool:** git status/diff/commit, build/test/package output, generated or ignored dirs, explicit **path-scoped** live-disk checks after edits when freshness is unproven, Frigg unavailable.
+
+**Frigg or direct read:** manifests/config by path, project docs/fixtures when indexed (or direct read when known/ignored), newly created files before watch, ignored paths on disk.
+
+**Never shell as a trust patch:** indexed runtime source search while Frigg is registered; “confirming” a scoped Frigg zero without stale/unindexed reason; refs/call analysis when a symbol anchor exists.
+
+Do not run parallel shell grep on indexed source in the same turn as Frigg search. Prefer loopback **HTTP** (`frigg serve`) for shared/long-running clients; stdio is one local process owner.

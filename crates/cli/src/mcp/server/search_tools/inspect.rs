@@ -118,11 +118,20 @@ impl FriggMcpServer {
                     ));
                 }
                 if params_for_blocking.line.is_none() != params_for_blocking.column.is_none() {
+                    let recovery =
+                        RecoveryFields::missing_line_column_pair("inspect_syntax_tree");
                     return Err(Self::invalid_params(
-                        "line and column must be provided together",
+                        recovery
+                            .message
+                            .clone()
+                            .unwrap_or_else(|| "line and column must be provided together".to_owned()),
                         Some(json!({
+                            "error_code": recovery.error_code,
                             "line": params_for_blocking.line,
                             "column": params_for_blocking.column,
+                            "correction_hint": recovery.correction_hint,
+                            "related_tools": recovery.related_tools,
+                            "suggested_next": recovery.suggested_next,
                         })),
                     ));
                 }

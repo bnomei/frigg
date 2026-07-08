@@ -557,6 +557,7 @@ impl FriggMcpServer {
                         .recovery
                         .with_non_recursive_glob_hint(params.query.as_str(), glob);
             }
+            crate::mcp::routing_stats::record_zero_hit();
         } else if response.recovery.scope.is_none() {
             // Scope echo on non-empty hits when filters were applied (`FUT-009`).
             let mut scope = ZeroHitScope::default();
@@ -611,6 +612,14 @@ impl FriggMcpServer {
             Self::attach_handle_metadata(&response.result_handle, "search_hybrid");
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
+        if response.latency_class.is_none() {
+            // Hybrid is discovery-oriented and allowed slower than exact search (`FUT-017`).
+            response.latency_class = Some(if response.matches.is_empty() {
+                crate::mcp::types::LatencyClass::Warm
+            } else {
+                crate::mcp::types::LatencyClass::Cold
+            });
+        }
         // Compact discovery pivots — always present; never treat hybrid as proof (`FUT-010`).
         if response.ranking_note.is_none() {
             response.ranking_note =
@@ -645,11 +654,13 @@ impl FriggMcpServer {
                 index: None,
                 reason_override: None,
             });
+            crate::mcp::routing_stats::record_zero_hit();
         } else if !response.matches.is_empty() && response.recovery.suggested_next.is_empty() {
             response.recovery = RecoveryFields::hybrid_discovery_exact_pivot(
                 query.unwrap_or(""),
                 response.best_pivot_path.as_deref(),
             );
+            crate::mcp::routing_stats::record_recovery_issued();
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = response.metadata.and_then(|mut metadata| {
@@ -707,6 +718,21 @@ impl FriggMcpServer {
             Self::attach_handle_metadata(&response.result_handle, "search_symbol");
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
+        if response.latency_class.is_none() {
+            // Runtime-first known-name lookup is the hot symbol path (`FUT-017`).
+            let scoped = params.is_some_and(|params| {
+                params.path_regex.is_some()
+                    || params.repository_id.is_some()
+                    || params
+                        .path_class
+                        .is_none_or(|class| class != SearchSymbolPathClass::Any)
+            });
+            response.latency_class = Some(if scoped {
+                crate::mcp::types::LatencyClass::Hot
+            } else {
+                crate::mcp::types::LatencyClass::Warm
+            });
+        }
         if response.matches.is_empty() && response.recovery.is_empty() {
             let query = params.map(|params| params.query.as_str());
             let mut scope = ZeroHitScope::default();
@@ -754,6 +780,7 @@ impl FriggMcpServer {
                     reason_override: None,
                 })
             };
+            crate::mcp::routing_stats::record_zero_hit();
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -843,6 +870,22 @@ impl FriggMcpServer {
             "find_declarations",
             &mut response.matches,
         );
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            let query = response
+                .target_selection
+                .as_ref()
+                .map(|selection| selection.symbol_query.as_str());
+            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                .then_some(ZeroHitReason::PreciseGraphUnavailable);
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "find_declarations",
+                query,
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override,
+            });
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -859,6 +902,22 @@ impl FriggMcpServer {
             "find_implementations",
             &mut response.matches,
         );
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            let query = response
+                .target_selection
+                .as_ref()
+                .map(|selection| selection.symbol_query.as_str());
+            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                .then_some(ZeroHitReason::PreciseGraphUnavailable);
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "find_implementations",
+                query,
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override,
+            });
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -875,6 +934,22 @@ impl FriggMcpServer {
             "incoming_calls",
             &mut response.matches,
         );
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            let query = response
+                .target_selection
+                .as_ref()
+                .map(|selection| selection.symbol_query.as_str());
+            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                .then_some(ZeroHitReason::PreciseGraphUnavailable);
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "incoming_calls",
+                query,
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override,
+            });
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -891,6 +966,22 @@ impl FriggMcpServer {
             "outgoing_calls",
             &mut response.matches,
         );
+        if response.matches.is_empty() && response.recovery.is_empty() {
+            let query = response
+                .target_selection
+                .as_ref()
+                .map(|selection| selection.symbol_query.as_str());
+            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                .then_some(ZeroHitReason::PreciseGraphUnavailable);
+            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                tool: "outgoing_calls",
+                query,
+                pattern_type_is_literal: None,
+                scope: None,
+                index: None,
+                reason_override,
+            });
+        }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
             response.note = None;
@@ -903,11 +994,41 @@ impl FriggMcpServer {
         mut response: DocumentSymbolsResponse,
         params: &DocumentSymbolsParams,
     ) -> DocumentSymbolsResponse {
-        if params.top_level_only == Some(true) {
+        const DEFAULT_DOCUMENT_SYMBOLS_LIMIT: usize = 200;
+        const MAX_DOCUMENT_SYMBOLS_LIMIT: usize = 1000;
+
+        // Default top_level_only=true (`FUT-013` outline).
+        let top_level_only = params.top_level_only.unwrap_or(true);
+        response.top_level_only = top_level_only;
+        if top_level_only {
             for symbol in &mut response.symbols {
                 symbol.children.clear();
             }
         }
+
+        let total_symbols = response.symbols.len();
+        response.total_symbols = total_symbols;
+        let resume_offset = params.resume_from.unwrap_or(0);
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_DOCUMENT_SYMBOLS_LIMIT)
+            .clamp(1, MAX_DOCUMENT_SYMBOLS_LIMIT);
+        let page = if resume_offset >= total_symbols {
+            Vec::new()
+        } else {
+            response
+                .symbols
+                .into_iter()
+                .skip(resume_offset)
+                .take(limit.saturating_add(1))
+                .collect::<Vec<_>>()
+        };
+        let truncated = page.len() > limit;
+        response.symbols = page.into_iter().take(limit).collect();
+        response.returned = response.symbols.len();
+        response.truncated = truncated;
+        response.resume_from = truncated.then_some(resume_offset.saturating_add(response.returned));
+
         response.result_handle = self
             .assign_result_handle_for_document_symbols("document_symbols", &mut response.symbols);
         if !Self::should_return_full_response(params.response_mode) {
@@ -1187,8 +1308,9 @@ mod tests {
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
-                    ranking_note: None,
-                    best_pivot_path: None,
+                ranking_note: None,
+                best_pivot_path: None,
+                latency_class: None,
                 metadata: None,
                 recovery: RecoveryFields::default(),
             },
@@ -1205,6 +1327,7 @@ mod tests {
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
+                latency_class: None,
                 metadata: None,
                 note: None,
                 recovery: RecoveryFields::default(),
@@ -1258,6 +1381,7 @@ mod tests {
                 target_selection: None,
                 metadata: None,
                 note: None,
+                location_warning: None,
                 recovery: RecoveryFields::default(),
             },
             None,

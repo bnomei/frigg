@@ -204,6 +204,10 @@ impl FriggMcpServer {
         context_saved_percent: Option<f64>,
     ) -> Result<T, ErrorData> {
         let duration_ms = Self::context_efficiency_elapsed_ms(started_at);
+        crate::mcp::routing_stats::record_tool_call(tool_name);
+        if tool_name == "workspace" || tool_name == "workspace_current" {
+            crate::mcp::routing_stats::record_workspace_gate_use();
+        }
         self.emit_tool_call_display_event(tool_name, duration_ms, &result, context_saved_percent);
         self.finalize_with_provenance(tool_name, result, provenance_result)
     }

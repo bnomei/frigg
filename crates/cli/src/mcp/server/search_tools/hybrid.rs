@@ -349,6 +349,7 @@ impl FriggMcpServer {
                             "discovery_only; confirm with exact search".to_owned(),
                         ),
                         best_pivot_path,
+                        latency_class: None,
                         metadata,
                         recovery,
                     };

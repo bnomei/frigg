@@ -313,11 +313,17 @@ Text mode returns raw source (no line prefixes) — fine for internal proof.
 | --- | --- |
 | **Trigger** | User-facing reply needs ` ```startLine:endLine:path``` ` |
 | **Habit** | Cursor/host Read (`LINE\|content`) |
-| **Frigg path** | `read_file(..., presentation_mode=json)` for line metadata; `presentation_mode=citation` when available |
-| **Fallback** | Host Read OK when line-prefixed citation is required and Frigg citation mode is absent |
-| **Proof** | Stable `start_line`/`end_line` in the citation |
+| **Frigg path** | `read_file` / `read_match` with `presentation_mode=json` for `start_line`/`end_line`; or `presentation_mode=citation` for `LINE\|content` text |
+| **Fallback** | Host Read only when Frigg is unavailable |
+| **Proof** | Stable `start_line`/`end_line` (json) or line-prefixed text (citation) |
 | **Done** | Citation has line metadata without abandoning Frigg for every internal read |
 | **Product support** | json + citation presentation modes, evidence packets |
+
+```text
+Proof (internal): presentation_mode=text (default) — raw source, no prefixes.
+Citation (user-facing): presentation_mode=citation → "306|pub fn catalog_entries..."
+Or: presentation_mode=json → use start_line/end_line + path in ```start:end:path``` fences.
+```
 
 ### Session gate
 
@@ -359,10 +365,19 @@ Verify live `tools/list` before calling schema-only or extended-only tools.
 | **Trigger** | Edited or created files; need index freshness for re-search |
 | **Habit** | Bypass index with Read or repo-wide grep |
 | **Frigg path** | `workspace()` → if ready for path, Frigg search; if stale/unknown, **targeted** live read of **touched paths only** |
-| **Fallback** | Live-disk for touched files only — never license for repo-wide grep |
+| **Fallback** | Live-disk for **touched paths only** (`changed_paths_since_snapshot` / known edit paths) — **never** a license for repo-wide shell grep |
 | **Proof** | Frigg after watch; else direct read of edited paths |
 | **Done** | Freshness visible; no default repo-wide shell verification |
-| **Product support** | Dirty/changed paths, hot-path reindex, `recommended_action` |
+| **Product support** | `working_tree_dirty`, `changed_paths_since_snapshot`, hot-path reindex, `recommended_action=use_live_disk_for_touched_files` (path-scoped) |
+
+```text
+1. workspace() after edits
+2. If recommended_action=ready (or fresh_enough_for includes search_*) → Frigg search
+3. If use_live_disk_for_touched_files → read_file / host Read on **those paths only**
+4. If reindex / wait_watch → wait or reindex; do not "verify" with whole-repo rg
+BAD: workspace dirty → rg -n across the repo
+GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path reindex
+```
 
 ### Bug trace
 
@@ -436,7 +451,32 @@ Trust order for review:
 4. `incoming_calls` — call-flow hint  
 5. `outgoing_calls` — provisional until body proof  
 
-Evidence packet shape (multi-claim answers): each claim carries tool, path, start/end line, and optional `match_id` / `result_handle`.
+Evidence packet shape (multi-claim answers) — every review/security finding needs path/line witnesses:
+
+```json
+{
+  "claims": [
+    {
+      "claim": "catalog_entries registers callable operations",
+      "tool": "search_symbol",
+      "path": "src/catalog/mod.rs",
+      "start_line": 40,
+      "end_line": 72,
+      "match_id": "symbols:m1",
+      "result_handle": "..."
+    },
+    {
+      "claim": "caller reaches catalog_entries from the HTTP surface",
+      "tool": "incoming_calls",
+      "path": "src/http/routes.rs",
+      "start_line": 88,
+      "end_line": 110,
+      "match_id": "nav:m2",
+      "result_handle": "..."
+    }
+  ]
+}
+```
 
 ### Security sweep
 

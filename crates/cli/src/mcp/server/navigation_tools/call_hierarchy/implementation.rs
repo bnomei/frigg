@@ -95,7 +95,9 @@ impl FriggMcpServer {
                             target_selection,
                             metadata,
                             note,
-                        }));
+                        
+            recovery: RecoveryFields::default(),
+        }));
                     }
                 };
                 target_selection_candidate_count = target_resolution.candidate_count;
@@ -222,7 +224,9 @@ impl FriggMcpServer {
                     target_selection: target_selection.clone(),
                     metadata,
                     note,
-                }))
+                
+            recovery: RecoveryFields::default(),
+        }))
             })()
         });
         execution.await?.map(|Json(response)| {
@@ -320,7 +324,9 @@ impl FriggMcpServer {
                             target_selection,
                             metadata,
                             note,
-                        }));
+                        
+            recovery: RecoveryFields::default(),
+        }));
                     }
                 };
                 target_selection_candidate_count = target_resolution.candidate_count;
@@ -429,7 +435,9 @@ impl FriggMcpServer {
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    }));
+                    
+            recovery: RecoveryFields::default(),
+        }));
                 }
 
                 if precise_coverage == PreciseCoverageMode::Full {
@@ -474,7 +482,9 @@ impl FriggMcpServer {
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    }));
+                    
+            recovery: RecoveryFields::default(),
+        }));
                 }
 
                 let (target_container, target_signature) = Self::symbol_context_for_stable_id(
@@ -576,7 +586,9 @@ impl FriggMcpServer {
                     target_selection: target_selection.clone(),
                     metadata,
                     note,
-                }))
+                
+            recovery: RecoveryFields::default(),
+        }))
             })()
         });
         execution.await?.map(|Json(response)| {
@@ -674,7 +686,9 @@ impl FriggMcpServer {
                             target_selection,
                             metadata,
                             note,
-                        }));
+                        
+            recovery: RecoveryFields::default(),
+        }));
                     }
                 };
                 target_selection_candidate_count = target_resolution.candidate_count;
@@ -775,7 +789,9 @@ impl FriggMcpServer {
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    }));
+                    
+            recovery: RecoveryFields::default(),
+        }));
                 }
 
                 if precise_coverage == PreciseCoverageMode::Full {
@@ -821,7 +837,9 @@ impl FriggMcpServer {
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    }));
+                    
+            recovery: RecoveryFields::default(),
+        }));
                 }
 
                 let (source_container, source_signature) = Self::symbol_context_for_stable_id(
@@ -940,7 +958,9 @@ impl FriggMcpServer {
                     target_selection: target_selection.clone(),
                     metadata,
                     note,
-                }))
+                
+            recovery: RecoveryFields::default(),
+        }))
             })()
         });
         execution.await?.map(|Json(response)| {

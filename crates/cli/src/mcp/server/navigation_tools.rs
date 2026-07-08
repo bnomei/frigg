@@ -9,5 +9,6 @@ use crate::domain::model::ReferenceMatchKind;
 use crate::mcp::types::NavigationMode;
 
 mod call_hierarchy;
+mod impact_bundle;
 mod location;
 mod references;

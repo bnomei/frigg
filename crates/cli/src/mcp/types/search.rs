@@ -608,6 +608,10 @@ pub struct SearchHybridResponse {
     /// Best live-navigation pivot path when available (`FUT-010`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_pivot_path: Option<String>,
+    /// Approximate search latency class for agent tool-cost guidance (`FUT-017`).
+    /// Hybrid is typically `warm` or `cold` (discovery path; allowed slower than exact).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_class: Option<LatencyClass>,
     /// Diagnostics metadata; compact mode omits it unless context-efficiency is requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchHybridMetadata>,
@@ -646,6 +650,10 @@ pub struct SearchSymbolResponse {
     /// Handle lifetime. Session-scoped handles use `"session"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handle_expires: Option<String>,
+    /// Approximate search latency class for agent tool-cost guidance (`FUT-017`).
+    /// Known-name symbol lookup is typically `hot` when scoped/runtime-first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_class: Option<LatencyClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "super::metadata_object_field_schema")]
     pub metadata: Option<MetadataObject>,

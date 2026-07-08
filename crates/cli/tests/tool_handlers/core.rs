@@ -153,6 +153,112 @@ async fn core_read_file_supports_line_range_slicing() {
     assert_eq!(response.path, "src/lib.rs");
     assert_eq!(response.content, "    \"hello from fixture\"");
     assert_eq!(response.bytes, response.content.len());
+    assert_eq!(response.start_line, Some(2));
+    assert_eq!(response.end_line, Some(2));
+}
+
+#[tokio::test]
+async fn core_read_file_citation_mode_emits_line_pipe_content() {
+    let server = server_for_fixture().await;
+    let result = server
+        .read_file(Parameters(ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            max_bytes: Some(256),
+            start_line: Some(1),
+            end_line: Some(2),
+            line_count: None,
+            presentation_mode: Some(ReadPresentationMode::Citation),
+            include_context_efficiency: None,
+        }))
+        .await
+        .expect("citation-mode read_file should succeed");
+
+    assert!(
+        result.structured_content.is_none(),
+        "citation-mode read_file must not include structured_content"
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.starts_with("1|"),
+        "citation mode should prefix first line: {text:?}"
+    );
+    assert!(
+        text.contains("2|"),
+        "citation mode should include second line prefix: {text:?}"
+    );
+    assert!(
+        !text.contains("path:"),
+        "citation mode should not prepend path headers"
+    );
+}
+
+#[tokio::test]
+async fn core_read_match_content_parity_with_equivalent_read_file_window() {
+    let server = server_for_fixture().await;
+    let search = server
+        .search_text(Parameters(SearchTextParams {
+            query: "hello from fixture".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some("^src/".to_owned()),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("search_text should find fixture string")
+        .0;
+    let hit = search
+        .matches
+        .first()
+        .expect("search should return at least one match");
+    let result_handle = search
+        .result_handle
+        .clone()
+        .expect("search should return result_handle");
+    let match_id = hit
+        .match_id
+        .clone()
+        .expect("search match should expose match_id");
+    let before = 10usize;
+    let after = 10usize;
+    let line_start = hit.line.saturating_sub(before).max(1);
+    let line_end = hit.line.saturating_add(after);
+
+    let read_match: ReadMatchResponse = structured_tool_result(
+        server
+            .read_match(Parameters(ReadMatchParams {
+                result_handle: result_handle.clone(),
+                match_id: match_id.clone(),
+                before: Some(before),
+                after: Some(after),
+                presentation_mode: Some(ReadPresentationMode::Json),
+                include_context_efficiency: None,
+            }))
+            .await
+            .expect("read_match should reopen search hit"),
+    );
+    let read_file: ReadFileResponse = structured_tool_result(
+        server
+            .read_file(Parameters(ReadFileParams {
+                path: hit.path.clone(),
+                repository_id: Some(hit.repository_id.clone()),
+                max_bytes: None,
+                start_line: Some(line_start),
+                end_line: Some(line_end),
+                line_count: None,
+                presentation_mode: Some(ReadPresentationMode::Json),
+                include_context_efficiency: None,
+            }))
+            .await
+            .expect("equivalent read_file window should succeed"),
+    );
+
+    assert_eq!(read_match.content, read_file.content);
+    assert_eq!(read_match.bytes, read_file.bytes);
+    assert_eq!(read_match.start_line, read_file.start_line.unwrap_or(line_start));
+    assert_eq!(read_match.end_line, read_file.end_line.unwrap_or(line_end));
+    assert_eq!(read_match.path, read_file.path);
 }
 
 #[tokio::test]

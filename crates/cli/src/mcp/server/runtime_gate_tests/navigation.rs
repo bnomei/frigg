@@ -826,6 +826,8 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
+        
+            recovery: RecoveryFields::default(),
         },
         None,
     );
@@ -843,6 +845,8 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
+        
+            recovery: RecoveryFields::default(),
         },
         None,
     );
@@ -867,6 +871,8 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
+        
+            recovery: RecoveryFields::default(),
         },
         None,
     );
@@ -898,6 +904,8 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
+        
+            recovery: RecoveryFields::default(),
         },
         None,
     );

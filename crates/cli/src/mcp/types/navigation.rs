@@ -87,6 +87,7 @@ pub struct FindReferencesResponse {
 /// Parameters for `go_to_definition`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionParams {
+    /// Recommended: symbol name to resolve. Prefer this over path+line alone on dense lines.
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
     pub path: Option<String>,
@@ -141,6 +142,9 @@ pub struct GoToDefinitionResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Soft warning when path+line without `symbol` looks dense/ambiguous (`FUT-013`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_warning: Option<String>,
     /// Flattened recovery fields on empty definition results (`FUT-006` / `FUT-016`).
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
@@ -175,6 +179,9 @@ pub struct FindDeclarationsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty declaration results (`FUT-013`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
 }
 
 /// Parameters for `find_implementations`.
@@ -230,6 +237,9 @@ pub struct FindImplementationsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty implementation results (`FUT-013`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
 }
 
 /// Parameters for `incoming_calls`.
@@ -311,6 +321,9 @@ pub struct IncomingCallsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty caller results (`FUT-013`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
 }
 
 /// Response from `outgoing_calls`.
@@ -328,6 +341,9 @@ pub struct OutgoingCallsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Flattened recovery fields on empty callee results (`FUT-013`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
 }
 
 /// Availability note when call-hierarchy results depend on precise coverage.
@@ -345,8 +361,12 @@ pub struct DocumentSymbolsParams {
     pub repository_id: Option<String>,
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
-    /// Return only top-level symbols when true.
+    /// Return only top-level symbols when true. Defaults to `true` when omitted.
     pub top_level_only: Option<bool>,
+    /// Max outline rows to return. Omit for the default bounded page.
+    pub limit: Option<usize>,
+    /// Continuation offset returned as `resume_from` when the outline is truncated.
+    pub resume_from: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -378,6 +398,17 @@ pub struct DocumentSymbolItem {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsResponse {
     pub symbols: Vec<DocumentSymbolItem>,
+    /// Total outline symbols before pagination (after top_level_only filtering).
+    pub total_symbols: usize,
+    /// Number of symbols returned in this page.
+    pub returned: usize,
+    /// True when more outline rows remain after this page.
+    pub truncated: bool,
+    /// Continuation offset for the next page when `truncated` is true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<usize>,
+    /// Echo of the effective top_level_only setting.
+    pub top_level_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -429,6 +460,69 @@ pub struct InspectSyntaxTreeResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Parameters for optional `impact_bundle` convenience composition (`FUT-025`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ImpactBundleParams {
+    /// Symbol name to resolve impact for (required).
+    pub symbol: String,
+    /// Path class for the initial symbol lookup. Defaults to `runtime`.
+    pub path_class: Option<crate::mcp::types::SearchSymbolPathClass>,
+    /// Optional repository scope.
+    pub repository_id: Option<String>,
+    /// Force include implementations even when kind is not trait/interface.
+    pub include_implementations: Option<bool>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
+}
+
+/// Composed impact response: symbol hits + references + callers (+ optional impls).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ImpactBundleResponse {
+    pub symbol: String,
+    pub path_class: String,
+    pub symbols: Vec<crate::domain::model::SymbolMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbols_result_handle: Option<String>,
+    pub references: Vec<crate::domain::model::ReferenceMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references_result_handle: Option<String>,
+    pub references_mode: NavigationMode,
+    pub incoming_calls: Vec<CallHierarchyMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming_calls_result_handle: Option<String>,
+    pub incoming_calls_mode: NavigationMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementations: Vec<ImplementationMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementations_result_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementations_mode: Option<NavigationMode>,
+    pub implementations_included: bool,
+    /// Suggested next steps for tests pass + proof reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_next: Vec<super::SuggestedNext>,
+    /// Flattened recovery when the symbol is missing or impact is empty (`FUT-025`).
+    #[serde(flatten, default)]
+    pub recovery: super::RecoveryFields,
+}
+
+/// Optional evidence-packet claim witness shape for review/security (`FUT-022`).
+///
+/// Agents may assemble multi-claim packets from search/nav/read results using this shape.
+/// Not a live MCP tool response — documentation and optional typing helper only.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EvidencePacketClaim {
+    pub claim: String,
+    pub tool: String,
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
 }
 
 /// Whether `search_structural` returns grouped match rows or raw capture rows.

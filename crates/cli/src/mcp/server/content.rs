@@ -198,9 +198,16 @@ impl FriggMcpServer {
                             ));
                         }
                         let content = snapshot.read_file_content();
+                        let total_lines = if content.is_empty() {
+                            0
+                        } else {
+                            content.lines().count().max(1)
+                        };
                         let mut response = ReadFileResponse {
                             repository_id,
                             path: display_path,
+                            start_line: Some(1),
+                            end_line: Some(total_lines.max(1)),
                             bytes: post_read_bytes,
                             content,
                             context_efficiency: None,
@@ -280,6 +287,8 @@ impl FriggMcpServer {
                     let mut response = ReadFileResponse {
                         repository_id,
                         path: display_path,
+                        start_line: Some(start_line),
+                        end_line: Some(effective_end),
                         bytes: sliced_bytes,
                         content: sliced_content,
                         context_efficiency: None,
@@ -380,6 +389,7 @@ impl FriggMcpServer {
                     Some(params.result_handle.as_str()),
                     Some(params.match_id.as_str()),
                 );
+                crate::mcp::routing_stats::record_handle_failure();
                 let message = recovery
                     .message
                     .clone()
@@ -411,6 +421,7 @@ impl FriggMcpServer {
                     Some(params.result_handle.as_str()),
                     Some(params.match_id.as_str()),
                 );
+                crate::mcp::routing_stats::record_handle_failure();
                 let message = if foreign_handle_has_match {
                     format!(
                         "match_id {:?} does not belong to result_handle {:?} (belongs to another handle{}).",
@@ -1017,21 +1028,22 @@ impl FriggMcpServer {
     ) -> Result<ReadPresentationMode, ErrorData> {
         match params.presentation_mode {
             Some(ReadPresentationMode::Json) => Ok(ReadPresentationMode::Json),
-            Some(ReadPresentationMode::Text)
+            Some(mode @ (ReadPresentationMode::Text | ReadPresentationMode::Citation))
                 if matches!(
                     params.operation,
                     ExploreOperation::Probe | ExploreOperation::Refine
                 ) =>
             {
                 Err(Self::invalid_params(
-                    "presentation_mode=text is only supported for zoom",
+                    "presentation_mode=text and presentation_mode=citation are only supported for zoom",
                     Some(json!({
                         "operation": params.operation,
-                        "presentation_mode": ReadPresentationMode::Text,
+                        "presentation_mode": mode,
                     })),
                 ))
             }
             Some(ReadPresentationMode::Text) => Ok(ReadPresentationMode::Text),
+            Some(ReadPresentationMode::Citation) => Ok(ReadPresentationMode::Citation),
             None if params.operation == ExploreOperation::Zoom => Ok(ReadPresentationMode::Text),
             None => Ok(ReadPresentationMode::Json),
         }
@@ -1048,6 +1060,14 @@ impl FriggMcpServer {
                 Self::reject_text_context_efficiency(params.include_context_efficiency)?;
                 Ok(Self::text_read_surface_result(response.content))
             }
+            ReadPresentationMode::Citation => {
+                Self::reject_text_context_efficiency(params.include_context_efficiency)?;
+                let start_line = response.start_line.unwrap_or(1);
+                Ok(Self::text_read_surface_result(Self::format_citation_text(
+                    start_line,
+                    &response.content,
+                )))
+            }
         }
     }
 
@@ -1062,6 +1082,13 @@ impl FriggMcpServer {
                 Self::reject_text_context_efficiency(params.include_context_efficiency)?;
                 Ok(Self::text_read_surface_result(response.content))
             }
+            ReadPresentationMode::Citation => {
+                Self::reject_text_context_efficiency(params.include_context_efficiency)?;
+                Ok(Self::text_read_surface_result(Self::format_citation_text(
+                    response.start_line,
+                    &response.content,
+                )))
+            }
         }
     }
 
@@ -1070,9 +1097,10 @@ impl FriggMcpServer {
         params: &ExploreParams,
         response: ExploreResponse,
     ) -> Result<CallToolResult, ErrorData> {
-        match Self::explore_presentation_mode(params)? {
+        let mode = Self::explore_presentation_mode(params)?;
+        match mode {
             ReadPresentationMode::Json => Self::structured_tool_result(&response),
-            ReadPresentationMode::Text => {
+            ReadPresentationMode::Text | ReadPresentationMode::Citation => {
                 Self::reject_text_context_efficiency(params.include_context_efficiency)?;
                 let Some(window) = response.window else {
                     return Err(Self::internal(
@@ -1083,9 +1111,34 @@ impl FriggMcpServer {
                         })),
                     ));
                 };
-                Ok(Self::text_read_surface_result(window.content))
+                let content = if mode == ReadPresentationMode::Citation {
+                    Self::format_citation_text(window.start_line, &window.content)
+                } else {
+                    window.content
+                };
+                Ok(Self::text_read_surface_result(content))
             }
         }
+    }
+
+    /// Format source as `LINE|content` lines for citation-trained agents (`FUT-012`).
+    pub(super) fn format_citation_text(start_line: usize, content: &str) -> String {
+        if content.is_empty() {
+            return String::new();
+        }
+        let ends_with_newline = content.ends_with('\n');
+        let mut out = String::with_capacity(content.len().saturating_add(content.len() / 8 + 8));
+        for (offset, line) in content.lines().enumerate() {
+            let line_no = start_line.saturating_add(offset);
+            out.push_str(&line_no.to_string());
+            out.push('|');
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !ends_with_newline && out.ends_with('\n') {
+            out.pop();
+        }
+        out
     }
 
     fn read_surface_context_efficiency_metadata(
@@ -1180,7 +1233,7 @@ impl FriggMcpServer {
                 "include_context_efficiency requires presentation_mode=json",
                 Some(json!({
                     "include_context_efficiency": true,
-                    "presentation_mode": ReadPresentationMode::Text,
+                    "presentation_mode": "text_or_citation",
                     "supported_presentation_mode": ReadPresentationMode::Json,
                 })),
             ));

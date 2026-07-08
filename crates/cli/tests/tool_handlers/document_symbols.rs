@@ -12,6 +12,7 @@ async fn document_symbols_returns_outline_for_supported_files() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -103,6 +104,7 @@ async fn document_symbols_returns_php_metadata_evidence_counts() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -152,6 +154,7 @@ async fn document_symbols_opt_in_returns_follow_up_structural() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: Some(true),
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -195,6 +198,7 @@ async fn document_symbols_returns_typescript_outline_for_tsx_files() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -250,6 +254,7 @@ async fn document_symbols_returns_python_outline() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -346,6 +351,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -371,6 +377,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -403,6 +410,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -435,6 +443,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -460,6 +469,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -491,6 +501,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -537,6 +548,7 @@ async fn document_symbols_returns_hierarchy_for_nested_symbols() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -567,12 +579,13 @@ async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children
     .expect("failed to seed temporary fixture source");
     let server = server_for_workspace_root(&workspace_root).await;
 
+    // Omitting top_level_only must default to true.
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
-            top_level_only: Some(true),
+            top_level_only: None,
             ..Default::default()
         }))
         .await
@@ -581,6 +594,10 @@ async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children
 
     assert_eq!(response.symbols.len(), 1);
     assert_eq!(response.symbols[0].symbol, "inner");
+    assert!(response.top_level_only, "top_level_only should default true");
+    assert_eq!(response.total_symbols, 1);
+    assert_eq!(response.returned, 1);
+    assert!(!response.truncated);
     assert!(
         response.symbols[0].children.is_empty(),
         "top_level_only should suppress child symbol trees"
@@ -595,6 +612,82 @@ async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children
         response.symbols[0].match_id.is_some(),
         "compact document_symbols should expose match ids"
     );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn document_symbols_pagination_is_honest_about_truncation() {
+    let workspace_root = temp_workspace_root("document-symbols-pagination");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let mut source = String::new();
+    for index in 0..6 {
+        source.push_str(&format!("pub fn item_{index}() {{}}\n"));
+    }
+    fs::write(src_root.join("lib.rs"), source).expect("failed to seed fixture");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let first = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(2),
+            resume_from: None,
+            top_level_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("first page should succeed")
+        .0;
+
+    assert_eq!(first.total_symbols, 6);
+    assert_eq!(first.returned, 2);
+    assert!(first.truncated, "first page must report truncated=true");
+    assert_eq!(first.resume_from, Some(2));
+    assert_eq!(first.symbols.len(), 2);
+    assert_eq!(first.symbols[0].symbol, "item_0");
+    assert_eq!(first.symbols[1].symbol, "item_1");
+
+    let second = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(2),
+            resume_from: first.resume_from,
+            top_level_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("second page should succeed")
+        .0;
+
+    assert_eq!(second.total_symbols, 6);
+    assert_eq!(second.returned, 2);
+    assert!(second.truncated);
+    assert_eq!(second.resume_from, Some(4));
+    assert_eq!(second.symbols[0].symbol, "item_2");
+    assert_eq!(second.symbols[1].symbol, "item_3");
+
+    let last = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(2),
+            resume_from: second.resume_from,
+            top_level_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("last page should succeed")
+        .0;
+
+    assert_eq!(last.total_symbols, 6);
+    assert_eq!(last.returned, 2);
+    assert!(!last.truncated, "final page must not claim truncation");
+    assert!(last.resume_from.is_none());
+    assert_eq!(last.symbols[0].symbol, "item_4");
+    assert_eq!(last.symbols[1].symbol, "item_5");
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -623,6 +716,7 @@ async fn document_symbols_returns_blade_outline() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -689,6 +783,7 @@ async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await
@@ -736,6 +831,7 @@ async fn document_symbols_rejects_over_budget_source_with_typed_error() {
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
             response_mode: Some(ResponseMode::Full),
+            top_level_only: Some(false),
             ..Default::default()
         }))
         .await

@@ -16,6 +16,8 @@ pub(crate) const TOOL_SURFACE_RESOURCE_URI: &str = "frigg://policy/tool-surface.
 pub(crate) const SHELL_REPLACEMENT_MAP_RESOURCE_URI: &str =
     "frigg://policy/shell-replacement-map.json";
 pub(crate) const SHELL_GUIDANCE_RESOURCE_URI: &str = "frigg://guidance/shell-vs-frigg.md";
+pub(crate) const ROUTING_STATS_RESOURCE_URI: &str =
+    crate::mcp::routing_stats::ROUTING_STATS_RESOURCE_URI;
 pub(crate) const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 
 #[derive(Debug, Clone, Serialize)]
@@ -299,6 +301,11 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
                 "Guidance for when to use shell tools versus repo-aware Frigg surfaces.",
             )
             .with_mime_type("text/markdown"),
+        Resource::new(ROUTING_STATS_RESOURCE_URI, "Frigg Routing Stats")
+            .with_description(
+                "Local opt-in session routing stats (tool mix, zero-hits, recovery, handle failures). Enable with FRIGG_ROUTING_STATS=1. No cloud telemetry.",
+            )
+            .with_mime_type("application/json"),
     ]
 }
 
@@ -311,6 +318,10 @@ pub(crate) fn read_policy_resource(
         TOOL_SURFACE_RESOURCE_URI => (tool_surface_json(active_profile), "application/json"),
         SHELL_REPLACEMENT_MAP_RESOURCE_URI => (shell_replacement_map_json(), "application/json"),
         SHELL_GUIDANCE_RESOURCE_URI => (shell_vs_frigg_markdown(active_profile), "text/markdown"),
+        ROUTING_STATS_RESOURCE_URI => (
+            crate::mcp::routing_stats::snapshot_json(),
+            "application/json",
+        ),
         _ => return None,
     };
 

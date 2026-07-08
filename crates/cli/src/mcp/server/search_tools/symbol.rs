@@ -268,6 +268,7 @@ impl FriggMcpServer {
                         result_handle: None,
                         handle_scope: None,
                         handle_expires: None,
+                        latency_class: None,
                         metadata,
                         note,
                         recovery: RecoveryFields::default(),

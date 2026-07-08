@@ -21,7 +21,7 @@ use crate::cli_runtime::{
     resolve_watch_runtime_config, run_adopt_command_with_output, run_context_summary_command,
     run_hash_command, run_index_command_with_output, run_pretooluse_hook_command,
     run_semantic_runtime_startup_gate_with_output,
-    run_semantic_runtime_startup_gate_with_stderr_prepare_output,
+    run_semantic_runtime_startup_gate_with_stderr_prepare_output, run_stats_command,
     run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
 };
@@ -133,6 +133,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_context_summary_command(&config, since.as_deref(), until.as_deref(), json)?
             }
+            Command::Stats { json } => run_stats_command(json)?,
         }
         if !matches!(command, Command::Serve) {
             startup_trace(

@@ -181,12 +181,13 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
         &SearchSymbolResponse {
             matches: Vec::new(),
             result_handle: None,
-                    handle_scope: None,
-                    handle_expires: None,
+            handle_scope: None,
+            handle_expires: None,
+            latency_class: None,
             metadata: None,
             note: None,
-                    recovery: RecoveryFields::default(),
-                },
+            recovery: RecoveryFields::default(),
+        },
     );
     assert_omits_absent_metadata_and_note(
         "find_references",
@@ -214,6 +215,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
+                    location_warning: None,
                     recovery: RecoveryFields::default(),
                 },
     );
@@ -226,6 +228,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
+        
+            recovery: RecoveryFields::default(),
         },
     );
     assert_omits_absent_metadata_and_note(
@@ -237,6 +241,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
+        
+            recovery: RecoveryFields::default(),
         },
     );
     assert_omits_absent_metadata_and_note(
@@ -249,6 +255,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
+        
+            recovery: RecoveryFields::default(),
         },
     );
     assert_omits_absent_metadata_and_note(
@@ -261,11 +269,18 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
+        
+            recovery: RecoveryFields::default(),
         },
     );
     assert_omits_absent_metadata_and_note(
         "document_symbols",
         &DocumentSymbolsResponse {
+            total_symbols: 0,
+            returned: 0,
+            truncated: false,
+            resume_from: None,
+            top_level_only: true,
             symbols: Vec::new(),
             result_handle: None,
             metadata: None,
@@ -543,6 +558,8 @@ fn rewrite_file_with_new_mtime(path: &Path, contents: &str) {
 mod core;
 #[path = "tool_handlers/document_symbols.rs"]
 mod document_symbols;
+#[path = "tool_handlers/freshness_ignore.rs"]
+mod freshness_ignore;
 #[path = "tool_handlers/navigation.rs"]
 mod navigation;
 #[path = "tool_handlers/references.rs"]

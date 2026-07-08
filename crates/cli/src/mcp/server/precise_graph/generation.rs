@@ -1561,7 +1561,7 @@ impl FriggMcpServer {
         Self::take_pending_precise_dirty_paths_locked(&mut pending, repository_id)
     }
 
-    fn record_pending_precise_dirty_paths_locked(
+    pub(in crate::mcp::server) fn record_pending_precise_dirty_paths_locked(
         pending: &mut BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>,
         repository_id: &str,
         changed_paths: &[String],
