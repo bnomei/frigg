@@ -3062,3 +3062,145 @@ async fn navigation_outgoing_calls_heuristic_fallback_keeps_empty_set_instead_of
 
     cleanup_workspace_root(&workspace_root);
 }
+
+#[tokio::test]
+async fn navigation_go_to_definition_empty_params_returns_recovery() {
+    let server = server_for_fixture().await;
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams::default()))
+        .await
+        .expect("empty go_to_definition should return recovery response, not transport error")
+        .0;
+
+    assert!(response.matches.is_empty());
+    assert_eq!(
+        response.recovery.error_code.as_deref(),
+        Some("EMPTY_GO_TO_DEFINITION")
+    );
+    assert!(
+        !response.recovery.suggested_next.is_empty(),
+        "empty go_to_definition recovery must be actionable"
+    );
+    assert!(
+        response
+            .recovery
+            .related_tools
+            .iter()
+            .any(|tool| tool == "search_symbol"),
+        "related tools should include search_symbol"
+    );
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_path_line_without_symbol_sets_location_warning() {
+    let workspace_root = temp_workspace_root("go-to-definition-dense-line");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn alpha() {}\npub fn beta(a: i32, b: i32, c: i32) { let _ = a + b + c; }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            path: Some("src/lib.rs".to_owned()),
+            line: Some(2),
+            symbol: None,
+            column: None,
+            ..Default::default()
+        }))
+        .await
+        .expect("path+line go_to_definition should succeed")
+        .0;
+
+    assert!(
+        response.location_warning.is_some(),
+        "path+line without symbol should surface location_warning: {response:?}"
+    );
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_composes_symbol_refs_and_callers() {
+    let workspace_root = temp_workspace_root("impact-bundle-compose");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\npub fn caller() { target(); }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            symbol: "target".to_owned(),
+            path_class: None,
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("impact_bundle should compose")
+        .0;
+
+    assert_eq!(response.symbol, "target");
+    assert_eq!(response.path_class, "runtime");
+    assert!(
+        !response.symbols.is_empty(),
+        "impact_bundle should include symbol hits: {response:?}"
+    );
+    assert!(
+        !response.suggested_next.is_empty(),
+        "impact_bundle should suggest tests pass + proof reads"
+    );
+    assert!(
+        response.suggested_next.iter().any(|step| step.tool == "read_match"
+            || step.tool == "search_text"
+            || step.tool == "read_file"),
+        "suggested_next should include proof/tests guidance: {:?}",
+        response.suggested_next
+    );
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_missing_symbol_returns_recovery() {
+    let server = server_for_fixture().await;
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            symbol: String::new(),
+            ..Default::default()
+        }))
+        .await
+        .expect("empty symbol impact_bundle should return recovery")
+        .0;
+
+    assert!(response.symbols.is_empty());
+    assert_eq!(response.recovery.error_code.as_deref(), Some("MISSING_SYMBOL"));
+    assert!(!response.suggested_next.is_empty());
+}
+
+#[tokio::test]
+async fn impact_bundle_unknown_symbol_returns_recovery() {
+    let server = server_for_fixture().await;
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            symbol: "DefinitelyMissingSymbolZzz".to_owned(),
+            path_class: None,
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: None,
+            response_mode: None,
+        }))
+        .await
+        .expect("unknown symbol impact_bundle should return recovery")
+        .0;
+
+    assert!(response.symbols.is_empty());
+    assert!(
+        !response.recovery.is_empty() || !response.suggested_next.is_empty(),
+        "unknown symbol must surface recovery or suggested_next: {response:?}"
+    );
+}

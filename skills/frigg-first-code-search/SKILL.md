@@ -51,8 +51,7 @@ Known function/type/API name -> search_symbol
 Vague "where is X?" -> search_hybrid, then exact search
 Several guesses -> search_batch or parallel search_text
 Need proof -> read_match, then read_file
-Need impact -> find_references, incoming_calls, implementations
-  (or impact_bundle when available)
+Need impact -> impact_bundle(symbol) or find_references / incoming_calls / implementations
 Wrong repo, stale index, surprising zero -> workspace
 Git/build/generated/unindexed/Frigg missing -> shell fallback
 ```
@@ -252,19 +251,22 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 | --- | --- |
 | **Trigger** | Usages, callers, callees, trait impls for a known anchor |
 | **Habit** | Whole-repo `rg -n symbol`, manual dedupe |
-| **Frigg path** | Symbol → refs → callers → impls (or `impact_bundle` when available) |
+| **Frigg path** | Prefer `impact_bundle(symbol)`; or sequential symbol → refs → callers → impls |
 | **Fallback** | Scoped `search_text` may supplement tests; shell `rg` is not the main reference pass |
 | **Proof** | Read clusters; confirm `outgoing_calls` with body reads |
 | **Done** | Navigation evidence before edit or impact claim |
-| **Product support** | Ref filters, mode flags, optional `impact_bundle` |
+| **Product support** | Ref filters, mode flags, `impact_bundle` composition |
 
 ```text
+PREFERRED: impact_bundle(symbol, path_class=runtime)
+  → suggested_next for tests pass + read_match proof
+
+OR sequential:
 search_symbol(anchor, path_class=runtime)
 find_references(symbol, include_definition=false)
 incoming_calls(symbol)              # who calls — reliable
 outgoing_calls(symbol)              # provisional; confirm with read_file
 find_implementations(symbol)        # traits/interfaces only
-# or: impact_bundle(symbol) when available
 ```
 
 ### Files & outline
@@ -408,13 +410,15 @@ If navigation `mode` is unavailable/heuristic, widen with `search_text` before a
 | --- | --- |
 | **Trigger** | Will change API/type/behavior; need blast radius before edit |
 | **Habit** | Whole-repo `rg` + manual sort |
-| **Frigg path** | Runtime symbol → refs → impls → callers → optional tests textual pass; or `impact_bundle` |
+| **Frigg path** | Prefer `impact_bundle(api)`; or runtime symbol → refs → impls → callers → optional tests pass |
 | **Fallback** | No throwaway shell `rg` on indexed source; use scoped `search_text` for extra textual passes |
 | **Proof** | `read_match` each cluster before editing |
 | **Done** | Navigation-first blast radius with source witnesses |
-| **Product support** | Ref filters, path-class filters, optional `impact_bundle` |
+| **Product support** | Ref filters, path-class filters, `impact_bundle` |
 
 ```text
+PREFERRED: impact_bundle(api, path_class=runtime) → read_match clusters
+OR:
 1. search_symbol(api, path_class=runtime)
 2. find_references(symbol, include_definition=false)
 3. find_implementations if trait/interface
