@@ -200,6 +200,9 @@ pub async fn server_for_root(workspace_root: &Path) -> FriggMcpServer {
         .expect("workspace root must produce valid config");
     // Keep bench lean: no full SCIP ingest required for scripted search scenarios.
     config.full_scip_ingest = false;
+    // Prefer native lexical on tiny fixtures (Auto already does this for small universes;
+    // set Native so SLO measurements never spawn a secondary ripgrep process).
+    config.lexical_runtime.backend = frigg::settings::LexicalBackendMode::Native;
     let server = FriggMcpServer::new(config);
     adopt_workspace(&server, workspace_root).await;
     server

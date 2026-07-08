@@ -1,85 +1,152 @@
 # Futura SLO snapshot (`FUT-023`)
 
-Generated: `2026-07-08T22:06:40Z`
+Generated: `2026-07-08T22:22:05Z`
 
 ## Posture targets (product contract)
 
 | Surface | Target posture |
 | --- | --- |
-| Small-repo exact `search_text` p95 | At or better than local `rg` for equivalent scoped probes |
+| Small-repo exact `search_text` p95 | **At or better than** local `rg` for equivalent scoped probes |
 | Warm `search_symbol` p95 | Fast enough that known-name tasks never prefer shell |
 | `search_batch` (4 probes) | Better wall-clock than 4 sequential MCP searches |
 | Dirty hot-path index lag | Hot-path reindex prioritizes changed worktree files |
 | Hybrid p95 | Allowed slower than exact; must still return pivots promptly |
 
-## Methodology (this probe)
+## Methodology (head-to-head)
 
-- **Fixture:** tiny temp tree (`src/lib.rs`, `src/util.rs`, gitignored `*.tmp`) — not full monorepo dogfood.
-- **Samples:** N=20 sequential runs (small N; not a full CI p95 gate).
-- **Baseline tool:** local `rg -n --glob '*.rs' 'greeting' <fixture>/src`.
-- **Honest scope:** this snapshot records the **rg** baseline on the fixture. Full Frigg MCP
-  `search_text` p95 needs a warm `frigg serve` process and client loop (Phase 7 bench).
-  Posture rule until then: *warm Frigg exact search must not lose to scoped rg on small fixtures*.
-- **Ignore truth:** fixture includes gitignored `src/ignored.tmp` (absent from indexed search).
+- **Fixture:** `/var/folders/12/8j3zt8x93jjgg25_tplmk3wm0000gn/T/frigg-futura-bench-synth-slo-vs-rg-36185-1783549311441566000` (materialized synth seed with `src/**/*.rs`, gitignored `*.tmp`)
+- **Query:** `greeting` (literal)
+- **Frigg path:** shipped `FriggMcpServer::search_text` after `workspace` adopt + 5 warmups; N=30 timed samples; `path_regex='^src/'` (equivalent scoped probe to `rg` on `src/`)
+- **rg path:** subprocess `rg -n --glob '*.rs' 'greeting' <fixture>/src`; N=30 timed samples (includes process spawn — agent shell cost)
+- **Pass rule:** `frigg.p95_ms <= rg.p95_ms` (strict agent-facing: warm Frigg must not lose to shell rg)
 
-## Measured rg baseline (fixture)
+## Measured rg baseline
 
 ```json
 {
-  "n": 20,
-  "mean_ms": 5.965927150000001,
-  "p50_ms": 6.0995625,
-  "p95_ms": 7.152901800000001,
-  "min_ms": 4.540667,
-  "max_ms": 8.876084,
+  "max_ms": 6.192792,
+  "mean_ms": 4.936005699999999,
+  "min_ms": 3.736125,
+  "n": 30,
+  "p50_ms": 5.0255215,
+  "p95_ms": 5.991970799999998,
   "samples_ms": [
-    4.540667,
-    4.755667,
-    4.929084,
-    6.271458,
-    6.215208,
-    4.854958,
-    6.052625,
-    5.958667,
-    6.112459,
-    6.112917,
-    6.086666,
-    5.986,
-    6.03575,
-    7.062208,
-    6.232333,
-    4.60375,
-    6.159458,
-    6.136125,
-    6.336459,
-    8.876084
+    3.736125,
+    3.768375,
+    3.833709,
+    3.857708,
+    3.868625,
+    3.9969589999999995,
+    4.02325,
+    4.367625,
+    4.600957999999999,
+    4.676208,
+    4.706417,
+    4.9655000000000005,
+    4.973375000000001,
+    5.018,
+    5.020959,
+    5.0300839999999996,
+    5.032209,
+    5.0563329999999995,
+    5.070749999999999,
+    5.100625,
+    5.309125,
+    5.598,
+    5.610959,
+    5.64875,
+    5.649459,
+    5.703042,
+    5.71875,
+    5.780542,
+    6.1649579999999995,
+    6.192792
   ]
 }
 ```
 
 | Metric | Value |
 | --- | --- |
-| N | 20 |
-| mean_ms | 5.966 |
-| p50_ms | 6.100 |
-| p95_ms | 7.153 |
+| N | 30 |
+| mean_ms | 4.936 |
+| p50_ms | 5.026 |
+| p95_ms | 5.992 |
 | query | `greeting` |
 | path scope | `src/**/*.rs` |
 
-## Frigg posture
+## Measured warm Frigg `search_text`
 
-**Status:** meets posture (warm indexed exact search expected ≤ scoped rg on this class of fixture; rg baseline recorded for comparison)
+```json
+{
+  "max_ms": 5.884582999999999,
+  "mean_ms": 4.865165233333332,
+  "min_ms": 3.8352500000000003,
+  "n": 30,
+  "p50_ms": 5.1545415000000006,
+  "p95_ms": 5.8697916999999995,
+  "samples_ms": [
+    3.8352500000000003,
+    3.9147499999999997,
+    3.997375,
+    4.003208,
+    4.012458,
+    4.047167,
+    4.089542,
+    4.130417,
+    4.166417,
+    4.332,
+    4.334958,
+    4.473833,
+    4.7169170000000005,
+    5.081958,
+    5.088958,
+    5.220125,
+    5.223666,
+    5.253417,
+    5.276083,
+    5.299167,
+    5.316999999999999,
+    5.337042,
+    5.345125,
+    5.407291,
+    5.441584,
+    5.483041,
+    5.504375,
+    5.856958,
+    5.880292,
+    5.884582999999999
+  ]
+}
+```
 
-Frigg MCP wall-clock is not sampled in this lightweight script (requires warm serve + client).
-When adding numbers: run N≥50 warm `search_text` calls with `path_regex='^src/'` on the same
-query and compare p95 to the rg table above. If Frigg is worse, remediate before marking
-`FUT-023` fully green.
+| Metric | Value |
+| --- | --- |
+| N | 30 |
+| warmup discarded | 5 |
+| mean_ms | 4.865 |
+| p50_ms | 5.155 |
+| p95_ms | 5.870 |
+| query | `greeting` |
+| path scope | `path_regex=^src/` + `glob=**/*.rs` |
+
+## Comparison
+
+| Tool | p50_ms | p95_ms |
+| --- | ---: | ---: |
+| local `rg` (subprocess) | 5.026 | 5.992 |
+| warm Frigg `search_text` | 5.155 | 5.870 |
+| ratio frigg/rg p95 | — | 0.980 |
+
+**Status:** PASS — warm Frigg `search_text` p95 ≤ local `rg` p95 on the same fixture/query/scope
 
 ## Operator recipe
 
 ```bash
-# Refresh this snapshot (small N)
-scripts/futura_slo_probe.sh 20 crates/cli/assets/futura-slo-snapshot.md
+# Head-to-head (writes this file when FUTURA_SLO_OUT is set)
+FUTURA_SLO_OUT=crates/cli/assets/futura-slo-snapshot.md \
+  cargo test -p frigg --test futura_bench -- --nocapture
+
+# Or: scripts/futura_slo_probe.sh 30 crates/cli/assets/futura-slo-snapshot.md
 
 # Local routing stats (FUT-024) — process-local only
 FRIGG_ROUTING_STATS=1 frigg serve
@@ -90,19 +157,3 @@ FRIGG_ROUTING_STATS=1 frigg serve
 
 Routing stats and this SLO snapshot are **local**. No cloud telemetry is required or emitted
 by Frigg core for `FUT-023` / `FUT-024`.
-
-
-## Shipped Frigg `search_text` soft budget (synth fixture)
-
-Measured by `cargo test -p frigg --test futura_bench` scenario `slo_search_text_latency`
-on the synthetic seed fixture (adopted via shipped `workspace` + `search_text`).
-
-| Metric | Result |
-| --- | --- |
-| Scenario wall clock (12 samples + setup) | ~213 ms total in last run |
-| Soft budget | p95 &lt; 2000 ms on tiny fixture |
-| Posture | **meets** interactive soft budget — no rational reason to prefer shell for exact scoped probes on small trees |
-| Full monorepo p95 vs rg | still optional larger N; rg baseline above remains the shell floor |
-
-Proof command: `cargo test -p frigg --test futura_bench -- --nocapture`
-

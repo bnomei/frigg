@@ -160,15 +160,20 @@ impl FriggMcpServer {
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
-        task::spawn_blocking(task_fn).await.map_err(|err| {
-            Self::internal(
-                format!("blocking task join failure in {operation}: {err}"),
-                Some(json!({
-                    "operation": operation,
-                    "join_error": Self::bounded_text(&err.to_string()),
-                })),
-            )
-        })
+        // Prefer `block_in_place` on multi-thread runtimes for short read tools (`FUT-023`):
+        // spawn_blocking thread-pool hops dominate small-repo exact-search latency vs shell `rg`.
+        match tokio::runtime::Handle::current().runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => Ok(tokio::task::block_in_place(task_fn)),
+            _ => task::spawn_blocking(task_fn).await.map_err(|err| {
+                Self::internal(
+                    format!("blocking task join failure in {operation}: {err}"),
+                    Some(json!({
+                        "operation": operation,
+                        "join_error": Self::bounded_text(&err.to_string()),
+                    })),
+                )
+            }),
+        }
     }
 
     pub(super) fn tool_execution_finalization(

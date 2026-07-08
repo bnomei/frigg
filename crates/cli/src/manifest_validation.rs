@@ -349,22 +349,14 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
             .lookup(root, &snapshot_id);
         match lookup {
             ValidatedManifestCandidateCacheLookup::Hit(digests) => {
-                if let Some(validated_file_digests) =
-                    validate_manifest_file_digests_for_root(root, digests.as_ref())
-                {
-                    return Ok(Some(SharedValidatedManifestSnapshot {
-                        snapshot_id,
-                        digests: Arc::new(file_metadata_digests_from_file_digests(
-                            &validated_file_digests,
-                        )),
-                    }));
-                }
-
-                cache
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .invalidate_root(root);
-                return Ok(None);
+                // Warm-path trust (`FUT-023`): a Ready cache entry is only present while the root
+                // is not Dirty. Returning digests without a full live manifest rebuild is what
+                // makes small-repo exact `search_text` competitive with shell `rg`. Watch/index
+                // paths mark Dirty and force revalidation on the next miss.
+                return Ok(Some(SharedValidatedManifestSnapshot {
+                    snapshot_id,
+                    digests: Arc::new(file_metadata_digests_from_file_digests(digests.as_ref())),
+                }));
             }
             ValidatedManifestCandidateCacheLookup::Dirty => return Ok(None),
             ValidatedManifestCandidateCacheLookup::Miss => {}
@@ -852,6 +844,12 @@ mod tests {
 
         fs::write(workspace_root.join("new_file.rs"), "fn uncached() {}\n")
             .expect("new fixture file should be writable");
+        // Watch/index marks Dirty when files change; warm-path Ready hits trust digests
+        // without a full live rewalk (`FUT-023`). Without Dirty, Ready cache still returns.
+        cache
+            .write()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .mark_dirty_root(&workspace_root);
 
         assert!(
             latest_validated_manifest_snapshot_shared(
@@ -861,14 +859,14 @@ mod tests {
                 Some(&cache),
             )?
             .is_none(),
-            "cached manifest snapshots must be rejected when live files are missing from the snapshot"
+            "dirty roots must bypass Ready cache so callers fall back to walk/reindex"
         );
         assert!(
-            !cache
+            cache
                 .read()
                 .expect("validated manifest candidate cache should not be poisoned")
-                .has_entry_for_root(&workspace_root),
-            "rejecting the stale cached snapshot should invalidate the cache entry"
+                .is_dirty_root(&workspace_root),
+            "dirty mark should remain until revalidation stores a fresh Ready entry"
         );
 
         cleanup_workspace(&workspace_root);

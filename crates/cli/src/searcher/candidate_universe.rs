@@ -119,19 +119,26 @@ impl TextSearcher {
                         (None, walked)
                     }
                 };
-                let root_config_started_at = Instant::now();
-                merge_candidate_files(
-                    &mut candidates,
-                    search_root_scoped_runtime_config_candidates_for_repository(
-                        &repository_id,
-                        &root,
-                        query,
-                        filters,
-                        &mut diagnostics,
-                    ),
-                );
-                candidate_intake_elapsed_us =
-                    candidate_intake_elapsed_us.saturating_add(elapsed_us(root_config_started_at));
+                // Root-scoped runtime configs cannot match path scopes that exclude the repo root
+                // (e.g. `path_regex=^src/`). Skip the extra walk on that hot path (`FUT-023`).
+                let path_scope_excludes_root = query.path_regex.as_ref().is_some_and(|path_regex| {
+                    !path_regex.is_match("Cargo.toml") && !path_regex.is_match("package.json")
+                });
+                if !path_scope_excludes_root {
+                    let root_config_started_at = Instant::now();
+                    merge_candidate_files(
+                        &mut candidates,
+                        search_root_scoped_runtime_config_candidates_for_repository(
+                            &repository_id,
+                            &root,
+                            query,
+                            filters,
+                            &mut diagnostics,
+                        ),
+                    );
+                    candidate_intake_elapsed_us = candidate_intake_elapsed_us
+                        .saturating_add(elapsed_us(root_config_started_at));
+                }
                 let candidates = contained_search_candidate_files(
                     &repository_id,
                     &root,
@@ -245,11 +252,21 @@ impl TextSearcher {
         };
         let freshness_validation_elapsed_us = elapsed_us(freshness_started_at);
         let candidate_intake_started_at = Instant::now();
-        let root_ignore_matcher = build_root_ignore_matcher(root);
+        // Manifest digests are already ignore-filtered at index time. Rebuild ignore matchers
+        // only when the root is dirty (files may have been added that need live ignore truth).
+        // Skipping this on the warm path is a `FUT-023` small-repo latency win vs shell `rg`.
+        let root_is_dirty = self
+            .validated_manifest_candidate_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_dirty_root(root);
+        let root_ignore_matcher = root_is_dirty.then(|| build_root_ignore_matcher(root));
         let mut candidates = Vec::new();
         for digest in validated_snapshot.digests {
             let path = digest.path;
-            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
+            if let Some(matcher) = root_ignore_matcher.as_ref()
+                && should_ignore_runtime_path(root, &path, Some(matcher))
+            {
                 continue;
             }
             let rel_path = normalize_repository_relative_path(root, &path);

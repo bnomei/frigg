@@ -836,6 +836,24 @@ impl TextSearcher {
             | crate::settings::LexicalBackendMode::Ripgrep => {}
         }
 
+        // Small-repo / tight-scope fast path (`FUT-023`): spawning ripgrep loses to both shell
+        // `rg` and in-process native Aho-Corasick when the candidate set is tiny. Keep Auto on
+        // native for small universes; explicit `Ripgrep` backend still forces the accelerator.
+        if matches!(
+            self.config.lexical_runtime.backend,
+            crate::settings::LexicalBackendMode::Auto
+        ) {
+            let candidate_count = candidate_universe
+                .repositories
+                .iter()
+                .map(|repository| repository.candidates.len())
+                .sum::<usize>();
+            // 256 files: well above toy fixtures, still below monorepo sizes where rg wins.
+            if candidate_count <= 256 {
+                return Ok(None);
+            }
+        }
+
         let Some((ripgrep_universe, native_universe)) =
             partition_candidate_universe_for_ripgrep(query, candidate_universe)
         else {
