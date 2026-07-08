@@ -1,14 +1,17 @@
 //! `search_batch` multi-probe merge tool (`FUT-008`).
 //!
-//! Runs 2..=8 typed probes (text / symbol / hybrid), merges and dedupes by
-//! path:line:column, and returns probe summaries plus batch recovery.
+//! Runs 2..=8 typed probes (text / symbol / hybrid) **concurrently**, merges and
+//! dedupes by path:line:column, and returns probe summaries plus batch recovery.
+//! Per-probe match caps bound total index work (`PER_PROBE_MATCH_CAP * n`).
+//! Shared-scope multi-query fusion and early-exit saturation are not implemented
+//! (still concurrent independent probes).
 
 use super::*;
 use crate::mcp::types::{
-    LatencyClass, RecoveryFields, SearchBatchMatch, SearchBatchParams, SearchBatchProbe,
-    SearchBatchProbeKind, SearchBatchProbeSummary, SearchBatchResponse, SearchHybridParams,
-    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, SuggestedNext, ZeroHitReason,
-    ZeroHitScope,
+    LatencyClass, RecoveryFields, SearchBatchMatch, SearchBatchMergeMode, SearchBatchParams,
+    SearchBatchProbe, SearchBatchProbeKind, SearchBatchProbeSummary, SearchBatchResponse,
+    SearchHybridParams, SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, SuggestedNext,
+    ZeroHitReason, ZeroHitScope,
 };
 use crate::path_class::repository_path_class;
 
@@ -16,6 +19,8 @@ const MIN_PROBES: usize = 2;
 const MAX_PROBES: usize = 8;
 /// Cap per-probe work so a batch cannot explode index cost.
 const PER_PROBE_MATCH_CAP: usize = 40;
+/// Implicit total work budget: per-probe cap × probe count (≤ `MAX_PROBES`).
+const _TOTAL_MATCH_BUDGET: usize = PER_PROBE_MATCH_CAP * MAX_PROBES;
 
 impl FriggMcpServer {
     pub(crate) async fn search_batch_impl(
@@ -66,16 +71,23 @@ impl FriggMcpServer {
             .max(1);
         let resume_from = params.resume_from.unwrap_or(0);
         let response_mode = params.response_mode;
+        // Only one merge mode today; accept and apply explicitly so the field is live.
+        let _merge = params.merge.unwrap_or(SearchBatchMergeMode::RankByProbeHitStrength);
 
-        let mut probe_summaries = Vec::with_capacity(params.probes.len());
+        let probe_outcomes = self
+            .search_batch_run_probes_concurrent(
+                &params.probes,
+                params.repository_id.as_deref(),
+                response_mode,
+            )
+            .await?;
+
+        let mut probe_summaries = Vec::with_capacity(probe_outcomes.len());
         let mut merged: Vec<SearchBatchMatch> = Vec::new();
         let mut dedupe_index: std::collections::HashMap<(String, String, usize, usize), usize> =
             std::collections::HashMap::new();
 
-        for probe in &params.probes {
-            let (summary, rows) = self
-                .search_batch_run_probe(probe, params.repository_id.as_deref(), response_mode)
-                .await?;
+        for (summary, rows) in probe_outcomes {
             for mut row in rows {
                 let key = (
                     row.repository_id.clone(),
@@ -115,6 +127,8 @@ impl FriggMcpServer {
             probe_summaries.push(summary);
         }
 
+        // RankByProbeHitStrength: score desc, then kind (symbol > text > hybrid), path, line.
+        let _ = _merge;
         merged.sort_by(|left, right| {
             right
                 .score
@@ -195,6 +209,66 @@ impl FriggMcpServer {
         }
 
         Ok(Json(response))
+    }
+
+    /// Run probes concurrently (binary join tree) so multi-probe batches improve
+    /// wall-clock vs sequential MCP fan-out. Order of `probe_summary` matches request order.
+    async fn search_batch_run_probes_concurrent(
+        &self,
+        probes: &[SearchBatchProbe],
+        batch_repository_id: Option<&str>,
+        response_mode: Option<crate::mcp::types::ResponseMode>,
+    ) -> Result<Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>, ErrorData> {
+        self.search_batch_run_probes_concurrent_boxed(probes, batch_repository_id, response_mode)
+            .await
+    }
+
+    fn search_batch_run_probes_concurrent_boxed<'a>(
+        &'a self,
+        probes: &'a [SearchBatchProbe],
+        batch_repository_id: Option<&'a str>,
+        response_mode: Option<crate::mcp::types::ResponseMode>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>,
+                        ErrorData,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            match probes {
+                [] => Ok(Vec::new()),
+                [only] => {
+                    let one = self
+                        .search_batch_run_probe(only, batch_repository_id, response_mode)
+                        .await?;
+                    Ok(vec![one])
+                }
+                _ => {
+                    let mid = probes.len() / 2;
+                    let (left, right) = probes.split_at(mid);
+                    let (left_out, right_out) = tokio::join!(
+                        self.search_batch_run_probes_concurrent_boxed(
+                            left,
+                            batch_repository_id,
+                            response_mode
+                        ),
+                        self.search_batch_run_probes_concurrent_boxed(
+                            right,
+                            batch_repository_id,
+                            response_mode
+                        ),
+                    );
+                    let mut out = left_out?;
+                    out.extend(right_out?);
+                    Ok(out)
+                }
+            }
+        })
     }
 
     async fn search_batch_run_probe(

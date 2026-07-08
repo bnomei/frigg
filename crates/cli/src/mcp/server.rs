@@ -2081,7 +2081,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_batch",
-        description = "Multi-probe search (2–8 text/symbol/hybrid probes) that replaces parallel grep as a latency strategy. Latency: warm for ≤3 probes, cold for larger batches; still better wall-clock than sequential MCP probes for multi-hypothesis turns. Returns merged, deduped matches with probe_id(s), probe_summary[], suggested_next, latency_class. Prefer over same-turn parallel search_text fan-out or parallel shell greps. Do not use for a single known string (search_text) or single known name (search_symbol).",
+        description = "Multi-probe search (2–8 text/symbol/hybrid probes run concurrently, then merged) that replaces multi-hypothesis parallel shell greps as a single Frigg call. Latency: warm for ≤3 probes, cold for larger batches; per-probe match caps bound total index work. Returns merged, deduped matches with probe_id(s), probe_summary[], suggested_next, latency_class. Prefer over same-turn multi-tool shell greps. Do not use for a single known string (search_text) or single known name (search_symbol).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

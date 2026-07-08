@@ -262,6 +262,20 @@ Example prompts:
 
 For agent-facing usage guidance, use [skills/frigg-first-code-search](skills/frigg-first-code-search/). For runtime diagnosis, use the [Frigg Operator Runbook](docs/operator-runbook.md).
 
+### Futura (Frigg-first evidence layer)
+
+Futura is the skill + MCP contract + recovery + bench surface that makes Frigg
+the default for agent code search. Tracked proof:
+
+- Skill: [skills/frigg-first-code-search](skills/frigg-first-code-search/)
+- Bench: `cargo test -p frigg --test futura_bench` (contracts) and
+  `cargo futura-bench` (release, FUT-023 competitive gate vs `rg`)
+- SLO snapshot: [crates/cli/assets/futura-slo-snapshot.md](crates/cli/assets/futura-slo-snapshot.md)
+- Optional harness templates: [policy-pack/frigg-harness](policy-pack/frigg-harness/)
+
+Local product/roadmap docs under `docs/futura*.md` are gitignored in this repo;
+use the skill and assets above when those files are absent.
+
 ## CLI reference
 
 | Command | Purpose |
