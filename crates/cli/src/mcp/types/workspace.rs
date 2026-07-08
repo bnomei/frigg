@@ -56,6 +56,20 @@ pub enum WorkspaceRecommendedAction {
     UseHeuristicMode,
 }
 
+/// Session gate action for `workspace` status responses (`FUT-007`).
+///
+/// Distinct from [`WorkspaceRecommendedAction`], which is precise-generation oriented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceGateAction {
+    Ready,
+    AdoptRepo,
+    WaitWatch,
+    Reindex,
+    UseLiveDiskForTouchedFiles,
+    FriggUnavailable,
+}
+
 /// Aggregate precise readiness reported by workspace lifecycle tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -337,6 +351,21 @@ pub struct WorkspaceResponse {
     pub repositories: Vec<RepositorySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeStatusSummary>,
+    /// Futura session gate: what the agent should do next (`FUT-007`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_action: Option<WorkspaceGateAction>,
+    /// Working tree may have paths that differ from the last snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_tree_dirty: Option<bool>,
+    /// Paths known to have changed since the last successful snapshot/index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_paths_since_snapshot: Vec<String>,
+    /// Echo of runtime watch activity for compact agent consumption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_active: Option<bool>,
+    /// Tool classes that are fresh enough to trust without live-disk fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fresh_enough_for: Option<Vec<String>>,
 }
 
 /// Response from `workspace_attach` with storage and precise lifecycle state.
@@ -698,5 +727,36 @@ mod tests {
         assert!(value.get("changed_paths").is_none());
         assert!(value.get("deleted_paths").is_none());
         assert!(value.get("paths_truncated").is_none());
+    }
+
+    #[test]
+    fn workspace_gate_action_serde_snake_case_is_stable() {
+        let value = serde_json::to_value(WorkspaceGateAction::UseLiveDiskForTouchedFiles)
+            .expect("serialize gate action");
+        assert_eq!(value, json!("use_live_disk_for_touched_files"));
+        let parsed: WorkspaceGateAction =
+            serde_json::from_value(json!("adopt_repo")).expect("parse gate action");
+        assert_eq!(parsed, WorkspaceGateAction::AdoptRepo);
+    }
+
+    #[test]
+    fn workspace_response_serializes_gate_fields() {
+        let response = WorkspaceResponse {
+            repository: None,
+            session_default: false,
+            repositories: Vec::new(),
+            runtime: None,
+            recommended_action: Some(WorkspaceGateAction::AdoptRepo),
+            working_tree_dirty: Some(false),
+            changed_paths_since_snapshot: Vec::new(),
+            watch_active: Some(false),
+            fresh_enough_for: None,
+        };
+        let value = serde_json::to_value(&response).expect("serialize workspace response");
+        assert_eq!(value["recommended_action"], "adopt_repo");
+        assert_eq!(value["working_tree_dirty"], false);
+        assert_eq!(value["watch_active"], false);
+        assert!(value.get("changed_paths_since_snapshot").is_none());
+        assert!(value.get("fresh_enough_for").is_none());
     }
 }

@@ -119,11 +119,12 @@ use crate::mcp::types::{
     NavigationLocation, NavigationMode, NavigationTargetSelectionStatus,
     NavigationTargetSelectionSummary, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams,
     ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RecoveryFields,
+    ZeroHitDiagnostics, ZeroHitInput, ZeroHitReason, ZeroHitScope,
     RepositorySummary, ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus,
-    RuntimeTaskSummary, SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams,
-    SearchHybridResponse, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
-    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
-    SearchTextResponse,
+    RuntimeTaskSummary, SearchHybridChannelWeightsParams,
+    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, SearchTextResponse,
     SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
     WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
     WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
@@ -136,8 +137,9 @@ use crate::mcp::types::{
     WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
     WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
     WorkspacePreciseLifecycleSummary, WorkspacePreciseState, WorkspacePreciseSummary,
-    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
-    WorkspaceResolveMode, WorkspaceResponse, WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    WorkspaceGateAction, WorkspacePrepareParams, WorkspacePrepareResponse,
+    WorkspaceRecommendedAction, WorkspaceResolveMode, WorkspaceResponse,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 #[cfg(feature = "playbook")]
 use crate::mcp::types::{
@@ -614,13 +616,120 @@ impl FriggMcpServer {
             .into_iter()
             .map(|workspace| self.public_repository_summary(&workspace))
             .collect::<Vec<_>>();
+        let runtime = self.runtime_status_summary();
+        let watch_active = runtime.watch_active;
+        let (recommended_action, working_tree_dirty, changed_paths_since_snapshot, fresh_enough_for) =
+            self.workspace_gate_fields(current_workspace.as_ref(), &repositories, watch_active);
 
         WorkspaceResponse {
             repository,
             session_default: current_workspace.is_some(),
             repositories,
-            runtime: Some(self.runtime_status_summary()),
+            runtime: Some(runtime),
+            recommended_action: Some(recommended_action),
+            working_tree_dirty: Some(working_tree_dirty),
+            changed_paths_since_snapshot,
+            watch_active: Some(watch_active),
+            fresh_enough_for,
         }
+    }
+
+    /// Computes Futura workspace gate fields (`FUT-007`).
+    fn workspace_gate_fields(
+        &self,
+        current_workspace: Option<&AttachedWorkspace>,
+        repositories: &[RepositorySummary],
+        watch_active: bool,
+    ) -> (
+        WorkspaceGateAction,
+        bool,
+        Vec<String>,
+        Option<Vec<String>>,
+    ) {
+        if repositories.is_empty() && current_workspace.is_none() {
+            return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
+        }
+
+        let Some(workspace) = current_workspace else {
+            // Visible repos exist but no session default/adoption.
+            return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
+        };
+
+        let storage = Self::workspace_storage_summary(workspace);
+        let dirty = self.workspace_has_dirty_root(workspace);
+        let changed_paths = self.changed_paths_since_snapshot_for_gate(&workspace.repository_id);
+        let working_tree_dirty = dirty || !changed_paths.is_empty();
+
+        let index_needs_reindex = !matches!(storage.index_state, WorkspaceStorageIndexState::Ready);
+        if index_needs_reindex {
+            return (
+                WorkspaceGateAction::Reindex,
+                working_tree_dirty,
+                changed_paths,
+                None,
+            );
+        }
+
+        if !watch_active && self.runtime_state.runtime_profile.persistent_state_available() {
+            // Persistent runtime expects a watch; without it, prefer waiting over stale trust.
+            if working_tree_dirty {
+                return (
+                    WorkspaceGateAction::UseLiveDiskForTouchedFiles,
+                    working_tree_dirty,
+                    changed_paths,
+                    Some(vec!["read_file".to_owned()]),
+                );
+            }
+            return (
+                WorkspaceGateAction::WaitWatch,
+                working_tree_dirty,
+                changed_paths,
+                None,
+            );
+        }
+
+        if working_tree_dirty {
+            return (
+                WorkspaceGateAction::UseLiveDiskForTouchedFiles,
+                working_tree_dirty,
+                changed_paths,
+                Some(vec!["read_file".to_owned(), "read_match".to_owned()]),
+            );
+        }
+
+        (
+            WorkspaceGateAction::Ready,
+            false,
+            Vec::new(),
+            Some(vec![
+                "search_text".to_owned(),
+                "search_symbol".to_owned(),
+                "search_hybrid".to_owned(),
+                "find_references".to_owned(),
+                "go_to_definition".to_owned(),
+                "read_file".to_owned(),
+                "read_match".to_owned(),
+            ]),
+        )
+    }
+
+    fn changed_paths_since_snapshot_for_gate(&self, repository_id: &str) -> Vec<String> {
+        let pending = self
+            .runtime_state
+            .precise_generation_pending_dirty_paths
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending
+            .get(repository_id)
+            .map(|(changed, deleted)| {
+                changed
+                    .iter()
+                    .chain(deleted.iter())
+                    .take(32)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     }
 
     async fn ensure_workspace_for_status(&self, params: &WorkspaceParams) -> Result<(), ErrorData> {
@@ -1765,7 +1874,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Search repository source text with literal or regex matching and optional path filters.",
+        description = "rg-shaped exact search (literal default). rg -n 'a|b' → pattern_type=regex; rg -c → count_only=true (read total_matches, not empty matches[]); rg -g '**/*.rs' → glob='**/*.rs' (use ** for recursion). Prefer path_regex='^src/' for implementation questions.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1781,7 +1890,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Find discovery pivots for broad code questions without a known string, symbol, or path.",
+        description = "Discovery pivots for broad code questions without a known string, symbol, or path. Not proof: after hybrid run search_text or search_symbol, then read_match. Compact responses include ranking_note, best_pivot_path, and suggested_next. Do not answer from rank-1 alone or shell-grep as the precision step.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1797,7 +1906,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Find indexed symbols by API, type, function, class, method, or identifier name.",
+        description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Defaults to path_class=runtime (skip tests); pass path_class=support or any for tests. Prefer over hybrid when the name is known. Rows include column/excerpt for navigation handoff when indexed.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
