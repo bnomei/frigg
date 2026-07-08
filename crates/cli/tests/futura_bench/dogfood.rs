@@ -11,7 +11,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use frigg::mcp::types::{
-    PUBLIC_TOOL_NAMES, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, ResponseMode,
+    PUBLIC_TOOL_NAMES, DocumentSymbolsParams, ImpactBundleParams, ListFilesParams,
+    ReadFileParams, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, ResponseMode,
     SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind, SearchHybridParams,
     SearchPatternType, SearchSymbolParams, SearchTextParams, WorkspaceParams,
 };
@@ -57,6 +58,11 @@ pub async fn run_all(report: &Mutex<harness::BenchReport>) {
     run_zero_hit_recovery(report, &root).await;
     run_read_match_handle(report, &root).await;
     run_ignored_docs_absence(report, &root).await;
+    run_citation_read_file(report, &root).await;
+    run_list_files_pagination(report, &root).await;
+    run_document_symbols_outline(report, &root).await;
+    run_impact_bundle_if_registered(report, &root).await;
+    run_wrong_repo_zero_recovery(report, &root).await;
 
     if ephemeral {
         cleanup_workspace_root(&root);
@@ -382,6 +388,244 @@ async fn run_ignored_docs_absence(report: &Mutex<harness::BenchReport>, root: &P
     .await;
     report.lock().unwrap().record(
         "ignored_docs_absence",
+        Surface::Dogfood,
+        started,
+        outcome,
+    );
+}
+
+async fn run_citation_read_file(report: &Mutex<harness::BenchReport>, root: &Path) {
+    let started = Instant::now();
+    let outcome = async {
+        let server = server_for_root(root).await;
+        let call = server
+            .read_file(Parameters(ReadFileParams {
+                path: "crates/cli/src/mcp/types.rs".to_owned(),
+                repository_id: None,
+                start_line: Some(1),
+                end_line: Some(5),
+                line_count: None,
+                max_bytes: None,
+                presentation_mode: Some(ReadPresentationMode::Citation),
+                include_context_efficiency: None,
+            }))
+            .await
+            .map_err(|e| format!("read_file citation failed: {e}"))?;
+        require(
+            call.structured_content.is_none(),
+            "citation mode must not set structured_content",
+        )?;
+        let text = call
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|t| t.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        require(
+            text.contains("1|") || text.lines().any(|line| line.starts_with("1|")),
+            format!("citation mode should emit LINE|content rows, got: {text:?}"),
+        )?;
+        Ok(())
+    }
+    .await;
+    report
+        .lock()
+        .unwrap()
+        .record("citation_mode_read_file", Surface::Dogfood, started, outcome);
+}
+
+async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &Path) {
+    let started = Instant::now();
+    let outcome = async {
+        let server = server_for_root(root).await;
+        let first = server
+            .list_files(Parameters(ListFilesParams {
+                repository_id: None,
+                path_regex: Some(r"^crates/cli/src/mcp/".to_owned()),
+                glob: Some("*.rs".to_owned()),
+                language: None,
+                path_class: None,
+                include_hidden: None,
+                limit: Some(2),
+                resume_from: None,
+            }))
+            .await
+            .map_err(|e| format!("list_files failed: {e}"))?
+            .0;
+        require(first.files.len() <= 2, format!("limit=2 over-returned: {:?}", first.files))?;
+        require(
+            first.total_files >= first.files.len(),
+            format!("total_files inconsistent: {first:?}"),
+        )?;
+        if first.truncated || first.resume_from.is_some() {
+            let resume = first
+                .resume_from
+                .clone()
+                .ok_or_else(|| format!("truncated list missing resume_from: {first:?}"))?;
+            let second = server
+                .list_files(Parameters(ListFilesParams {
+                    repository_id: None,
+                    path_regex: Some(r"^crates/cli/src/mcp/".to_owned()),
+                    glob: Some("*.rs".to_owned()),
+                    language: None,
+                    path_class: None,
+                    include_hidden: None,
+                    limit: Some(2),
+                    resume_from: Some(resume),
+                }))
+                .await
+                .map_err(|e| format!("list_files resume failed: {e}"))?
+                .0;
+            require(
+                !second.files.is_empty() || second.total_files <= 2,
+                format!("resume page unexpected: {second:?}"),
+            )?;
+        }
+        Ok(())
+    }
+    .await;
+    report.lock().unwrap().record(
+        "list_files_pagination",
+        Surface::Dogfood,
+        started,
+        outcome,
+    );
+}
+
+async fn run_document_symbols_outline(report: &Mutex<harness::BenchReport>, root: &Path) {
+    let started = Instant::now();
+    let outcome = async {
+        let server = server_for_root(root).await;
+        let response = server
+            .document_symbols(Parameters(DocumentSymbolsParams {
+                path: "crates/cli/src/mcp/types.rs".to_owned(),
+                repository_id: None,
+                top_level_only: Some(true),
+                limit: Some(5),
+                resume_from: None,
+                response_mode: Some(ResponseMode::Compact),
+                include_follow_up_structural: None,
+            }))
+            .await
+            .map_err(|e| format!("document_symbols failed: {e}"))?
+            .0;
+        require(
+            response.total_symbols >= response.returned,
+            format!("outline pagination dishonest: {response:?}"),
+        )?;
+        require(
+            response.symbols.len() == response.returned,
+            format!("returned vs symbols len mismatch: {response:?}"),
+        )?;
+        Ok(())
+    }
+    .await;
+    report.lock().unwrap().record(
+        "document_symbols_outline_pagination",
+        Surface::Dogfood,
+        started,
+        outcome,
+    );
+}
+
+async fn run_impact_bundle_if_registered(report: &Mutex<harness::BenchReport>, root: &Path) {
+    let started = Instant::now();
+    let outcome = async {
+        if !public_tool_registered("impact_bundle") {
+            return Ok(());
+        }
+        let server = server_for_root(root).await;
+        let response = server
+            .impact_bundle(Parameters(ImpactBundleParams {
+                symbol: "FriggMcpServer".to_owned(),
+                repository_id: None,
+                path_class: None,
+                include_implementations: None,
+                response_mode: Some(ResponseMode::Compact),
+            }))
+            .await
+            .map_err(|e| format!("impact_bundle failed: {e}"))?
+            .0;
+        require(
+            !response.symbols.is_empty(),
+            format!("impact_bundle expected symbol hits: {response:?}"),
+        )?;
+        // Composition: prefer non-empty refs/callers when graph available; otherwise recovery.
+        let composed = !response.references.is_empty() || !response.incoming_calls.is_empty();
+        let has_recovery = response.recovery.correction_hint.is_some()
+            || !response.recovery.suggested_next.is_empty()
+            || response.recovery.error_code.is_some();
+        require(
+            composed || has_recovery || !response.suggested_next.is_empty(),
+            format!(
+                "impact_bundle should compose refs/callers or suggest next: refs={} callers={} recovery={:?}",
+                response.references.len(),
+                response.incoming_calls.len(),
+                response.recovery
+            ),
+        )?;
+        Ok(())
+    }
+    .await;
+    report.lock().unwrap().record(
+        "impact_bundle_composition",
+        Surface::Dogfood,
+        started,
+        outcome,
+    );
+}
+
+async fn run_wrong_repo_zero_recovery(report: &Mutex<harness::BenchReport>, root: &Path) {
+    let started = Instant::now();
+    let outcome = async {
+        let server = server_for_root(root).await;
+        // Explicit nonsense repository_id should fail or zero with recovery, not hang.
+        let result = server
+            .search_text(Parameters(SearchTextParams {
+                query: "PUBLIC_TOOL_NAMES".to_owned(),
+                pattern_type: Some(SearchPatternType::Literal),
+                repository_id: Some("repo-does-not-exist-futura-bench".to_owned()),
+                path_regex: Some(r"^crates/".to_owned()),
+                limit: Some(5),
+                response_mode: Some(ResponseMode::Compact),
+                ..Default::default()
+            }))
+            .await;
+        match result {
+            Ok(json) => {
+                let response = json.0;
+                require(
+                    response.total_matches == 0,
+                    format!("wrong-repo should not hit: {response:?}"),
+                )?;
+                let has_recovery = response.recovery.zero_hit_reason.is_some()
+                    || response.recovery.error_code.is_some()
+                    || !response.recovery.suggested_next.is_empty()
+                    || response.recovery.correction_hint.is_some()
+                    || response.recovery.message.is_some();
+                require(
+                    has_recovery,
+                    format!("wrong-repo zero missing recovery: {:?}", response.recovery),
+                )?;
+            }
+            Err(err) => {
+                // Typed invalid/not-found is acceptable recovery for bad repository_id.
+                let msg = format!("{err:?}");
+                require(
+                    msg.contains("repository")
+                        || msg.contains("not found")
+                        || msg.contains("invalid")
+                        || msg.contains("UNKNOWN")
+                        || msg.contains("error"),
+                    format!("unexpected wrong-repo error shape: {msg}"),
+                )?;
+            }
+        }
+        Ok(())
+    }
+    .await;
+    report.lock().unwrap().record(
+        "wrong_repo_zero_recovery",
         Surface::Dogfood,
         started,
         outcome,

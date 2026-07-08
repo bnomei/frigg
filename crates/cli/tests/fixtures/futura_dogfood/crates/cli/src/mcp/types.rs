@@ -18,6 +18,7 @@ pub const PUBLIC_TOOL_NAMES: &[&str] = &[
     "document_symbols",
     "inspect_syntax_tree",
     "search_structural",
+    "impact_bundle",
 ];
 
 pub const PUBLIC_READ_ONLY_TOOL_NAMES: &[&str] = PUBLIC_TOOL_NAMES;
