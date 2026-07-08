@@ -120,7 +120,7 @@ use crate::mcp::types::{
     NavigationLocation, NavigationMode, NavigationTargetSelectionStatus,
     NavigationTargetSelectionSummary, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams,
     ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RecoveryFields,
-    ZeroHitDiagnostics, ZeroHitInput, ZeroHitReason, ZeroHitScope,
+    ZeroHitDiagnostics, ZeroHitIndex, ZeroHitInput, ZeroHitReason, ZeroHitScope,
     RepositorySummary, ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus,
     RuntimeTaskSummary, SearchBatchParams, SearchBatchResponse, SearchHybridChannelWeightsParams,
     SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
@@ -651,6 +651,9 @@ impl FriggMcpServer {
         Option<Vec<String>>,
     ) {
         if repositories.is_empty() && current_workspace.is_none() {
+            // Prefer `adopt_repo` over `frigg_unavailable`: agents can still attach via
+            // `workspace` with `path` / `repository_id`. `FriggUnavailable` would only fit a
+            // hard runtime failure that blocks adoption entirely (not modeled here).
             return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
         }
 
@@ -715,6 +718,120 @@ impl FriggMcpServer {
                 "read_match".to_owned(),
             ]),
         )
+    }
+
+    /// Best-effort index freshness block for zero-hit recovery (`FUT-006`).
+    ///
+    /// Populates `ZeroHitIndex` from storage summary + gate dirty signals for the given public
+    /// repository ids. When `repository_ids` is empty, falls back to the session current
+    /// workspace, then any visible workspaces. Returns `None` when no workspace signal exists.
+    pub(crate) fn zero_hit_index_for_repositories(
+        &self,
+        repository_ids: &[String],
+    ) -> Option<ZeroHitIndex> {
+        let workspaces = self.workspaces_for_zero_hit_index(repository_ids);
+        if workspaces.is_empty() {
+            return None;
+        }
+
+        // Prefer session default when it is among the targets; else first known target.
+        let primary = self
+            .current_workspace()
+            .and_then(|current| {
+                workspaces
+                    .iter()
+                    .find(|workspace| workspace.repository_id == current.repository_id)
+                    .cloned()
+            })
+            .unwrap_or_else(|| workspaces[0].clone());
+
+        let storage = Self::workspace_storage_summary(&primary);
+        let index_state = Some(Self::workspace_storage_index_state_label(storage.index_state).to_owned());
+
+        let mut changed_paths = Vec::new();
+        let mut working_tree_dirty = false;
+        for workspace in &workspaces {
+            if self.workspace_has_dirty_root(workspace) {
+                working_tree_dirty = true;
+            }
+            for path in self.changed_paths_since_snapshot_for_gate(&workspace.repository_id) {
+                changed_paths.push(path);
+            }
+        }
+        changed_paths.sort();
+        changed_paths.dedup();
+        if changed_paths.len() > 32 {
+            changed_paths.truncate(32);
+        }
+        if !changed_paths.is_empty() {
+            working_tree_dirty = true;
+        }
+
+        let stale_warning = if working_tree_dirty {
+            if changed_paths.is_empty() {
+                Some("working tree dirty; recent edits may not be indexed".to_owned())
+            } else {
+                let preview = changed_paths
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let extra = changed_paths.len().saturating_sub(3);
+                Some(if extra == 0 {
+                    format!("pending changes may not be indexed: {preview}")
+                } else {
+                    format!("pending changes may not be indexed: {preview} (+{extra} more)")
+                })
+            }
+        } else {
+            None
+        };
+
+        // `last_index_success_at` is omitted: snapshot `created_at` is not exposed cheaply
+        // without a dedicated storage accessor / full manifest load.
+        let index = ZeroHitIndex {
+            index_state,
+            last_index_success_at: None,
+            working_tree_dirty: Some(working_tree_dirty),
+            changed_paths_since_snapshot: changed_paths,
+            stale_warning,
+        };
+        (!index.is_empty()).then_some(index)
+    }
+
+    fn workspaces_for_zero_hit_index(&self, repository_ids: &[String]) -> Vec<AttachedWorkspace> {
+        if !repository_ids.is_empty() {
+            let mut workspaces = Vec::new();
+            let mut seen = BTreeSet::new();
+            for repository_id in repository_ids {
+                let repository_id = repository_id.trim();
+                if repository_id.is_empty() || !seen.insert(repository_id.to_owned()) {
+                    continue;
+                }
+                if let Some(workspace) = self.workspace_by_repository_id(repository_id) {
+                    workspaces.push(workspace);
+                }
+            }
+            if !workspaces.is_empty() {
+                return workspaces;
+            }
+        }
+
+        if let Some(current) = self.current_workspace() {
+            return vec![current];
+        }
+
+        self.visible_workspaces()
+    }
+
+    fn workspace_storage_index_state_label(state: WorkspaceStorageIndexState) -> &'static str {
+        match state {
+            WorkspaceStorageIndexState::MissingDb => "missing_db",
+            WorkspaceStorageIndexState::Uninitialized => "uninitialized",
+            WorkspaceStorageIndexState::Ready => "ready",
+            WorkspaceStorageIndexState::Error => "error",
+        }
     }
 
     /// Best-effort dirty paths for the workspace gate (`FUT-020`).

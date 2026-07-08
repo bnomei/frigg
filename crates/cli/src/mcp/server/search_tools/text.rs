@@ -208,7 +208,7 @@ impl FriggMcpServer {
                             query: Some(params_for_blocking.query.as_str()),
                             pattern_type_is_literal: Some(pattern_type_is_literal),
                             scope: Some(scope).filter(|scope| !scope.is_empty()),
-                            index: None,
+                            index: server.zero_hit_index_for_repositories(&scoped_repository_ids),
                             reason_override: None,
                         });
                         if let Some(glob) = params_for_blocking.glob.as_deref() {

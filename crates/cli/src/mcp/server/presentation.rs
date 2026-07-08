@@ -530,34 +530,46 @@ impl FriggMcpServer {
         if response.latency_class.is_none() {
             response.latency_class = Some(Self::search_text_latency_class(params, response.total_matches));
         }
-        if response.total_matches == 0 && response.recovery.is_empty() {
-            let pattern_type_is_literal =
-                !matches!(params.pattern_type, Some(SearchPatternType::Regex));
-            let mut scope = ZeroHitScope::default();
-            if let Some(path_regex) = params.path_regex.as_ref() {
-                scope = scope.with_path_regex(path_regex.clone());
-            }
-            if let Some(glob) = params.glob.as_ref() {
-                scope = scope.with_glob(glob.clone());
-            }
-            if let Some(repository_id) = params.repository_id.as_ref() {
-                scope = scope.with_repository_id(repository_id.clone());
-            }
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "search_text",
-                query: Some(params.query.as_str()),
-                pattern_type_is_literal: Some(pattern_type_is_literal),
-                scope: Some(scope).filter(|scope| !scope.is_empty()),
-                index: None,
-                reason_override: None,
-            });
-            if let Some(glob) = params.glob.as_deref() {
-                response.recovery =
-                    response
+        if response.total_matches == 0 {
+            let repository_ids = params
+                .repository_id
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let index = self.zero_hit_index_for_repositories(&repository_ids);
+            if response.recovery.is_empty() {
+                let pattern_type_is_literal =
+                    !matches!(params.pattern_type, Some(SearchPatternType::Regex));
+                let mut scope = ZeroHitScope::default();
+                if let Some(path_regex) = params.path_regex.as_ref() {
+                    scope = scope.with_path_regex(path_regex.clone());
+                }
+                if let Some(glob) = params.glob.as_ref() {
+                    scope = scope.with_glob(glob.clone());
+                }
+                if let Some(repository_id) = params.repository_id.as_ref() {
+                    scope = scope.with_repository_id(repository_id.clone());
+                }
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "search_text",
+                    query: Some(params.query.as_str()),
+                    pattern_type_is_literal: Some(pattern_type_is_literal),
+                    scope: Some(scope).filter(|scope| !scope.is_empty()),
+                    index,
+                    reason_override: None,
+                });
+                if let Some(glob) = params.glob.as_deref() {
+                    response.recovery = response
                         .recovery
                         .with_non_recursive_glob_hint(params.query.as_str(), glob);
+                }
+                crate::mcp::routing_stats::record_zero_hit();
+            } else if response.recovery.index.is_none() {
+                // Live search paths may have composed recovery before index was available.
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
             }
-            crate::mcp::routing_stats::record_zero_hit();
         } else if response.recovery.scope.is_none() {
             // Scope echo on non-empty hits when filters were applied (`FUT-009`).
             let mut scope = ZeroHitScope::default();
@@ -645,16 +657,23 @@ impl FriggMcpServer {
                         .map(|matched| matched.path.clone())
                 });
         }
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "search_hybrid",
-                query,
-                pattern_type_is_literal: Some(true),
-                scope: None,
-                index: None,
-                reason_override: None,
-            });
-            crate::mcp::routing_stats::record_zero_hit();
+        if response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "search_hybrid",
+                    query,
+                    pattern_type_is_literal: Some(true),
+                    scope: None,
+                    index,
+                    reason_override: None,
+                });
+                crate::mcp::routing_stats::record_zero_hit();
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         } else if !response.matches.is_empty() && response.recovery.suggested_next.is_empty() {
             response.recovery = RecoveryFields::hybrid_discovery_exact_pivot(
                 query.unwrap_or(""),
@@ -733,54 +752,62 @@ impl FriggMcpServer {
                 crate::mcp::types::LatencyClass::Warm
             });
         }
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            let query = params.map(|params| params.query.as_str());
-            let mut scope = ZeroHitScope::default();
-            let effective_path_class = params
-                .and_then(|params| params.path_class)
-                .unwrap_or(SearchSymbolPathClass::Runtime);
-            if let Some(params) = params {
-                if let Some(path_regex) = params.path_regex.as_ref() {
-                    scope = scope.with_path_regex(path_regex.clone());
+        if response.matches.is_empty() {
+            let repository_ids = params
+                .and_then(|params| params.repository_id.clone())
+                .into_iter()
+                .collect::<Vec<_>>();
+            let index = self.zero_hit_index_for_repositories(&repository_ids);
+            if response.recovery.is_empty() {
+                let query = params.map(|params| params.query.as_str());
+                let mut scope = ZeroHitScope::default();
+                let effective_path_class = params
+                    .and_then(|params| params.path_class)
+                    .unwrap_or(SearchSymbolPathClass::Runtime);
+                if let Some(params) = params {
+                    if let Some(path_regex) = params.path_regex.as_ref() {
+                        scope = scope.with_path_regex(path_regex.clone());
+                    }
+                    scope = scope.with_path_class(effective_path_class.as_str());
+                    if let Some(repository_id) = params.repository_id.as_ref() {
+                        scope = scope.with_repository_id(repository_id.clone());
+                    }
+                } else {
+                    scope = scope.with_path_class(effective_path_class.as_str());
                 }
-                scope = scope.with_path_class(effective_path_class.as_str());
-                if let Some(repository_id) = params.repository_id.as_ref() {
-                    scope = scope.with_repository_id(repository_id.clone());
-                }
-            } else {
-                scope = scope.with_path_class(effective_path_class.as_str());
-            }
-            // Runtime-first empty recovery for known names (`FUT-011`).
-            let scope = Some(scope).filter(|scope| !scope.is_empty());
-            response.recovery = if effective_path_class == SearchSymbolPathClass::Runtime {
-                if let Some(name) = query {
-                    RecoveryFields::runtime_zero_name_known(name).with_diagnostics(
-                        ZeroHitDiagnostics {
+                // Runtime-first empty recovery for known names (`FUT-011`).
+                let scope = Some(scope).filter(|scope| !scope.is_empty());
+                response.recovery = if effective_path_class == SearchSymbolPathClass::Runtime {
+                    if let Some(name) = query {
+                        RecoveryFields::runtime_zero_name_known(name).with_diagnostics(
+                            ZeroHitDiagnostics { scope, index },
+                        )
+                    } else {
+                        RecoveryFields::for_zero_hit(ZeroHitInput {
+                            tool: "search_symbol",
+                            query,
+                            pattern_type_is_literal: None,
                             scope,
-                            index: None,
-                        },
-                    )
+                            index,
+                            reason_override: None,
+                        })
+                    }
                 } else {
                     RecoveryFields::for_zero_hit(ZeroHitInput {
                         tool: "search_symbol",
                         query,
                         pattern_type_is_literal: None,
                         scope,
-                        index: None,
+                        index,
                         reason_override: None,
                     })
+                };
+                crate::mcp::routing_stats::record_zero_hit();
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
                 }
-            } else {
-                RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "search_symbol",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope,
-                    index: None,
-                    reason_override: None,
-                })
-            };
-            crate::mcp::routing_stats::record_zero_hit();
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -800,23 +827,28 @@ impl FriggMcpServer {
             Self::attach_handle_metadata(&response.result_handle, "find_references");
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
-        if (response.total_matches == 0 || response.matches.is_empty())
-            && response.recovery.is_empty()
-        {
-            let query = response
-                .target_selection
-                .as_ref()
-                .map(|selection| selection.symbol_query.as_str());
-            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                .then_some(ZeroHitReason::PreciseGraphUnavailable);
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "find_references",
-                query,
-                pattern_type_is_literal: None,
-                scope: None,
-                index: None,
-                reason_override,
-            });
+        if response.total_matches == 0 || response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                let query = response
+                    .target_selection
+                    .as_ref()
+                    .map(|selection| selection.symbol_query.as_str());
+                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "find_references",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope: None,
+                    index,
+                    reason_override,
+                });
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -838,21 +870,28 @@ impl FriggMcpServer {
             Self::attach_handle_metadata(&response.result_handle, "go_to_definition");
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            let query = response
-                .target_selection
-                .as_ref()
-                .map(|selection| selection.symbol_query.as_str());
-            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                .then_some(ZeroHitReason::PreciseGraphUnavailable);
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "go_to_definition",
-                query,
-                pattern_type_is_literal: None,
-                scope: None,
-                index: None,
-                reason_override,
-            });
+        if response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                let query = response
+                    .target_selection
+                    .as_ref()
+                    .map(|selection| selection.symbol_query.as_str());
+                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "go_to_definition",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope: None,
+                    index,
+                    reason_override,
+                });
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -870,21 +909,28 @@ impl FriggMcpServer {
             "find_declarations",
             &mut response.matches,
         );
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            let query = response
-                .target_selection
-                .as_ref()
-                .map(|selection| selection.symbol_query.as_str());
-            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                .then_some(ZeroHitReason::PreciseGraphUnavailable);
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "find_declarations",
-                query,
-                pattern_type_is_literal: None,
-                scope: None,
-                index: None,
-                reason_override,
-            });
+        if response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                let query = response
+                    .target_selection
+                    .as_ref()
+                    .map(|selection| selection.symbol_query.as_str());
+                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "find_declarations",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope: None,
+                    index,
+                    reason_override,
+                });
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -902,21 +948,28 @@ impl FriggMcpServer {
             "find_implementations",
             &mut response.matches,
         );
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            let query = response
-                .target_selection
-                .as_ref()
-                .map(|selection| selection.symbol_query.as_str());
-            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                .then_some(ZeroHitReason::PreciseGraphUnavailable);
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "find_implementations",
-                query,
-                pattern_type_is_literal: None,
-                scope: None,
-                index: None,
-                reason_override,
-            });
+        if response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                let query = response
+                    .target_selection
+                    .as_ref()
+                    .map(|selection| selection.symbol_query.as_str());
+                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "find_implementations",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope: None,
+                    index,
+                    reason_override,
+                });
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -934,21 +987,28 @@ impl FriggMcpServer {
             "incoming_calls",
             &mut response.matches,
         );
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            let query = response
-                .target_selection
-                .as_ref()
-                .map(|selection| selection.symbol_query.as_str());
-            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                .then_some(ZeroHitReason::PreciseGraphUnavailable);
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "incoming_calls",
-                query,
-                pattern_type_is_literal: None,
-                scope: None,
-                index: None,
-                reason_override,
-            });
+        if response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                let query = response
+                    .target_selection
+                    .as_ref()
+                    .map(|selection| selection.symbol_query.as_str());
+                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "incoming_calls",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope: None,
+                    index,
+                    reason_override,
+                });
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -966,21 +1026,28 @@ impl FriggMcpServer {
             "outgoing_calls",
             &mut response.matches,
         );
-        if response.matches.is_empty() && response.recovery.is_empty() {
-            let query = response
-                .target_selection
-                .as_ref()
-                .map(|selection| selection.symbol_query.as_str());
-            let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                .then_some(ZeroHitReason::PreciseGraphUnavailable);
-            response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                tool: "outgoing_calls",
-                query,
-                pattern_type_is_literal: None,
-                scope: None,
-                index: None,
-                reason_override,
-            });
+        if response.matches.is_empty() {
+            let index = self.zero_hit_index_for_repositories(&[]);
+            if response.recovery.is_empty() {
+                let query = response
+                    .target_selection
+                    .as_ref()
+                    .map(|selection| selection.symbol_query.as_str());
+                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
+                    tool: "outgoing_calls",
+                    query,
+                    pattern_type_is_literal: None,
+                    scope: None,
+                    index,
+                    reason_override,
+                });
+            } else if response.recovery.index.is_none() {
+                if let Some(index) = index {
+                    response.recovery.index = Some(index);
+                }
+            }
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
@@ -1250,7 +1317,73 @@ mod tests {
         assert!(value.get("correction_hint").is_some());
         assert!(value.get("suggested_next").is_some());
         assert_eq!(value["scope"]["path_regex"], "^src/");
+        // Index block is filled from workspace storage when a repo is known (`FUT-006`).
+        assert!(
+            value.get("index").is_some(),
+            "zero-hit should serialize index block when workspace signals exist: {value}"
+        );
+        assert!(value["index"].get("index_state").is_some());
         assert!(value.get("recovery").is_none(), "recovery must be flattened");
+    }
+
+    #[test]
+    fn search_text_zero_hit_index_includes_dirty_changed_paths() {
+        let server = presentation_test_server();
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("startup workspace");
+        server.test_record_gate_dirty_paths(
+            &workspace.repository_id,
+            &[String::from("src/lib.rs")],
+            &[],
+        );
+
+        let response = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 0,
+                    matches: Vec::new(),
+                    result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
+                    metadata: None,
+                    recovery: RecoveryFields::default(),
+                },
+                &SearchTextParams {
+                    query: "zzznomatch_dirty_index_token".to_owned(),
+                    repository_id: Some(workspace.repository_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .expect("zero-hit search_text with dirty paths should shape");
+
+        let index = response.recovery.index.as_ref().expect("index block");
+        assert_eq!(index.working_tree_dirty, Some(true));
+        assert!(
+            index
+                .changed_paths_since_snapshot
+                .iter()
+                .any(|path| path == "src/lib.rs"),
+            "changed paths should surface on zero-hit index: {:?}",
+            index.changed_paths_since_snapshot
+        );
+        assert!(index.stale_warning.is_some());
+        assert_eq!(
+            response.recovery.zero_hit_reason,
+            Some(ZeroHitReason::IndexStalePossible)
+        );
+
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(value["index"]["working_tree_dirty"], true);
+        assert!(
+            value["index"]["changed_paths_since_snapshot"]
+                .as_array()
+                .is_some_and(|paths| paths.iter().any(|path| path == "src/lib.rs"))
+        );
     }
 
     #[test]
@@ -1320,6 +1453,10 @@ mod tests {
         assert!(!hybrid.recovery.is_empty());
         let hybrid_value = serde_json::to_value(&hybrid).expect("serialize hybrid");
         assert!(hybrid_value.get("zero_hit_reason").is_some());
+        assert!(
+            hybrid_value.get("index").is_some(),
+            "hybrid zero-hit should include index block: {hybrid_value}"
+        );
 
         let symbol = server.present_search_symbol_response(
             SearchSymbolResponse {
@@ -1343,6 +1480,10 @@ mod tests {
         let symbol_value = serde_json::to_value(&symbol).expect("serialize symbol");
         assert_eq!(symbol_value["scope"]["path_class"], "runtime");
         assert!(symbol_value.get("suggested_next").is_some());
+        assert!(
+            symbol_value.get("index").is_some(),
+            "symbol zero-hit should include index block: {symbol_value}"
+        );
     }
 
     #[test]
