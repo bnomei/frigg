@@ -277,8 +277,8 @@ For agent-facing usage guidance, use [skills/frigg-first-code-search](skills/fri
 Proof and optional policy:
 
 - Skill: [skills/frigg-first-code-search](skills/frigg-first-code-search/)
-- Bench: `cargo test -p frigg --test futura_bench` (contracts) and `cargo futura-bench` (release competitive gate vs `rg`)
-- SLO snapshot: [crates/cli/assets/futura-slo-snapshot.md](crates/cli/assets/futura-slo-snapshot.md)
+- Test contracts: `cargo test -p frigg --all-targets`
+- Release latency gate: CI runs the opt-in search-latency bench against local `rg`
 - Optional harness templates: [policy-pack/frigg-harness](policy-pack/frigg-harness/)
 
 ## CLI reference
