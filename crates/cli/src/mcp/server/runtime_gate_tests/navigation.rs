@@ -907,6 +907,8 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             metadata,
             note,
 
+            trust: crate::mcp::types::NavigationEdgeTrust::Provisional,
+            trust_note: String::new(),
             recovery: RecoveryFields::default(),
         },
         None,
@@ -919,6 +921,22 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             .and_then(|value| value.get("status"))
             .and_then(Value::as_str),
         Some("heuristic")
+    );
+    assert_eq!(
+        serialized.get("trust").and_then(Value::as_str),
+        Some("provisional"),
+        "outgoing_calls compact must always expose trust=provisional"
+    );
+    assert!(
+        serialized
+            .get("trust_note")
+            .and_then(Value::as_str)
+            .is_some_and(|note| note.contains("provisional") && note.contains("read_file")),
+        "outgoing_calls compact must keep always-on trust_note: {serialized:?}"
+    );
+    assert!(
+        serialized.get("note").is_none(),
+        "full-mode diagnostic note still stripped in compact"
     );
     assert_compact_handle(&server, &outgoing.result_handle, 19, Some(3));
 }

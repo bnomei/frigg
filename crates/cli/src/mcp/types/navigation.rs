@@ -332,6 +332,20 @@ pub struct IncomingCallsResponse {
     pub recovery: super::RecoveryFields,
 }
 
+/// Trust tier for navigation edges that may over- or under-claim structure.
+///
+/// Used by `outgoing_calls` (always `provisional` today). `verified` is reserved for a
+/// future body-proven path; agents must not invent verified without product support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationEdgeTrust {
+    Provisional,
+    Verified,
+}
+
+/// Always-on compact honesty copy for `outgoing_calls` (EXP-nav-outgoing-honesty B).
+pub const OUTGOING_CALLS_TRUST_NOTE: &str = "Callee edges are provisional; confirm with read_file, find_references, or search_structural before asserting blast radius.";
+
 /// Response from `outgoing_calls`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsResponse {
@@ -345,11 +359,25 @@ pub struct OutgoingCallsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "super::metadata_object_field_schema")]
     pub metadata: Option<MetadataObject>,
+    /// Full-mode diagnostic note only (stripped in compact). Prefer `trust` / `trust_note`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Machine-obvious trust tier. Outgoing callees are always `provisional` today.
+    pub trust: NavigationEdgeTrust,
+    /// Always-on compact honesty (not stripped in compact mode; skill-less hosts still see it).
+    pub trust_note: String,
     /// Flattened recovery fields on empty callee results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
+}
+
+impl OutgoingCallsResponse {
+    /// Default provisional honesty applied to every outgoing_calls response path.
+    pub fn with_provisional_honesty(mut self) -> Self {
+        self.trust = NavigationEdgeTrust::Provisional;
+        self.trust_note = OUTGOING_CALLS_TRUST_NOTE.to_owned();
+        self
+    }
 }
 
 /// Availability note when call-hierarchy results depend on precise coverage.
@@ -627,6 +655,35 @@ mod tests {
         EvidencePacket, EvidencePacketClaim, ImpactBundleResponse, NavigationMode,
     };
     use crate::mcp::types::{RecoveryFields, SuggestedNext};
+
+    #[test]
+    fn outgoing_calls_trust_is_always_provisional_in_compact_json() {
+        use super::{
+            NavigationEdgeTrust, NavigationMode, OUTGOING_CALLS_TRUST_NOTE, OutgoingCallsResponse,
+        };
+        use crate::mcp::types::RecoveryFields;
+
+        let response = OutgoingCallsResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::HeuristicNoPrecise,
+            availability: None,
+            target_selection: None,
+            metadata: None,
+            note: Some("full diagnostic only".to_owned()),
+            trust: NavigationEdgeTrust::Verified, // present overwrites to provisional
+            trust_note: String::new(),
+            recovery: RecoveryFields::default(),
+        }
+        .with_provisional_honesty();
+        assert_eq!(response.trust, NavigationEdgeTrust::Provisional);
+        assert_eq!(response.trust_note, OUTGOING_CALLS_TRUST_NOTE);
+
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(value["trust"], "provisional");
+        assert_eq!(value["trust_note"], OUTGOING_CALLS_TRUST_NOTE);
+        assert_eq!(value["note"], "full diagnostic only");
+    }
 
     #[test]
     fn go_to_definition_ambiguous_location_serializes_when_true() {

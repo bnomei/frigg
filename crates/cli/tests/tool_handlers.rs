@@ -270,6 +270,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             metadata: None,
             note: None,
 
+            trust: frigg::mcp::types::NavigationEdgeTrust::Provisional,
+            trust_note: String::new(),
             recovery: RecoveryFields::default(),
         },
     );

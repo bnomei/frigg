@@ -94,7 +94,8 @@ Important outputs:
 - `result_handle`
 - `mode`
 - `availability`
-- `metadata` and `note` only when `response_mode=full`
+- **`outgoing_calls` only:** `trust` (always `provisional` today) and always-on compact `trust_note` — not stripped in compact mode
+- `metadata` and full-mode `note` only when `response_mode=full`
 
 When opted in, each match may also include `follow_up_structural`.
 
@@ -102,7 +103,7 @@ Read `availability` before treating empty matches as meaningful. If `availabilit
 
 Trust guidance:
 - `incoming_calls` is often good enough to map believable entry paths
-- `outgoing_calls` is currently the more error-prone side of the stack, so confirm suspicious callees with `read_file`, `find_references`, or `search_structural` before asserting the edge
+- `outgoing_calls` is **provisional** on the wire (`trust=provisional` + `trust_note`); confirm callees with `read_file`, `find_references`, or `search_structural` before asserting blast radius. Do not treat a long callee list as verified structure.
 
 ## `document_symbols`
 

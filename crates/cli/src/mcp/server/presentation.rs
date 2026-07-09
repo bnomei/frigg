@@ -1073,6 +1073,8 @@ impl FriggMcpServer {
             "outgoing_calls",
             &mut response.matches,
         );
+        // EXP-nav-outgoing-honesty B: always-on machine honesty (not stripped in compact).
+        response = response.with_provisional_honesty();
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
@@ -1096,6 +1098,7 @@ impl FriggMcpServer {
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
+            // Full-mode diagnostic `note` only; keep always-on `trust` / `trust_note`.
             response.note = None;
         }
         response

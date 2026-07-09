@@ -275,7 +275,7 @@ OR sequential:
 search_symbol(anchor, path_class=runtime)
 find_references(symbol, include_definition=false)
 incoming_calls(symbol)              # who calls — reliable
-outgoing_calls(symbol)              # provisional; confirm with read_file
+outgoing_calls(symbol)              # trust=provisional (+ trust_note); confirm with read_file
 find_implementations(symbol)        # traits/interfaces only
 ```
 
@@ -489,7 +489,7 @@ Trust order for review:
 2. `read_file` / `read_match` + defs/refs — proof  
 3. `search_structural` — awkward AST evidence (tier-3)  
 4. `incoming_calls` — call-flow hint  
-5. `outgoing_calls` — provisional until body proof  
+5. `outgoing_calls` — always `trust=provisional` / `trust_note` until body proof
 
 Evidence packet shape (multi-claim answers) — every review/security finding needs path/line witnesses:
 
@@ -608,7 +608,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 | Proof after search | `read_match`, then `read_file` |
 | User citation | `read_file` json/citation or host Read |
 | References / callers | `find_references`, `incoming_calls` |
-| Callees | `outgoing_calls` (confirm with read) |
+| Callees | `outgoing_calls` (`trust=provisional`; confirm with read) |
 | Trait / interface impls | `find_implementations` |
 | Definition | `go_to_definition(symbol=...)` (not path+line alone; trust `ambiguous_location`) |
 | AST shape | `inspect_syntax_tree` + `search_structural` (tier-3) |
