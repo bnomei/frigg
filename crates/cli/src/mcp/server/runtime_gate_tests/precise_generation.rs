@@ -375,6 +375,15 @@ printf '%s' "fake-scip-rust"
             crate::mcp::types::WorkspacePreciseLifecyclePhase::Failed,
             "spawn failure should surface as failed lifecycle instead of not_started"
         );
+
+        let pending = server
+            .take_pending_precise_dirty_paths(&workspace.repository_id)
+            .expect("spawn failure must re-queue dirty paths as pending for later drain");
+        assert!(
+            pending.0.iter().any(|path| path == "Cargo.toml"),
+            "spawn-failure handoff should preserve the call's dirty paths, got {:?}",
+            pending.0
+        );
     });
 
     let _ = fs::remove_dir_all(workspace_root);

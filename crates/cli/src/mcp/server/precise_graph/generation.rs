@@ -1805,10 +1805,27 @@ impl FriggMcpServer {
                     .expect("runtime task registry poisoned")
                     .update_task_detail(&spawn_task_id, Some(detail.clone()));
             }
+            // Preserve dirty-path handoff: re-queue this call's paths (and keep any
+            // concurrent pending already recorded) so a later successful generation can drain.
+            {
+                let mut pending = self
+                    .runtime_state
+                    .precise_generation_pending_dirty_paths
+                    .write()
+                    .expect("precise generation pending dirty paths poisoned");
+                Self::record_pending_precise_dirty_paths_locked(
+                    &mut pending,
+                    &spawn_repository_id,
+                    &changed_paths,
+                    &deleted_paths,
+                );
+            }
             tracing::warn!(
                 repository_id = spawn_repository_id,
                 error = %err,
-                "failed to spawn precise generation thread"
+                changed_paths = changed_paths.len(),
+                deleted_paths = deleted_paths.len(),
+                "failed to spawn precise generation thread; dirty paths re-queued as pending"
             );
             return WorkspacePreciseGenerationAction::Failed;
         }
