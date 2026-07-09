@@ -636,7 +636,10 @@ pub struct RuntimeStatusSummary {
     /// Authoritative for agent routing: prefer this list (or live `tools/list`) over host
     /// schema caches, source `#[tool]` attributes, or inventory freezes. Non-public lifecycle
     /// handlers (e.g. `workspace_index`) are never listed here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized (including empty) so clients can distinguish “field present” from an
+    /// older server that never emitted the key.
+    #[serde(default)]
     pub tools_exposed: Vec<String>,
     pub status_tool: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

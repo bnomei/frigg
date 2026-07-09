@@ -29,6 +29,9 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
 
 #[test]
 fn runtime_status_tools_exposed_matches_filtered_router() {
+    use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
+    use crate::mcp::types::PUBLIC_TOOL_NAMES;
+
     let core = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
     let extended = FriggMcpServer::new_with_runtime_options(fixture_config(), true);
 
@@ -42,6 +45,11 @@ fn runtime_status_tools_exposed_matches_filtered_router() {
         core_status.tools_exposed, core_registered,
         "tools_exposed must mirror the live filtered router (core)"
     );
+    assert_eq!(
+        core_status.tools_exposed,
+        manifest_for_tool_surface_profile(ToolSurfaceProfile::Core).tool_names,
+        "tools_exposed must match the core profile manifest"
+    );
     assert_eq!(core_status.tool_surface_profile, "core");
     assert!(
         core_status.tools_exposed.contains(&"workspace".to_owned()),
@@ -51,10 +59,25 @@ fn runtime_status_tools_exposed_matches_filtered_router() {
         !core_status.tools_exposed.contains(&"explore".to_owned()),
         "core tools_exposed must omit extended-only tools"
     );
-    for phantom in ["workspace_index", "workspace_attach", "workspace_reindex", "deep_search"] {
+
+    // Non-public / lifecycle / legacy names that must never appear on the public surface.
+    for phantom in [
+        "workspace_index",
+        "workspace_attach",
+        "workspace_detach",
+        "workspace_prepare",
+        "workspace_current",
+        "workspace_reindex",
+        "list_repositories",
+        "deep_search",
+    ] {
         assert!(
             !core_status.tools_exposed.iter().any(|name| name == phantom),
             "tools_exposed must not list non-public/phantom tool {phantom}"
+        );
+        assert!(
+            !PUBLIC_TOOL_NAMES.contains(&phantom),
+            "phantom sample {phantom} should remain outside PUBLIC_TOOL_NAMES"
         );
     }
 
@@ -62,10 +85,22 @@ fn runtime_status_tools_exposed_matches_filtered_router() {
     extended_registered.sort();
     extended_registered.dedup();
     assert_eq!(extended_status.tools_exposed, extended_registered);
+    assert_eq!(
+        extended_status.tools_exposed,
+        manifest_for_tool_surface_profile(ToolSurfaceProfile::Extended).tool_names,
+        "tools_exposed must match the extended profile manifest"
+    );
     assert_eq!(extended_status.tool_surface_profile, "extended");
     assert!(
         extended_status.tools_exposed.contains(&"explore".to_owned()),
         "extended tools_exposed should include explore"
+    );
+
+    // Always-serialize contract: empty vs missing must not collapse for clients.
+    let value = serde_json::to_value(&core_status).expect("runtime status should serialize");
+    assert!(
+        value.get("tools_exposed").and_then(|v| v.as_array()).is_some(),
+        "tools_exposed must always be present in JSON (not skip_serializing_if empty)"
     );
 }
 
