@@ -1312,6 +1312,19 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         Some("discovery_only; confirm with exact search")
     );
     assert!(
+        !response.recovery.suggested_next.is_empty(),
+        "compact hybrid should still suggest exact pivots"
+    );
+    for next in &response.recovery.suggested_next {
+        if next.tool == "search_symbol" {
+            let pivot = next.query.as_deref().unwrap_or("");
+            assert!(
+                !pivot.contains(' ') || pivot.split_whitespace().count() <= 1,
+                "symbol pivot query should be identifier-like, got {pivot:?}"
+            );
+        }
+    }
+    assert!(
         response.result_handle.is_some(),
         "compact search_hybrid should return a result handle"
     );

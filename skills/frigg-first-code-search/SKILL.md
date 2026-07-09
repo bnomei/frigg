@@ -207,6 +207,8 @@ GOOD: search_hybrid → search_symbol/search_text → read_match
 
 If full mode shows `lexical_only_mode` or weak ranking → pivot to exact tools immediately.
 
+Prefer `suggested_next` identifiers after hybrid (short symbol/text queries); do not paste the original natural-language question into `search_symbol`.
+
 ### Exact text search
 
 | Field | Content |

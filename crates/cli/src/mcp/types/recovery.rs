@@ -72,6 +72,15 @@ pub struct SuggestedNext {
     pub reason: Option<String>,
 }
 
+/// Compact hybrid match fields used to pick exact-pivot tokens (avoids types/search cycle).
+#[derive(Debug, Clone, Copy)]
+pub struct HybridPivotMatchSource<'a> {
+    pub path: &'a str,
+    pub excerpt: &'a str,
+    /// Prefer this row when collecting tokens (exact/strong lexical rank reasons).
+    pub prefers_exact: bool,
+}
+
 impl SuggestedNext {
     /// Builds a minimal suggested-next row for `tool`.
     pub fn tool(tool: impl Into<String>) -> Self {
@@ -928,17 +937,34 @@ impl RecoveryFields {
     }
 
     /// Hybrid discovery should pivot to exact tools rather than proof-from-rank-1.
-    pub fn hybrid_discovery_exact_pivot(query: &str, pivot_path: Option<&str>) -> Self {
+    ///
+    /// Prefer code-like tokens from top match paths/excerpts (and a code-shaped full
+    /// query) so `suggested_next` stays short and tool-shaped. Does not surface
+    /// semantic readiness; keeps the public tool surface (`query` / `path`) clear.
+    pub fn hybrid_discovery_exact_pivot(
+        query: &str,
+        pivot_path: Option<&str>,
+        matches: &[HybridPivotMatchSource<'_>],
+    ) -> Self {
         let query = query.trim();
-        let mut suggested_next = vec![
-            SuggestedNext::tool("search_symbol")
-                .with_query(query)
-                .with_path_class("runtime")
-                .with_reason("exact symbol pivot after hybrid discovery"),
-            SuggestedNext::tool("search_text")
-                .with_query(query)
-                .with_reason("exact text pivot after hybrid discovery"),
-        ];
+        let tokens = hybrid_pivot_candidate_tokens(query, matches);
+        let mut suggested_next = Vec::new();
+
+        if let Some(primary) = tokens.first() {
+            suggested_next.push(
+                SuggestedNext::tool("search_symbol")
+                    .with_query(primary.clone())
+                    .with_path_class("runtime")
+                    .with_reason("exact symbol pivot after hybrid discovery"),
+            );
+            let text_query = tokens.get(1).cloned().unwrap_or_else(|| primary.clone());
+            suggested_next.push(
+                SuggestedNext::tool("search_text")
+                    .with_query(text_query)
+                    .with_reason("exact text pivot after hybrid discovery"),
+            );
+        }
+
         if let Some(path) = pivot_path.filter(|value| !value.trim().is_empty()) {
             suggested_next.push(
                 SuggestedNext::tool("read_file")
@@ -946,6 +972,37 @@ impl RecoveryFields {
                     .with_reason("inspect best hybrid pivot path after exact confirmation"),
             );
         }
+
+        // Last-resort when no code-like token was found: avoid stuffing multi-word NL into
+        // search_symbol; prefer identifier-shaped full query or text-only / path-only rows.
+        if !suggested_next
+            .iter()
+            .any(|next| next.tool == "search_symbol" || next.tool == "search_text")
+        {
+            if looks_like_code_identifier(query) {
+                suggested_next.insert(
+                    0,
+                    SuggestedNext::tool("search_symbol")
+                        .with_query(query)
+                        .with_path_class("runtime")
+                        .with_reason("exact symbol pivot after hybrid discovery"),
+                );
+                suggested_next.insert(
+                    1.min(suggested_next.len()),
+                    SuggestedNext::tool("search_text")
+                        .with_query(query)
+                        .with_reason("exact text pivot after hybrid discovery"),
+                );
+            } else if !query.is_empty() && !suggested_next.iter().any(|next| next.tool == "read_file")
+            {
+                suggested_next.push(
+                    SuggestedNext::tool("search_text")
+                        .with_query(query)
+                        .with_reason("exact text pivot after hybrid discovery"),
+                );
+            }
+        }
+
         Self {
             error_code: Some("HYBRID_DISCOVERY_PIVOT".to_owned()),
             message: Some(
@@ -1239,6 +1296,198 @@ fn broaden_path_regex_hint(path_regex: &str) -> Option<String> {
     None
 }
 
+const HYBRID_PIVOT_MAX_TOKENS: usize = 2;
+const HYBRID_PIVOT_TOP_MATCHES: usize = 3;
+
+/// Collect up to two code-like pivot tokens from hybrid matches and/or a code-shaped query.
+fn hybrid_pivot_candidate_tokens(
+    query: &str,
+    matches: &[HybridPivotMatchSource<'_>],
+) -> Vec<String> {
+    let mut scored: Vec<(i32, String)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    let mut push_token = |raw: &str, boost: i32| {
+        let Some(token) = normalize_pivot_token(raw) else {
+            return;
+        };
+        let key = token.to_ascii_lowercase();
+        if !seen.insert(key) {
+            return;
+        }
+        scored.push((pivot_token_quality(&token) + boost, token));
+    };
+
+    let mut ordered: Vec<&HybridPivotMatchSource<'_>> = matches.iter().collect();
+    ordered.sort_by_key(|matched| if matched.prefers_exact { 0 } else { 1 });
+
+    for matched in ordered.into_iter().take(HYBRID_PIVOT_TOP_MATCHES) {
+        let row_boost = if matched.prefers_exact { 2 } else { 0 };
+        if let Some(stem) = path_file_stem(matched.path) {
+            push_token(stem, row_boost);
+        }
+        for token in extract_code_like_tokens(matched.excerpt) {
+            // Excerpt identifiers usually beat path stems for exact tools.
+            push_token(&token, row_boost + 1);
+        }
+    }
+
+    if looks_like_code_identifier(query) {
+        push_token(query, 4);
+    }
+
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    scored
+        .into_iter()
+        .take(HYBRID_PIVOT_MAX_TOKENS)
+        .map(|(_, token)| token)
+        .collect()
+}
+
+fn path_file_stem(path: &str) -> Option<&str> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.split('.').next().unwrap_or(name);
+    if stem.is_empty() {
+        None
+    } else {
+        Some(stem)
+    }
+}
+
+fn normalize_pivot_token(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+    });
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = trimmed
+        .rsplit("::")
+        .next()
+        .unwrap_or(trimmed)
+        .rsplit('.')
+        .next()
+        .unwrap_or(trimmed)
+        .trim()
+        .trim_end_matches(':');
+    if !looks_like_code_identifier(candidate) {
+        return None;
+    }
+    Some(candidate.to_owned())
+}
+
+fn pivot_token_quality(token: &str) -> i32 {
+    let mut score = 0;
+    if token.contains('_') {
+        score += 4;
+    }
+    let has_lower = token.chars().any(|c| c.is_ascii_lowercase());
+    let has_upper = token.chars().any(|c| c.is_ascii_uppercase());
+    if has_lower && has_upper {
+        score += 4;
+    }
+    if token.len() >= 10 {
+        score += 2;
+    } else if token.len() >= 6 {
+        score += 1;
+    }
+    if matches!(
+        token,
+        "async"
+            | "await"
+            | "crate"
+            | "else"
+            | "enum"
+            | "false"
+            | "fn"
+            | "for"
+            | "impl"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "struct"
+            | "super"
+            | "true"
+            | "type"
+            | "use"
+            | "where"
+            | "while"
+    ) {
+        score -= 8;
+    }
+    score
+}
+
+fn looks_like_code_identifier(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) || trimmed.len() > 96 {
+        return false;
+    }
+    let candidate = trimmed.rsplit("::").next().unwrap_or(trimmed);
+    if candidate.is_empty() {
+        return false;
+    }
+    let mut chars = candidate.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    if !candidate
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return false;
+    }
+    if candidate.contains('_') {
+        return true;
+    }
+    let has_lower = candidate.chars().any(|c| c.is_ascii_lowercase());
+    let has_upper = candidate.chars().any(|c| c.is_ascii_uppercase());
+    if has_lower && has_upper {
+        return true;
+    }
+    candidate.len() >= 4
+}
+
+fn extract_code_like_tokens(excerpt: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let flush = |current: &mut String, tokens: &mut Vec<String>| {
+        if current.is_empty() {
+            return;
+        }
+        if looks_like_code_identifier(current) {
+            tokens.push(std::mem::take(current));
+        } else {
+            current.clear();
+        }
+    };
+
+    for ch in excerpt.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            current.push(ch);
+        } else if ch == ':' {
+            current.push(ch);
+        } else {
+            flush(&mut current, &mut tokens);
+        }
+    }
+    flush(&mut current, &mut tokens);
+    tokens
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1476,9 +1725,15 @@ mod tests {
 
     #[test]
     fn recovery_hybrid_discovery_exact_pivot_builder_is_actionable() {
+        let matches = [HybridPivotMatchSource {
+            path: "src/catalog.rs",
+            excerpt: "pub fn catalog_entries() {}",
+            prefers_exact: true,
+        }];
         let recovery = RecoveryFields::hybrid_discovery_exact_pivot(
             "where is catalog",
             Some("src/catalog.rs"),
+            &matches,
         );
         assert_recovery_actionable(&recovery);
         assert!(
@@ -1486,6 +1741,79 @@ mod tests {
                 .suggested_next
                 .iter()
                 .any(|next| next.tool == "search_symbol")
+        );
+    }
+
+    #[test]
+    fn recovery_hybrid_discovery_exact_pivot_prefers_excerpt_identifier_over_nl_query() {
+        let matches = [HybridPivotMatchSource {
+            path: "crates/cli/src/mcp/server/content.rs",
+            excerpt: "pub async fn read_match_impl(",
+            prefers_exact: true,
+        }];
+        let recovery = RecoveryFields::hybrid_discovery_exact_pivot(
+            "where can I open nearby code for an earlier hit without retyping the path",
+            Some("crates/cli/src/mcp/server/content.rs"),
+            &matches,
+        );
+        assert_recovery_actionable(&recovery);
+        let symbol = recovery
+            .suggested_next
+            .iter()
+            .find(|next| next.tool == "search_symbol")
+            .expect("symbol pivot");
+        assert_eq!(symbol.query.as_deref(), Some("read_match_impl"));
+        assert_ne!(
+            symbol.query.as_deref(),
+            Some("where can I open nearby code for an earlier hit without retyping the path")
+        );
+        let text = recovery
+            .suggested_next
+            .iter()
+            .find(|next| next.tool == "search_text")
+            .expect("text pivot");
+        assert!(
+            text.query
+                .as_deref()
+                .is_some_and(|query| query == "read_match_impl" || query == "content"),
+            "text pivot should be a short code-like token, got {:?}",
+            text.query
+        );
+    }
+
+    #[test]
+    fn recovery_hybrid_discovery_exact_pivot_uses_code_shaped_query() {
+        let recovery =
+            RecoveryFields::hybrid_discovery_exact_pivot("read_match", None, &[]);
+        assert_recovery_actionable(&recovery);
+        assert_eq!(
+            recovery
+                .suggested_next
+                .iter()
+                .find(|next| next.tool == "search_symbol")
+                .and_then(|next| next.query.as_deref()),
+            Some("read_match")
+        );
+    }
+
+    #[test]
+    fn recovery_hybrid_discovery_exact_pivot_path_only_without_code_tokens() {
+        let matches = [HybridPivotMatchSource {
+            path: "docs/readme.md",
+            excerpt: "see the overview of how things work in practice",
+            prefers_exact: false,
+        }];
+        let recovery = RecoveryFields::hybrid_discovery_exact_pivot(
+            "how does the overview describe things in practice",
+            Some("docs/readme.md"),
+            &matches,
+        );
+        assert_recovery_actionable(&recovery);
+        assert!(
+            recovery
+                .suggested_next
+                .iter()
+                .any(|next| next.tool == "read_file" && next.path.as_deref() == Some("docs/readme.md"))
         );
     }
 

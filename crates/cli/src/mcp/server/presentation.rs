@@ -5,7 +5,10 @@
 
 use super::*;
 use crate::domain::model::TextMatch;
-use crate::mcp::types::{DocumentSymbolItem, SearchHybridDiagnosticsSummary, SearchHybridMetadata};
+use crate::mcp::types::{
+    DocumentSymbolItem, HybridPivotMatchSource, SearchHybridDiagnosticsSummary,
+    SearchHybridMatch, SearchHybridMetadata, SearchHybridRankReason,
+};
 
 /// Outcome of resolving a session `result_handle` + `match_id` pair for `read_match`.
 #[derive(Debug, Clone)]
@@ -27,6 +30,26 @@ impl FriggMcpServer {
 
     fn should_return_full_response(mode: Option<ResponseMode>) -> bool {
         matches!(Self::response_mode(mode), ResponseMode::Full)
+    }
+
+    pub(super) fn hybrid_pivot_match_sources(
+        matches: &[SearchHybridMatch],
+    ) -> Vec<HybridPivotMatchSource<'_>> {
+        matches
+            .iter()
+            .map(|matched| HybridPivotMatchSource {
+                path: matched.path.as_str(),
+                excerpt: matched.excerpt.as_str(),
+                prefers_exact: matched.rank_reasons.iter().any(|reason| {
+                    matches!(
+                        reason,
+                        SearchHybridRankReason::ExactSymbolMatch
+                            | SearchHybridRankReason::ExactTextMatch
+                            | SearchHybridRankReason::StrongLexicalAnchor
+                    )
+                }),
+            })
+            .collect()
     }
 
     fn attach_recovery_index_if_missing(
@@ -697,9 +720,11 @@ impl FriggMcpServer {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         } else if !response.matches.is_empty() && response.recovery.suggested_next.is_empty() {
+            let pivot_sources = Self::hybrid_pivot_match_sources(&response.matches);
             response.recovery = RecoveryFields::hybrid_discovery_exact_pivot(
                 query.unwrap_or(""),
                 response.best_pivot_path.as_deref(),
+                &pivot_sources,
             );
             crate::mcp::routing_stats::record_recovery_issued();
         }

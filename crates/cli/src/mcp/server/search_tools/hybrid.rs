@@ -335,9 +335,11 @@ impl FriggMcpServer {
                     let recovery = if matches.is_empty() {
                         RecoveryFields::default()
                     } else {
+                        let pivot_sources = Self::hybrid_pivot_match_sources(&matches);
                         RecoveryFields::hybrid_discovery_exact_pivot(
                             &query,
                             best_pivot_path.as_deref(),
+                            &pivot_sources,
                         )
                     };
                     let response = SearchHybridResponse {
