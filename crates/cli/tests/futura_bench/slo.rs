@@ -1,4 +1,4 @@
-//! FUT-023 head-to-head latency: warm shipped `search_text` vs local `rg` on the
+//! head-to-head latency: warm shipped `search_text` vs local `rg` on the
 //! **same** fixture, query, and path scope.
 //!
 //! Agent-facing comparison:
@@ -181,7 +181,7 @@ fn maybe_write_snapshot(
     let status = if meets {
         "PASS — warm Frigg `search_text` p95 competitive with local `rg` (≤ 1.5× release noise budget) on the same fixture/query/scope"
     } else {
-        "FAIL — Frigg exceeded 1.5× rg p95; remediate before marking FUT-023 green"
+        "FAIL — Frigg exceeded 1.5× rg p95; remediate before marking green"
     };
     let ratio = if rg.p95_ms > 0.0 {
         frigg.p95_ms / rg.p95_ms
@@ -189,7 +189,7 @@ fn maybe_write_snapshot(
         f64::INFINITY
     };
     let body = format!(
-        r#"# Futura SLO snapshot (`FUT-023`)
+        r#"# Search latency SLO snapshot
 
 Generated: `{date_utc}`
 
@@ -257,14 +257,14 @@ Generated: `{date_utc}`
 ## Operator recipe
 
 ```bash
-# Binding FUT-023 (release + writes this file when FUTURA_SLO_OUT is set)
+# Binding (release + writes this file when FUTURA_SLO_OUT is set)
 FUTURA_SLO_OUT=crates/cli/assets/futura-slo-snapshot.md cargo futura-bench
 # Or: scripts/futura_slo_probe.sh crates/cli/assets/futura-slo-snapshot.md
 
 # Contract-only (debug; soft SLO, no competitive gate):
 # cargo test -p frigg --test futura_bench -- --nocapture
 
-# Local routing stats (FUT-024) — process-local only
+# Local routing stats — process-local only
 FRIGG_ROUTING_STATS=1 frigg serve
 # then: frigg stats   OR   MCP resource frigg://stats/routing
 ```
@@ -272,7 +272,7 @@ FRIGG_ROUTING_STATS=1 frigg serve
 ## Privacy
 
 Routing stats and this SLO snapshot are **local**. No cloud telemetry is required or emitted
-by Frigg core for `FUT-023` / `FUT-024`.
+by Frigg core for / .
 "#,
         date_utc = date_utc,
         fixture = workspace.display(),
@@ -354,7 +354,7 @@ pub async fn run_search_text_latency(report: &Mutex<harness::BenchReport>, fixtu
         require(
             frigg.p95_ms < 2000.0,
             format!(
-                "FUT-023 soft budget FAIL: warm search_text p95_ms={:.3} exceeded 2000ms",
+                "soft budget FAIL: warm search_text p95_ms={:.3} exceeded 2000ms",
                 frigg.p95_ms
             ),
         )?;
@@ -364,7 +364,7 @@ pub async fn run_search_text_latency(report: &Mutex<harness::BenchReport>, fixtu
         if cfg!(debug_assertions) {
             if !meets_exact {
                 println!(
-                    "FUTURA_SLO_NOTE debug profile: frigg p95_ms={:.3} > rg p95_ms={:.3} (ratio={:.3}); strict gate skipped — use --release for FUT-023 binding proof",
+                    "FUTURA_SLO_NOTE debug profile: frigg p95_ms={:.3} > rg p95_ms={:.3} (ratio={:.3}); strict gate skipped — use --release for binding proof",
                     frigg.p95_ms, rg.p95_ms, ratio
                 );
             }
@@ -374,7 +374,7 @@ pub async fn run_search_text_latency(report: &Mutex<harness::BenchReport>, fixtu
         require(
             meets_release,
             format!(
-                "FUT-023 FAIL (release): warm search_text p95_ms={:.3} > rg p95_ms={:.3} * {:.2} (ratio={:.3}); remediate latency before green",
+                "FAIL (release): warm search_text p95_ms={:.3} > rg p95_ms={:.3} * {:.2} (ratio={:.3}); remediate latency before green",
                 frigg.p95_ms, rg.p95_ms, RELEASE_NOISE_RATIO, ratio
             ),
         )?;
@@ -399,7 +399,7 @@ fn ensure_query_in_fixture(root: &Path, query: &str) {
     }
     let _ = std::fs::create_dir_all(root.join("src"));
     let body = format!(
-        "//! Futura SLO seed\npub fn {query}() -> &'static str {{\n    \"hello from futura slo fixture {query}\"\n}}\n"
+        "//! SLO seed\npub fn {query} -> &'static str {{\n \"hello from futura slo fixture {query}\"\n}}\n"
     );
     let _ = std::fs::write(lib, body);
     let util = root.join("src/util.rs");

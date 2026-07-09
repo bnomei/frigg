@@ -182,7 +182,7 @@ pub struct SearchTextParams {
 /// Empty results may include flattened recovery fields (`error_code`,
 /// `correction_hint`, `related_tools`, `suggested_next`, optional
 /// `zero_hit_reason`, `scope`, `index`) for compact-mode re-planning
-/// (`FUT-006` / `FUT-016`).
+///.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
     pub total_matches: usize,
@@ -195,11 +195,11 @@ pub struct SearchTextResponse {
     /// Handle lifetime. Session-scoped handles use `"session"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handle_expires: Option<String>,
-    /// Echo of `count_only` when the request asked for counts without match rows (`FUT-009`).
+    /// Echo of `count_only` when the request asked for counts without match rows.
     /// When true, empty `matches[]` is intentional — read `total_matches`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count_only: Option<bool>,
-    /// Approximate search latency class for agent tool-cost guidance (`FUT-017` partial).
+    /// Approximate search latency class for agent tool-cost guidance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_class: Option<LatencyClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,7 +210,7 @@ pub struct SearchTextResponse {
     pub recovery: RecoveryFields,
 }
 
-/// Coarse latency/cost class for compact search responses (`FUT-017`).
+/// Coarse latency/cost class for compact search responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LatencyClass {
@@ -602,13 +602,13 @@ pub struct SearchHybridResponse {
     /// Handle lifetime. Session-scoped handles use `"session"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handle_expires: Option<String>,
-    /// Always-on compact note: hybrid is discovery-only, not final proof (`FUT-010`).
+    /// Always-on compact note: hybrid is discovery-only, not final proof.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ranking_note: Option<String>,
-    /// Best live-navigation pivot path when available (`FUT-010`).
+    /// Best live-navigation pivot path when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_pivot_path: Option<String>,
-    /// Approximate search latency class for agent tool-cost guidance (`FUT-017`).
+    /// Approximate search latency class for agent tool-cost guidance.
     /// Hybrid is typically `warm` or `cold` (discovery path; allowed slower than exact).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_class: Option<LatencyClass>,
@@ -616,7 +616,7 @@ pub struct SearchHybridResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchHybridMetadata>,
     /// Flattened recovery fields (`suggested_next`, zero-hit) for compact re-planning
-    /// (`FUT-006` / `FUT-010` / `FUT-016`).
+    ///.
     #[serde(flatten, default)]
     pub recovery: RecoveryFields,
 }
@@ -650,7 +650,7 @@ pub struct SearchSymbolResponse {
     /// Handle lifetime. Session-scoped handles use `"session"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handle_expires: Option<String>,
-    /// Approximate search latency class for agent tool-cost guidance (`FUT-017`).
+    /// Approximate search latency class for agent tool-cost guidance.
     /// Known-name symbol lookup is typically `hot` when scoped/runtime-first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_class: Option<LatencyClass>,
@@ -659,7 +659,7 @@ pub struct SearchSymbolResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Flattened recovery fields on empty symbol results (`FUT-006` / `FUT-016`).
+    /// Flattened recovery fields on empty symbol results.
     #[serde(flatten, default)]
     pub recovery: RecoveryFields,
 }
@@ -694,7 +694,7 @@ impl SearchSymbolPathClass {
     }
 }
 
-/// Probe kind for multi-hypothesis `search_batch` (`FUT-008`).
+/// Probe kind for multi-hypothesis `search_batch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchBatchProbeKind {
@@ -748,7 +748,7 @@ pub struct SearchBatchProbe {
     pub pattern_type: Option<SearchPatternType>,
 }
 
-/// Parameters for `search_batch` multi-probe search (`FUT-008`).
+/// Parameters for `search_batch` multi-probe search.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBatchParams {
     /// 2..=8 typed probes executed and merged in one call.

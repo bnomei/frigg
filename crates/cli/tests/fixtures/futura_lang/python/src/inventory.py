@@ -12,7 +12,7 @@ class StockItem:
 
 
 class InventoryService:
-    """Tracks SKU quantities for Futura lang probes."""
+    """Tracks SKU quantities for multi-language bench probes."""
 
     def __init__(self) -> None:
         self._items: dict[str, StockItem] = {}

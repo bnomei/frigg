@@ -79,7 +79,7 @@ pub struct FindReferencesResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Flattened recovery fields on empty reference results (`FUT-006` / `FUT-016`).
+    /// Flattened recovery fields on empty reference results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -142,10 +142,10 @@ pub struct GoToDefinitionResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Soft warning when path+line without `symbol` looks dense/ambiguous (`FUT-013`).
+    /// Soft warning when path+line without `symbol` looks dense/ambiguous.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location_warning: Option<String>,
-    /// Flattened recovery fields on empty definition results (`FUT-006` / `FUT-016`).
+    /// Flattened recovery fields on empty definition results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -179,7 +179,7 @@ pub struct FindDeclarationsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Flattened recovery fields on empty declaration results (`FUT-013`).
+    /// Flattened recovery fields on empty declaration results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -237,7 +237,7 @@ pub struct FindImplementationsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Flattened recovery fields on empty implementation results (`FUT-013`).
+    /// Flattened recovery fields on empty implementation results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -321,7 +321,7 @@ pub struct IncomingCallsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Flattened recovery fields on empty caller results (`FUT-013`).
+    /// Flattened recovery fields on empty caller results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -341,7 +341,7 @@ pub struct OutgoingCallsResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Flattened recovery fields on empty callee results (`FUT-013`).
+    /// Flattened recovery fields on empty callee results.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -462,7 +462,7 @@ pub struct InspectSyntaxTreeResponse {
     pub note: Option<String>,
 }
 
-/// Parameters for optional `impact_bundle` convenience composition (`FUT-025`).
+/// Parameters for optional `impact_bundle` convenience composition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleParams {
     /// Symbol name to resolve impact for (required).
@@ -503,12 +503,12 @@ pub struct ImpactBundleResponse {
     /// Suggested next steps for tests pass + proof reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_next: Vec<super::SuggestedNext>,
-    /// Flattened recovery when the symbol is missing or impact is empty (`FUT-025`).
+    /// Flattened recovery when the symbol is missing or impact is empty.
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
 
-/// Optional evidence-packet claim witness shape for review/security (`FUT-022`).
+/// Optional evidence-packet claim witness shape for review/security.
 ///
 /// Agents may assemble multi-claim packets from search/nav/read results using this shape.
 /// Not a live MCP tool response — documentation and optional typing helper only.
@@ -525,7 +525,7 @@ pub struct EvidencePacketClaim {
     pub result_handle: Option<String>,
 }
 
-/// Optional multi-claim evidence packet envelope for review/security (`FUT-022`).
+/// Optional multi-claim evidence packet envelope for review/security.
 ///
 /// Mirrors the skill-documented JSON shape; not a live MCP tool response.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn evidence_packet_skill_shaped_multi_claim_json_deserializes() {
-        // Skill-documented multi-claim envelope (FUT-022).
+        // Skill-documented multi-claim envelope.
         let skill_json = r#"{
           "claims": [
             {

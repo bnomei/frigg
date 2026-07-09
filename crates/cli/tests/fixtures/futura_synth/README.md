@@ -1,4 +1,4 @@
-# Futura synthetic fixtures (`frigg-futura-bench`)
+# Synthetic fixtures (`frigg-futura-bench`)
 
 Tiny trees used by `cargo test -p frigg --test futura_bench` to force edge cases
 that are awkward to stage cleanly on the full dogfood tree:
@@ -20,4 +20,4 @@ that are awkward to stage cleanly on the full dogfood tree:
 3. Prefer unique sentinel strings so probes cannot accidentally hit dogfood roots.
 4. Document the forced `zero_hit_reason` / recovery code in the scenario name.
 
-See `docs/futura.md` §21 and `docs/futura-roadmap.md` Phase 7.
+See §21 and Phase 7.

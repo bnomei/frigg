@@ -187,7 +187,7 @@ impl FriggMcpServer {
                     if params_for_blocking.count_only == Some(true) {
                         response.count_only = Some(true);
                     }
-                    // Structured zero-hit for every empty search (`FUT-006` / `FUT-016`).
+                    // Structured zero-hit for every empty search.
                     if response.total_matches == 0 {
                         let pattern_type_is_literal = !matches!(
                             params_for_blocking.pattern_type,

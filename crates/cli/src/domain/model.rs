@@ -109,7 +109,7 @@ pub struct SymbolMatch {
     pub kind: String,
     pub path: String,
     pub line: usize,
-    /// 1-based column when indexed (`FUT-011` navigation handoff).
+    /// 1-based column when indexed ( navigation handoff).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<usize>,
     /// Short excerpt or signature snippet when available.

@@ -1,4 +1,4 @@
-//! Futura Phase 3 search_text / hybrid polish tests (`FUT-009`, `FUT-010`).
+//! search_text / hybrid polish integration tests.
 
 use super::*;
 

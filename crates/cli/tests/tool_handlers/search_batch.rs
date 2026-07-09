@@ -1,4 +1,4 @@
-//! Integration tests for `search_batch` multi-probe merge (`FUT-008`).
+//! Integration tests for `search_batch` multi-probe merge.
 
 use super::*;
 use frigg::mcp::types::{

@@ -836,7 +836,7 @@ impl TextSearcher {
             | crate::settings::LexicalBackendMode::Ripgrep => {}
         }
 
-        // Small-repo / tight-scope fast path (`FUT-023`): spawning ripgrep loses to both shell
+        // Small-repo / tight-scope fast path: spawning ripgrep loses to both shell
         // `rg` and in-process native Aho-Corasick when the candidate set is tiny. Keep Auto on
         // native for small universes; explicit `Ripgrep` backend still forces the accelerator.
         if matches!(

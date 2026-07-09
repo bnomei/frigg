@@ -56,7 +56,7 @@ pub enum WorkspaceRecommendedAction {
     UseHeuristicMode,
 }
 
-/// Session gate action for `workspace` status responses (`FUT-007`).
+/// Session gate action for `workspace` status responses.
 ///
 /// Distinct from [`WorkspaceRecommendedAction`], which is precise-generation oriented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -351,7 +351,7 @@ pub struct WorkspaceResponse {
     pub repositories: Vec<RepositorySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeStatusSummary>,
-    /// Futura session gate: what the agent should do next (`FUT-007`).
+    /// Session gate: what the agent should do next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_action: Option<WorkspaceGateAction>,
     /// Working tree may have paths that differ from the last snapshot.
@@ -366,7 +366,7 @@ pub struct WorkspaceResponse {
     /// Tool classes that are fresh enough to trust without live-disk fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fresh_enough_for: Option<Vec<String>>,
-    /// Opt-in local routing stats when `FRIGG_ROUTING_STATS=1` (`FUT-024`).
+    /// Opt-in local routing stats when `FRIGG_ROUTING_STATS=1`.
     /// Process-local only; never cloud telemetry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_stats: Option<crate::mcp::routing_stats::RoutingStatsSnapshot>,

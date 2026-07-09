@@ -588,7 +588,7 @@ impl FriggMcpServer {
                 }
             }
         } else if response.recovery.scope.is_none() {
-            // Scope echo on non-empty hits when filters were applied (`FUT-009`).
+            // Scope echo on non-empty hits when filters were applied.
             let mut scope = ZeroHitScope::default();
             if let Some(path_regex) = params.path_regex.as_ref() {
                 scope = scope.with_path_regex(path_regex.clone());
@@ -642,14 +642,14 @@ impl FriggMcpServer {
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
         if response.latency_class.is_none() {
-            // Hybrid is discovery-oriented and allowed slower than exact search (`FUT-017`).
+            // Hybrid is discovery-oriented and allowed slower than exact search.
             response.latency_class = Some(if response.matches.is_empty() {
                 crate::mcp::types::LatencyClass::Warm
             } else {
                 crate::mcp::types::LatencyClass::Cold
             });
         }
-        // Compact discovery pivots — always present; never treat hybrid as proof (`FUT-010`).
+        // Compact discovery pivots — always present; never treat hybrid as proof.
         if response.ranking_note.is_none() {
             response.ranking_note =
                 Some("discovery_only; confirm with exact search".to_owned());
@@ -755,7 +755,7 @@ impl FriggMcpServer {
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
         if response.latency_class.is_none() {
-            // Runtime-first known-name lookup is the hot symbol path (`FUT-017`).
+            // Runtime-first known-name lookup is the hot symbol path.
             let scoped = params.is_some_and(|params| {
                 params.path_regex.is_some()
                     || params.repository_id.is_some()
@@ -792,7 +792,7 @@ impl FriggMcpServer {
                 } else {
                     scope = scope.with_path_class(effective_path_class.as_str());
                 }
-                // Runtime-first empty recovery for known names (`FUT-011`).
+                // Runtime-first empty recovery for known names.
                 let scope = Some(scope).filter(|scope| !scope.is_empty());
                 response.recovery = if effective_path_class == SearchSymbolPathClass::Runtime {
                     if let Some(name) = query {
@@ -1097,7 +1097,7 @@ impl FriggMcpServer {
         const DEFAULT_DOCUMENT_SYMBOLS_LIMIT: usize = 200;
         const MAX_DOCUMENT_SYMBOLS_LIMIT: usize = 1000;
 
-        // Default top_level_only=true (`FUT-013` outline).
+        // Default top_level_only=true ( outline).
         let top_level_only = params.top_level_only.unwrap_or(true);
         response.top_level_only = top_level_only;
         if top_level_only {
@@ -1350,7 +1350,7 @@ mod tests {
         assert!(value.get("correction_hint").is_some());
         assert!(value.get("suggested_next").is_some());
         assert_eq!(value["scope"]["path_regex"], "^src/");
-        // Index block is filled from workspace storage when a repo is known (`FUT-006`).
+        // Index block is filled from workspace storage when a repo is known.
         assert!(
             value.get("index").is_some(),
             "zero-hit should serialize index block when workspace signals exist: {value}"

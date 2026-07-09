@@ -1,4 +1,4 @@
-//! CLI `stats` command: local opt-in routing stats surface (`FUT-024`).
+//! CLI `stats` command: local opt-in routing stats surface.
 //!
 //! Prints process-local routing counters when `FRIGG_ROUTING_STATS` is enabled for this
 //! process, or documents how to enable/read stats from a running MCP server. Never sends

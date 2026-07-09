@@ -1,4 +1,4 @@
-//! Synthetic Futura seed for forced search edges (not product source).
+//! Synthetic seed for forced search edges (not product source).
 //!
 //! Sentinel phrases are unique so dogfood/lang boards never collide.
 

@@ -1,4 +1,4 @@
-//! Phase 5 freshness + ignore truth tests (`FUT-005`, `FUT-020`).
+//! Freshness and ignore-truth integration tests.
 
 use super::*;
 use frigg::mcp::types::{ReadFileResponse, WorkspaceGateAction};

@@ -198,7 +198,7 @@ impl FriggMcpServer {
             .is_some_and(|path| !path.trim().is_empty())
             && params.line.is_some();
         if !has_symbol && !has_location {
-            // Quick recovery for empty `{}` / missing symbol+path (`FUT-013`).
+            // Quick recovery for empty `{}` / missing symbol+path.
             let response = GoToDefinitionResponse {
                 matches: Vec::new(),
                 result_handle: None,

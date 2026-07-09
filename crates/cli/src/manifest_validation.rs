@@ -284,7 +284,7 @@ impl ValidatedManifestCandidateCache {
     }
 
     /// Ready entry for a root without requiring a snapshot id from storage.
-    /// Used for the warm `search_text` path so we can skip opening SQLite (`FUT-023`).
+    /// Used for the warm `search_text` path so we can skip opening SQLite.
     pub(crate) fn ready_for_root(
         &mut self,
         root: &Path,
@@ -360,7 +360,7 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
 ) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
-    // Warm path (`FUT-023`): serve Ready digests without opening SQLite. Dirty/miss fall through.
+    // Warm path: serve Ready digests without opening SQLite. Dirty/miss fall through.
     if let Some(cache) = cache {
         let mut guard = cache
             .write()
@@ -881,7 +881,7 @@ mod tests {
         fs::write(workspace_root.join("new_file.rs"), "fn uncached() {}\n")
             .expect("new fixture file should be writable");
         // Watch/index marks Dirty when files change; warm-path Ready hits trust digests
-        // without a full live rewalk (`FUT-023`). Without Dirty, Ready cache still returns.
+        // without a full live rewalk. Without Dirty, Ready cache still returns.
         cache
             .write()
             .expect("validated manifest candidate cache should not be poisoned")

@@ -1,4 +1,4 @@
-# Optional harness policy pack (`FUT-021`)
+# Optional harness policy pack
 
 **Status:** optional templates only. **Not required** for Frigg core correctness or CI.
 
@@ -31,6 +31,4 @@ any particular host.
 
 ## Related
 
-- Product contract: `docs/futura.md` (`FUT-021`)
-- Operational board: `docs/futura-roadmap.md` Phase 8
 - Skill: `skills/frigg-first-code-search/SKILL.md`

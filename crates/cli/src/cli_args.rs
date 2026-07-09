@@ -320,7 +320,7 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Show local opt-in routing stats (`FUT-024`).
+    /// Show local opt-in routing stats.
     ///
     /// Process-local counters only (no cloud). Enable recording on the MCP
     /// process with `FRIGG_ROUTING_STATS=1`, then read this command or the

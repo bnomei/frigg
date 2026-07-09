@@ -207,7 +207,7 @@ pub enum ReadPresentationMode {
     Text,
     /// Return a structured JSON object with explicit `content`, path, byte, and metadata fields.
     Json,
-    /// Return MCP text with `LINE|content` prefixes for citation-trained agents (`FUT-012`).
+    /// Return MCP text with `LINE|content` prefixes for citation-trained agents.
     /// Line numbers are 1-based and align with the selected window's `start_line`.
     Citation,
 }

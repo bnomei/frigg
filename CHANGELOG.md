@@ -2,14 +2,17 @@
 
 ## Unreleased
 
-### Futura (Frigg-first evidence layer)
+## 0.8.0 - 2026-07-09
 
-- Added production scenario-first skill (`skills/frigg-first-code-search`) and lightweight default AGENTS directive with optional expanded policy adopt.
+- Promoted a scenario-first `frigg-first-code-search` skill and lightweight default AGENTS adopt; use `frigg adopt --target agents-md --policy expanded` for a compact in-repo routing policy.
+- Added core MCP tools `search_batch` (concurrent multi-probe merge) and `impact_bundle` (combined impact navigation).
 - Added structured zero-hit / recovery fields, workspace gate actions (dirty + path-scoped live-disk), and scoped handle STALE/MIXED failures on `read_match`.
-- Added `search_batch` multi-probe concurrent merge, citation presentation mode, optional `impact_bundle`, and local opt-in routing stats (`FRIGG_ROUTING_STATS` / `frigg stats`).
-- Added `frigg-futura-bench` (dogfood/synth/lang boards, 21 scenarios) with CI release job and competitive FUT-023 gate: warm `search_text` p95 ≤ local `rg` p95 × 1.5 noise budget (debug soft only).
-- Added optional non-core harness policy templates under `policy-pack/frigg-harness/`.
-- Explicitly deferred (documented): live `EvidencePacket` MCP tool, HTTP tools/call suite, large-repo SLO, hot-reindex lag p95, `FriggUnavailable` emit path.
+- Added `presentation_mode=citation` on `read_file` / `read_match` for `LINE|content` citation output.
+- Added local opt-in routing stats via `FRIGG_ROUTING_STATS` and `frigg stats` (MCP resource `frigg://stats/routing`; no cloud telemetry).
+- Added competitive search-latency proof boards (`cargo test -p frigg --test futura_bench`; release gate `cargo futura-bench`): warm `search_text` p95 ≤ local `rg` p95 × 1.5 noise budget (debug soft only).
+- Added optional harness policy templates under `policy-pack/frigg-harness/`.
+- Hardened batch probe scope/handles, go_to recovery, result-handle detach invalidation, precise spawn re-queue, and corpus re-read path containment.
+- Deferred (documented): live `EvidencePacket` tool, HTTP tools/call suite, large-repo SLO, hot-reindex lag p95, `FriggUnavailable` emit path.
 
 ## 0.6.3 - 2026-07-05
 

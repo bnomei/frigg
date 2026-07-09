@@ -356,7 +356,7 @@ async fn run_ignored_docs_absence(report: &Mutex<harness::BenchReport>, root: &P
     let started = Instant::now();
     let outcome = async {
         // Fixture (and live Frigg) keep /docs/ out of the indexed tree. Distinctive
-        // futura contract phrases must not appear under docs/ in search hits.
+        // contract phrases must not appear under docs/ in search hits.
         let server = server_for_root(root).await;
         let response = server
             .search_text(Parameters(SearchTextParams {

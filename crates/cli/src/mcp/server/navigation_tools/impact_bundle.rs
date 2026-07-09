@@ -1,4 +1,4 @@
-//! Optional `impact_bundle` convenience composition (`FUT-025`).
+//! Optional `impact_bundle` convenience composition.
 //!
 //! Composes existing symbol / references / callers / implementations tools without replacing them.
 

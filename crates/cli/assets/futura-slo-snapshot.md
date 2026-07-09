@@ -1,4 +1,4 @@
-# Futura SLO snapshot (`FUT-023`)
+# Search latency SLO snapshot
 
 Generated: `unix-1783552169`
 
@@ -184,14 +184,14 @@ Generated: `unix-1783552169`
 ## Operator recipe
 
 ```bash
-# Binding FUT-023 (release + writes this file when FUTURA_SLO_OUT is set)
+# Binding (release + writes this file when FUTURA_SLO_OUT is set)
 FUTURA_SLO_OUT=crates/cli/assets/futura-slo-snapshot.md cargo futura-bench
 # Or: scripts/futura_slo_probe.sh crates/cli/assets/futura-slo-snapshot.md
 
 # Contract-only (debug; soft SLO, no competitive gate):
 # cargo test -p frigg --test futura_bench -- --nocapture
 
-# Local routing stats (FUT-024) — process-local only
+# Local routing stats — process-local only
 FRIGG_ROUTING_STATS=1 frigg serve
 # then: frigg stats   OR   MCP resource frigg://stats/routing
 ```
@@ -199,4 +199,4 @@ FRIGG_ROUTING_STATS=1 frigg serve
 ## Privacy
 
 Routing stats and this SLO snapshot are **local**. No cloud telemetry is required or emitted
-by Frigg core for `FUT-023` / `FUT-024`.
+by Frigg core for / .

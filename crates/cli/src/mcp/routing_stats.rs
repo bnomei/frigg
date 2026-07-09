@@ -1,4 +1,4 @@
-//! Opt-in local routing stats for Futura operator health (`FUT-024`).
+//! Opt-in local routing stats for operator health.
 //!
 //! Session/process-local counters only — no cloud telemetry. Enable with
 //! `FRIGG_ROUTING_STATS=1` (or `true` / `yes` / `on`).

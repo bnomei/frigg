@@ -1,6 +1,6 @@
 #![allow(clippy::panic)]
 
-//! # frigg-futura-bench (FUT-019)
+//! # frigg-futura-bench
 //!
 //! Evaluation harness that exercises **shipped** Frigg MCP server code
 //! (`FriggMcpServer` tool handlers) — not a reimplementation.

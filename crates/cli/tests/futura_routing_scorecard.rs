@@ -1,4 +1,4 @@
-//! FUT-004: routing scorecard for the production frigg-first skill.
+//! Routing scorecard for the production frigg-first skill.
 //!
 //! Reads `skills/frigg-first-code-search/SKILL.md` (workspace-relative from
 //! `CARGO_MANIFEST_DIR/../..`) and asserts the compact intent map / scenario
@@ -14,7 +14,7 @@ fn production_skill_markdown() -> String {
         .join("skills/frigg-first-code-search/SKILL.md");
     assert!(
         path.is_file(),
-        "production skill must exist at {} (FUT-004 routing scorecard)",
+        "production skill must exist at {} (routing scorecard)",
         path.display()
     );
     std::fs::read_to_string(&path)

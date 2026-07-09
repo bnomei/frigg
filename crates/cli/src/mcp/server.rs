@@ -638,7 +638,7 @@ impl FriggMcpServer {
         }
     }
 
-    /// Computes Futura workspace gate fields (`FUT-007`).
+    /// Computes workspace gate fields.
     fn workspace_gate_fields(
         &self,
         current_workspace: Option<&AttachedWorkspace>,
@@ -720,7 +720,7 @@ impl FriggMcpServer {
         )
     }
 
-    /// Best-effort index freshness block for zero-hit recovery (`FUT-006`).
+    /// Best-effort index freshness block for zero-hit recovery.
     ///
     /// Populates `ZeroHitIndex` from storage summary + gate dirty signals for the given public
     /// repository ids. When `repository_ids` is empty, falls back to the session current
@@ -834,7 +834,7 @@ impl FriggMcpServer {
         }
     }
 
-    /// Best-effort dirty paths for the workspace gate (`FUT-020`).
+    /// Best-effort dirty paths for the workspace gate.
     ///
     /// Prefer precise-generation pending dirty paths (watch/hot reindex queue). Paths are
     /// path-scoped only — `use_live_disk_for_touched_files` never licenses repo-wide grep.

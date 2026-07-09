@@ -1299,7 +1299,7 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .expect("compact search_hybrid should succeed")
         .0;
 
-    // Compact may retain thin lexical_only_mode disclosure when semantic is off (`FUT-010`).
+    // Compact may retain thin lexical_only_mode disclosure when semantic is off.
     if let Some(metadata) = response.metadata.as_ref() {
         assert_eq!(metadata.lexical_only_mode, Some(true));
         assert!(metadata.channels.is_empty());

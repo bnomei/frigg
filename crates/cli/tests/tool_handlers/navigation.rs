@@ -3153,7 +3153,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         "impact_bundle should include symbol hits: {response:?}"
     );
 
-    // FUT-025 composition: symbols + (refs or mode/recovery note) + (callers or provisional note).
+    // composition: symbols + (refs or mode/recovery note) + (callers or provisional note).
     let refs_ok = !response.references.is_empty()
         || matches!(
             response.references_mode,

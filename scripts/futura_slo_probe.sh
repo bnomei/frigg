@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Futura SLO probe (FUT-023): head-to-head warm Frigg search_text vs local rg.
+# Search latency SLO probe: head-to-head warm Frigg search_text vs local rg.
 #
 # Runs the shipped futura_bench scenario `slo_search_text_vs_rg` which:
 # - materializes a tiny fixture
@@ -22,7 +22,7 @@ OUT="${1:-$ROOT/crates/cli/assets/futura-slo-snapshot.md}"
 cd "$ROOT"
 export FUTURA_SLO_OUT="$OUT"
 
-echo "Running head-to-head FUT-023 probe (release futura_bench)..."
+echo "Running head-to-head probe (release futura_bench)..."
 echo "FUTURA_SLO_OUT=$FUTURA_SLO_OUT"
 
 cargo test -p frigg --test futura_bench --release -- --nocapture

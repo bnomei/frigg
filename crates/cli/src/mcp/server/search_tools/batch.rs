@@ -1,4 +1,4 @@
-//! `search_batch` multi-probe merge tool (`FUT-008`).
+//! `search_batch` multi-probe merge tool.
 //!
 //! Runs 2..=8 typed probes (text / symbol / hybrid) **concurrently**, merges and
 //! dedupes by path:line:column, and returns probe summaries plus batch recovery.

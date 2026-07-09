@@ -226,7 +226,7 @@ async fn run_handle_path(report: &Mutex<harness::BenchReport>, fixture: &std::pa
         .record("read_match_handle_synth", Surface::Synth, started, outcome);
 }
 
-/// FUT-020 post-edit gate: real file edit + production dirty signals (same path watch uses).
+/// post-edit gate: real file edit + production dirty signals (same path watch uses).
 ///
 /// Watch is not started in bench; after the edit we mark the validated-manifest dirty root and
 /// record path-scoped pending dirty paths the way the watch/hot-reindex queue does, then assert

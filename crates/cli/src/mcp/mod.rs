@@ -6,7 +6,7 @@
 pub mod advanced;
 mod explorer;
 mod guidance;
-/// Local opt-in routing stats (`FUT-024`) — process-local counters, no cloud telemetry.
+/// Local opt-in routing stats — process-local counters, no cloud telemetry.
 pub mod routing_stats;
 mod server;
 mod server_cache;

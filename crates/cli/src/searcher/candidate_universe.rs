@@ -120,7 +120,7 @@ impl TextSearcher {
                     }
                 };
                 // Root-scoped runtime configs cannot match path scopes that exclude the repo root
-                // (e.g. `path_regex=^src/`). Skip the extra walk on that hot path (`FUT-023`).
+                // (e.g. `path_regex=^src/`). Skip the extra walk on that hot path.
                 let path_scope_excludes_root = query.path_regex.as_ref().is_some_and(|path_regex| {
                     !path_regex.is_match("Cargo.toml") && !path_regex.is_match("package.json")
                 });
@@ -254,7 +254,7 @@ impl TextSearcher {
         let candidate_intake_started_at = Instant::now();
         // Manifest digests are already ignore-filtered at index time. Rebuild ignore matchers
         // only when the root is dirty (files may have been added that need live ignore truth).
-        // Skipping this on the warm path is a `FUT-023` small-repo latency win vs shell `rg`.
+        // Skipping this on the warm path is a small-repo latency win vs shell `rg`.
         let root_is_dirty = self
             .validated_manifest_candidate_cache
             .read()

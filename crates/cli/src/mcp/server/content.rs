@@ -1121,7 +1121,7 @@ impl FriggMcpServer {
         }
     }
 
-    /// Format source as `LINE|content` lines for citation-trained agents (`FUT-012`).
+    /// Format source as `LINE|content` lines for citation-trained agents.
     pub(super) fn format_citation_text(start_line: usize, content: &str) -> String {
         if content.is_empty() {
             return String::new();

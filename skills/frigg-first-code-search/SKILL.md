@@ -14,7 +14,7 @@ Shell tools are fallback only for git state and diffs, non-code files, build/tes
 
 Do not run parallel shell grep in the same turn as Frigg search on indexed source.
 
-Harness-specific MCP registration or tool-order flukes (for example one-off Grok schema/cache issues) are **outside the Frigg product contract** (`FUT-003`). Route indexed source through Frigg when the live tool list exposes Frigg tools; do not invent product workarounds for host quirks.
+Harness-specific MCP registration or tool-order flukes (for example one-off Grok schema/cache issues) are **outside Frigg's product contract**. Route indexed source through Frigg when the live tool list exposes Frigg tools; do not invent product workarounds for host quirks.
 
 **HTTP-first runtime:** prefer loopback HTTP for shared and long-running work. Stdio is for one local client that owns the process. Adoption, watch freshness, and cache reuse are HTTP-first behaviors.
 
@@ -589,5 +589,3 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/workflows.md](references/workflows.md) — extended narrative loops (aligned with scenario cards above)
 - [references/workspace-and-runtime.md](references/workspace-and-runtime.md) — `workspace`, adoption, runtime
 - [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list`
-
-Product contract: `docs/futura.md` (when present in the working tree). Operational board: `docs/futura-roadmap.md`.

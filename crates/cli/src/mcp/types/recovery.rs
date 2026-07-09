@@ -1,13 +1,13 @@
-//! Shared recovery composer types for empty and failed search/navigation/read paths (`FUT-016`).
+//! Shared recovery composer types for empty and failed search/navigation/read paths.
 //!
 //! Recovery fields are designed for compact mode (top-level, optional, skip-when-empty) so agents
 //! get actionable next steps without requesting `response_mode=full`. Builders cover the common
-//! situations from `docs/futura.md` §15, including structured zero-hit diagnostics (`FUT-006`).
+//! situations including structured zero-hit diagnostics.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Stable zero-hit reason codes for search/navigation empty results (`FUT-006` / 2.2).
+/// Stable zero-hit reason codes for search/navigation empty results.
 ///
 /// Defined here so recovery builders and later zero-hit contracts share one serde-stable enum.
 /// Values are snake_case on the wire.
@@ -135,7 +135,7 @@ impl SuggestedNext {
     }
 }
 
-/// Applied search/navigation scope echo for zero-hit diagnostics (`FUT-006`).
+/// Applied search/navigation scope echo for zero-hit diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ZeroHitScope {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,7 +198,7 @@ impl ZeroHitScope {
     }
 }
 
-/// Index freshness block for zero-hit diagnostics (`FUT-006`).
+/// Index freshness block for zero-hit diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ZeroHitIndex {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,13 +278,13 @@ pub struct RecoveryFields {
     /// Concrete follow-up tool invocations with optional params.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_next: Vec<SuggestedNext>,
-    /// Structured zero-hit reason when the result set is empty (`FUT-006`).
+    /// Structured zero-hit reason when the result set is empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zero_hit_reason: Option<ZeroHitReason>,
-    /// Echo of applied scope filters for zero-hit trust (`FUT-006`).
+    /// Echo of applied scope filters for zero-hit trust.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<ZeroHitScope>,
-    /// Index freshness block for zero-hit trust (`FUT-006`).
+    /// Index freshness block for zero-hit trust.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<ZeroHitIndex>,
 }
@@ -313,7 +313,7 @@ impl RecoveryFields {
         self
     }
 
-    /// When a non-recursive glob produced zero hits, suggest a recursive `**` form (`FUT-009`).
+    /// When a non-recursive glob produced zero hits, suggest a recursive `**` form.
     pub fn with_non_recursive_glob_hint(mut self, query: &str, glob: &str) -> Self {
         let glob = glob.trim();
         if glob.is_empty() || glob.contains("**") {
@@ -391,7 +391,7 @@ impl RecoveryFields {
     ///
     /// `pattern_type_is_literal` should reflect the caller-requested mode (default literal),
     /// not an internal rewrite from `ignore_case` / `word` flags. Every search zero is
-    /// actionable (`FUT-006`): regex trap, scoped miss, or complete indexed miss.
+    /// actionable: regex trap, scoped miss, or complete indexed miss.
     pub fn for_search_text_zero_hit(query: &str, pattern_type_is_literal: bool) -> Self {
         Self::for_zero_hit(ZeroHitInput {
             tool: "search_text",
@@ -403,7 +403,7 @@ impl RecoveryFields {
         })
     }
 
-    /// Structured zero-hit recovery for search and navigation empty results (`FUT-006`).
+    /// Structured zero-hit recovery for search and navigation empty results.
     ///
     /// Always returns non-empty `message`, `correction_hint`, `suggested_next`, and a
     /// `zero_hit_reason` so agents can re-plan without shell confirmation.

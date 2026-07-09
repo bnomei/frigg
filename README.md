@@ -38,7 +38,8 @@ The narrow promise is source-backed context for AI agents: repository-aware sear
 - Direct literal, safe-regex, and `rg`-shaped code scans with `search_text`.
 - Broad discovery with `search_hybrid`, blending lexical, path, graph, witness, optional semantic, and code-aware ranking signals.
 - Known-identifier lookup with `search_symbol`.
-- Bounded source reads with `read_file` and `read_match`.
+- Bounded source reads with `read_file` and `read_match` (including citation mode).
+- Multi-probe search with `search_batch` and combined impact navigation with `impact_bundle`.
 - Definitions, declarations, references, implementations, incoming calls, and outgoing calls.
 - Optional semantic indexing with local, OpenAI, or Google embedding providers.
 - Optional SCIP artifact ingestion and generator assistance for more precise navigation.
@@ -51,7 +52,7 @@ The narrow promise is source-backed context for AI agents: repository-aware sear
 Fast path on macOS or GNU/glibc Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.6.3 sh
+curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.8.0 sh
 ```
 
 The installer downloads the matching GitHub Release archive, verifies its `.sha256`, and installs the `frigg` binary to `$HOME/.local/bin` unless `FRIGG_INSTALL_DIR` is set. When `FRIGG_VERSION` is unset, it resolves the latest GitHub Release.
@@ -64,7 +65,7 @@ Other install surfaces:
 | Cargo prebuilt binary | `cargo binstall frigg` |
 | Cargo source fallback | `cargo install frigg` |
 | npm wrapper | `npx @bnomei/frigg --version` |
-| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.6.3 --version` |
+| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.8.0 --version` |
 | Scoop | `scoop bucket add frigg https://github.com/bnomei/scoop-frigg && scoop install frigg` |
 
 The prebuilt paths are the point: one local binary, no Python 3.11+ runtime, no local C compiler, and no ONNX model download unless you explicitly enable the local semantic runtime.
@@ -81,7 +82,7 @@ target/release/frigg --version
 Expected output:
 
 ```text
-frigg 0.6.3
+frigg 0.8.0
 ```
 
 Frigg's source currently requires Rust 1.88 or newer.
@@ -214,9 +215,10 @@ The normal MCP loop is:
 5. Use `search_hybrid` for broad discovery when you do not have an exact string, symbol, or path anchor.
 6. Use `search_text` for literal, safe-regex, and `rg`-shaped matches.
 7. Use `search_symbol` for known identifiers.
-8. Use `read_match` when a search or navigation result returned `result_handle` plus `match_id`.
-9. Use `read_file` when you already know the canonical repository-relative path.
-10. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries.
+8. Use `search_batch` when you have several search hypotheses and want concurrent probes merged in one call.
+9. Use `read_match` when a search or navigation result returned `result_handle` plus `match_id`.
+10. Use `read_file` when you already know the canonical repository-relative path.
+11. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries. Prefer `impact_bundle` when one symbol needs combined impact.
 
 Shell replacement map:
 
@@ -262,19 +264,22 @@ Example prompts:
 
 For agent-facing usage guidance, use [skills/frigg-first-code-search](skills/frigg-first-code-search/). For runtime diagnosis, use the [Frigg Operator Runbook](docs/operator-runbook.md).
 
-### Futura (Frigg-first evidence layer)
+### Agent evidence contracts (0.8)
 
-Futura is the skill + MCP contract + recovery + bench surface that makes Frigg
-the default for agent code search. Tracked proof:
+0.8 strengthens the Frigg-first path agents use for code search:
+
+- Multi-hypothesis probes: `search_batch` (concurrent merge of several search probes).
+- Impact navigation: `impact_bundle` when one symbol needs defs/refs/calls together.
+- Structured zero-hit / recovery fields and workspace freshness gates (dirty paths, path-scoped live-disk when needed).
+- Citation-friendly reads: `presentation_mode=citation` on `read_file` / `read_match` (`LINE|content`).
+- Local routing stats: `FRIGG_ROUTING_STATS=1`, then `frigg stats` (or MCP resource `frigg://stats/routing`).
+
+Proof and optional policy:
 
 - Skill: [skills/frigg-first-code-search](skills/frigg-first-code-search/)
-- Bench: `cargo test -p frigg --test futura_bench` (contracts) and
-  `cargo futura-bench` (release, FUT-023 competitive gate vs `rg`)
+- Bench: `cargo test -p frigg --test futura_bench` (contracts) and `cargo futura-bench` (release competitive gate vs `rg`)
 - SLO snapshot: [crates/cli/assets/futura-slo-snapshot.md](crates/cli/assets/futura-slo-snapshot.md)
 - Optional harness templates: [policy-pack/frigg-harness](policy-pack/frigg-harness/)
-
-Local product/roadmap docs under `docs/futura*.md` are gitignored in this repo;
-use the skill and assets above when those files are absent.
 
 ## CLI reference
 
@@ -288,6 +293,7 @@ use the skill and assets above when those files are absent.
 | `frigg index --changed` | Recheck files changed since the last index. |
 | `frigg hash` | Print the stable CI cache fingerprint as `frigg-hash=<hex>`. |
 | `frigg context` | Summarize context-efficiency JSONL logs when logging is enabled. |
+| `frigg stats` | Show local opt-in routing stats when `FRIGG_ROUTING_STATS` is enabled on the MCP process. |
 
 `frigg reindex` remains a compatibility alias for `frigg index`.
 
@@ -300,8 +306,8 @@ Core tool groups:
 - Workspace status and adoption: `workspace`.
 - File listing: `list_files`.
 - Source reads: `read_file`, `read_match`.
-- Discovery: `search_text`, `search_hybrid`, `search_symbol`.
-- Navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
+- Discovery: `search_text`, `search_hybrid`, `search_symbol`, `search_batch`.
+- Navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`, `impact_bundle`.
 - Structure: `document_symbols`, `inspect_syntax_tree`, `search_structural`.
 
 Extended-only tools in default builds:
@@ -314,7 +320,7 @@ Feature-gated extended-only playbook tools are available only when Frigg is comp
 - `playbook_replay`
 - `playbook_compose_citations`
 
-Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics or selection notes matter.
+Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Use `presentation_mode=citation` for `LINE|content` lines when writing user-facing citations. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics or selection notes matter.
 
 ## Configuration
 
@@ -443,7 +449,7 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.6.3
+  FRIGG_VERSION: 0.8.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
@@ -472,7 +478,7 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.6.3
+  FRIGG_VERSION: 0.8.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:

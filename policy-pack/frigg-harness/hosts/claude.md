@@ -6,4 +6,4 @@
 - Optional PreToolUse hook: paste soft justification from
   [`../templates/shell-indexed-src-justification.md`](../templates/shell-indexed-src-justification.md)
   when Bash/`rg` targets indexed source.
-- Do not treat harness flukes as Frigg product bugs (`FUT-003`).
+- Do not treat harness flukes as Frigg product bugs.

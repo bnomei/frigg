@@ -1,4 +1,4 @@
-//! Shared helpers for `frigg-futura-bench` (FUT-019).
+//! Shared helpers for `frigg-futura-bench`.
 //!
 //! Exercises shipped `FriggMcpServer` tool handlers — not a reimplementation.
 
@@ -14,7 +14,7 @@ use rmcp::model::CallToolResult;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// Surface tag required by Futura Phase 7 scoring.
+/// Surface tag required by bench phase scoring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Surface {

@@ -1,4 +1,4 @@
-//! FUT-012: STALE_HANDLE / MIXED_HANDLE integration coverage for `read_match`.
+//! STALE_HANDLE / MIXED_HANDLE integration coverage for `read_match`.
 //!
 //! Drives real `FriggMcpServer` handlers: obtain handles via `search_text`, then
 //! assert structured recovery when handles are missing or cross-paired.
