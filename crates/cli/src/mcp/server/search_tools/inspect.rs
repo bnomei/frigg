@@ -445,6 +445,17 @@ impl FriggMcpServer {
                         }
                         files_scanned = files_scanned.saturating_add(1);
 
+                        if !Self::navigation_path_within_root(&corpus.root, source_path) {
+                            diagnostics_count = diagnostics_count.saturating_add(1);
+                            warn!(
+                                repository_id = corpus.repository_id,
+                                path = %source_path.display(),
+                                root = %corpus.root.display(),
+                                "skipping source file outside repository root for structural search"
+                            );
+                            continue;
+                        }
+
                         let source = match fs::read_to_string(source_path) {
                             Ok(source) => source,
                             Err(err) => {

@@ -884,6 +884,9 @@ impl FriggMcpServer {
                 } else {
                     root.join(occurrence_path)
                 };
+                if !Self::navigation_path_within_root(root, &absolute_path) {
+                    return None;
+                }
                 fs::read_to_string(absolute_path).ok()
             })
             .as_deref();

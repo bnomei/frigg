@@ -248,6 +248,9 @@ impl FriggMcpServer {
             if file_symbol_indices.is_empty() {
                 continue;
             }
+            if !Self::navigation_path_within_root(&root, path) {
+                continue;
+            }
             let Ok(source) = fs::read_to_string(path) else {
                 continue;
             };

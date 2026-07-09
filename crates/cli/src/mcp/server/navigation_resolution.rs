@@ -1221,6 +1221,7 @@ impl FriggMcpServer {
 mod tests {
     use super::{FriggMcpServer, NavigationPhpHelperKind};
     use crate::indexer::byte_offset_for_line_column;
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -1324,5 +1325,34 @@ mod tests {
                 byte_offset_for_line_column(source, 1, column).expect("offset should resolve");
             let _ = FriggMcpServer::php_helper_string_token_around_offset(source, offset);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn navigation_path_within_root_rejects_symlink_escape() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let workspace_root = std::env::temp_dir().join(format!(
+            "frigg-nav-path-symlink-{nonce}-{}",
+            std::process::id()
+        ));
+        let repo_root = workspace_root.join("repo");
+        let src_root = repo_root.join("src");
+        fs::create_dir_all(&src_root).expect("src root");
+        let outside = workspace_root.join("outside_secret.rs");
+        let inside = src_root.join("safe.rs");
+        let leak = src_root.join("leak.rs");
+        fs::write(&outside, "fn secret() {}\n").expect("outside");
+        fs::write(&inside, "fn safe() {}\n").expect("inside");
+        std::os::unix::fs::symlink(&outside, &leak).expect("symlink");
+
+        assert!(FriggMcpServer::navigation_path_within_root(&repo_root, &inside));
+        assert!(!FriggMcpServer::navigation_path_within_root(&repo_root, &leak));
+
+        let _ = fs::remove_dir_all(workspace_root);
     }
 }

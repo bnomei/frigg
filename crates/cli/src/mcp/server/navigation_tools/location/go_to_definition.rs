@@ -121,6 +121,10 @@ impl FriggMcpServer {
                     continue;
                 }
 
+                if !Self::navigation_path_within_root(&corpus.root, path) {
+                    continue;
+                }
+
                 let Ok(source) = fs::read_to_string(path) else {
                     continue;
                 };

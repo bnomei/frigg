@@ -999,7 +999,12 @@ impl FriggMcpServer {
         let relative_path = Self::relative_display_path(root, &source_symbol.path);
         let source = source_cache
             .entry(relative_path)
-            .or_insert_with(|| fs::read_to_string(&source_symbol.path).ok())
+            .or_insert_with(|| {
+                if !Self::navigation_path_within_root(root, &source_symbol.path) {
+                    return None;
+                }
+                fs::read_to_string(&source_symbol.path).ok()
+            })
             .as_deref()?;
         let start = source_symbol.span.start_byte.min(source.len());
         let end = source_symbol.span.end_byte.min(source.len());
