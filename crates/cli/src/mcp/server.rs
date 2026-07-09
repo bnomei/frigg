@@ -128,6 +128,7 @@ use crate::mcp::types::{
     WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
     WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
     WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceGateAction, WorkspaceIndexAction,
+    workspace_gate_hint,
     WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
     WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
     WorkspaceIndexResponse, WorkspaceParams, WorkspacePreciseArtifactFailureSummary,
@@ -623,6 +624,7 @@ impl FriggMcpServer {
             changed_paths_since_snapshot,
             fresh_enough_for,
         ) = self.workspace_gate_fields(current_workspace.as_ref(), &repositories, watch_active);
+        let gate_hint = workspace_gate_hint(recommended_action);
         let routing_stats = crate::mcp::routing_stats::routing_stats_enabled()
             .then(crate::mcp::routing_stats::snapshot);
 
@@ -632,6 +634,7 @@ impl FriggMcpServer {
             repositories,
             runtime: Some(runtime),
             recommended_action: Some(recommended_action),
+            gate_hint,
             working_tree_dirty: Some(working_tree_dirty),
             changed_paths_since_snapshot,
             watch_active: Some(watch_active),

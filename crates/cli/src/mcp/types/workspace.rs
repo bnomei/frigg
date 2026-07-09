@@ -70,6 +70,25 @@ pub enum WorkspaceGateAction {
     FriggUnavailable,
 }
 
+/// Operator/agent-facing copy for non-obvious [`WorkspaceGateAction`] values.
+///
+/// Public MCP has no reindex/write tool (`PUBLIC_WRITE_TOOL_NAMES` is empty). When the gate
+/// returns `reindex`, agents must use CLI `frigg index` / operator lifecycle — not invent an MCP tool.
+pub fn workspace_gate_hint(action: WorkspaceGateAction) -> Option<String> {
+    match action {
+        WorkspaceGateAction::Reindex => Some(
+            "Index not ready. Run CLI `frigg index` (or operator lifecycle); there is no public MCP reindex tool."
+                .to_owned(),
+        ),
+        // Ready / adopt / live-disk / wait_watch are self-explanatory or covered by skill cards.
+        WorkspaceGateAction::Ready
+        | WorkspaceGateAction::AdoptRepo
+        | WorkspaceGateAction::WaitWatch
+        | WorkspaceGateAction::UseLiveDiskForTouchedFiles
+        | WorkspaceGateAction::FriggUnavailable => None,
+    }
+}
+
 /// Aggregate precise readiness reported by workspace lifecycle tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -354,6 +373,12 @@ pub struct WorkspaceResponse {
     /// Session gate: what the agent should do next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_action: Option<WorkspaceGateAction>,
+    /// Short operator/agent-facing explanation of `recommended_action` when non-obvious.
+    ///
+    /// Especially for `reindex`: public MCP has no reindex tool — use CLI `frigg index` / operator
+    /// maintenance, not an invented MCP tool name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate_hint: Option<String>,
     /// Working tree may have paths that differ from the last snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_tree_dirty: Option<bool>,
@@ -753,6 +778,41 @@ mod tests {
         let parsed: WorkspaceGateAction =
             serde_json::from_value(json!("adopt_repo")).expect("parse gate action");
         assert_eq!(parsed, WorkspaceGateAction::AdoptRepo);
+        assert_eq!(
+            serde_json::to_value(WorkspaceGateAction::Reindex).expect("serialize reindex"),
+            json!("reindex")
+        );
+    }
+
+    #[test]
+    fn reindex_gate_hint_points_at_cli_not_mcp_tool() {
+        let hint = workspace_gate_hint(WorkspaceGateAction::Reindex)
+            .expect("reindex must carry a gate_hint");
+        assert!(
+            hint.contains("frigg index") && hint.contains("no public MCP"),
+            "reindex gate_hint should point at CLI, not an MCP tool: {hint}"
+        );
+        assert!(workspace_gate_hint(WorkspaceGateAction::Ready).is_none());
+        assert!(workspace_gate_hint(WorkspaceGateAction::AdoptRepo).is_none());
+        assert!(workspace_gate_hint(WorkspaceGateAction::WaitWatch).is_none());
+        assert!(workspace_gate_hint(WorkspaceGateAction::UseLiveDiskForTouchedFiles).is_none());
+
+        let response = WorkspaceResponse {
+            repository: None,
+            session_default: false,
+            repositories: Vec::new(),
+            runtime: None,
+            recommended_action: Some(WorkspaceGateAction::Reindex),
+            gate_hint: workspace_gate_hint(WorkspaceGateAction::Reindex),
+            working_tree_dirty: None,
+            changed_paths_since_snapshot: Vec::new(),
+            watch_active: None,
+            fresh_enough_for: None,
+            routing_stats: None,
+        };
+        let value = serde_json::to_value(&response).expect("workspace response should serialize");
+        assert_eq!(value["recommended_action"], "reindex");
+        assert_eq!(value["gate_hint"], hint);
     }
 
     #[test]
@@ -763,6 +823,7 @@ mod tests {
             repositories: Vec::new(),
             runtime: None,
             recommended_action: Some(WorkspaceGateAction::AdoptRepo),
+            gate_hint: None,
             working_tree_dirty: Some(false),
             changed_paths_since_snapshot: Vec::new(),
             watch_active: Some(false),
@@ -776,5 +837,6 @@ mod tests {
         assert!(value.get("changed_paths_since_snapshot").is_none());
         assert!(value.get("fresh_enough_for").is_none());
         assert!(value.get("routing_stats").is_none());
+        assert!(value.get("gate_hint").is_none());
     }
 }

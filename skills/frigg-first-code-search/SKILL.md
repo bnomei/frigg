@@ -343,13 +343,18 @@ Or: presentation_mode=json → use start_line/end_line + path in ```start:end:pa
 | **Fallback** | Shell not a patch for unexplained zeros; check repo/index first |
 | **Proof** | After adoption/health, resume the real scenario tool |
 | **Done** | Workspace used when trust changes, not before every search |
-| **Product support** | `recommended_action`, dirty/changed paths, index age |
+| **Product support** | `recommended_action`, optional `gate_hint`, dirty/changed paths, index age |
 
 ```text
 Call workspace(path=...) IF:
   - wrong-repo paths, unexplained zeros, index errors, multi-repo ambiguity, post-edit freshness
 Skip workspace IF:
   - first search hits expected paths and index is ready
+
+recommended_action=reindex means index substrate not Ready:
+  - NOT a public MCP tool (tools/list has no reindex / workspace_reindex)
+  - operator/CLI: `frigg index` (or attach-side ensure / operator lifecycle)
+  - read gate_hint when present; do not invent a write tool or shell-grep the repo "to fix" it
 ```
 
 Verify live `tools/list` before calling schema-only or extended-only tools.
@@ -376,15 +381,18 @@ Verify live `tools/list` before calling schema-only or extended-only tools.
 | **Fallback** | Live-disk for **touched paths only** (`changed_paths_since_snapshot` / known edit paths) — **never** a license for repo-wide shell grep |
 | **Proof** | Frigg after watch; else direct read of edited paths |
 | **Done** | Freshness visible; no default repo-wide shell verification |
-| **Product support** | `working_tree_dirty`, `changed_paths_since_snapshot`, hot-path reindex, `recommended_action=use_live_disk_for_touched_files` (path-scoped) |
+| **Product support** | `working_tree_dirty`, `changed_paths_since_snapshot`, hot-path watch refresh, `recommended_action` + `gate_hint` (path-scoped live-disk when dirty+Ready) |
 
 ```text
 1. workspace() after edits
 2. If recommended_action=ready (or fresh_enough_for includes search_*) → Frigg search
 3. If use_live_disk_for_touched_files → read_file / host Read on **those paths only**
-4. If reindex / wait_watch → wait or reindex; do not "verify" with whole-repo rg
+4. If wait_watch → wait for watch / hot-path refresh; do not "verify" with whole-repo rg
+5. If reindex → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
 BAD: workspace dirty → rg -n across the repo
-GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path reindex
+BAD: recommended_action=reindex → call invented MCP workspace_reindex
+GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path watch refresh
+GOOD: recommended_action=reindex → frigg index (CLI) or wait for operator; read gate_hint
 ```
 
 ### Bug trace

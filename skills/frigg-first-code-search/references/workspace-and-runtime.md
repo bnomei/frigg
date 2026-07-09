@@ -29,6 +29,11 @@ Important `workspace` outputs:
 - `session_default`
 - `repositories`
 - `runtime`
+- `recommended_action` — session gate next step (`ready`, `adopt_repo`, `wait_watch`, `reindex`, `use_live_disk_for_touched_files`, …)
+- `gate_hint` — optional plain-language recovery when the action is non-obvious (especially `reindex`)
+- `working_tree_dirty`, `changed_paths_since_snapshot`, `watch_active`, `fresh_enough_for`
+
+**`recommended_action=reindex` is not an MCP tool.** Public Frigg MCP has no reindex/write tool. It means the index substrate is not Ready: run CLI `frigg index` (or operator lifecycle / attach-side ensure). Prefer reading `gate_hint` when present; do not invent `workspace_reindex` or shell-grep the repo as a trust patch.
 
 Repo-aware tools auto-adopt when they can resolve a sensible default or a supplied `repository_id`. Use CLI `frigg init` and `frigg index` for explicit maintenance refreshes.
 
@@ -67,6 +72,7 @@ For explicit semantic troubleshooting only, inspect `workspace.runtime`.
 - If a tool says it cannot resolve a repository, call `workspace` with `path=<repo root or any file inside it>`.
 - Use `workspace` to see the session default and runtime tasks when debugging wrong-repo or freshness issues.
 - After edits: check workspace freshness, then either re-search with Frigg or use **path-scoped** live reads for touched files only — never treat live-disk as a license for repo-wide shell grep.
+- Branch on gate: `ready` → Frigg; `use_live_disk_for_touched_files` → touched paths only; `wait_watch` → wait for watch; `reindex` → CLI `frigg index` / operator (not MCP).
 - Prefer **HTTP** for shared and long-running multi-client work; stdio is for one local client that owns the process.
 - Harness-specific MCP registration/schema flukes are outside Frigg's product contract; trust live `tools/list` over stale host schema caches.
 - Use CLI `frigg index` only intentionally, usually when you explicitly want to refresh repository-derived data.
