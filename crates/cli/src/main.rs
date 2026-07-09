@@ -35,7 +35,7 @@ use frigg::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, Storage};
 use http_runtime::{
     HttpRuntimeConfig, allowed_authorities_for_bind, authority_allowed, constant_time_equals,
     host_header_allowed, origin_header_allowed, parse_host_authority, parse_origin_authority,
-    resolve_http_runtime_config, typed_access_denied_response,
+    resolve_http_runtime_config, routing_stats_http_endpoint_url, typed_access_denied_response,
 };
 #[cfg(test)]
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -193,6 +193,15 @@ mod tests {
                 "localhost".to_owned(),
                 "localhost:4000".to_owned(),
             ])
+        );
+    }
+
+    #[test]
+    fn routing_stats_http_endpoint_uses_live_stats_route() {
+        let bind = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000);
+        assert_eq!(
+            routing_stats_http_endpoint_url(bind),
+            "http://127.0.0.1:4000/stats/routing"
         );
     }
 

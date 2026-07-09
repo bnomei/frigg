@@ -320,11 +320,11 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Show local opt-in routing stats.
+    /// Show live opt-in routing stats from a running HTTP MCP server.
     ///
-    /// Process-local counters only (no cloud). Enable recording on the MCP
-    /// process with `FRIGG_ROUTING_STATS=1`, then read this command or the
-    /// `frigg://stats/routing` MCP resource.
+    /// Process-local counters only (no cloud). Enable recording before `frigg serve`
+    /// with `FRIGG_ROUTING_STATS=1`, then read this command or the
+    /// `frigg://stats/routing` MCP resource from that server.
     Stats {
         /// Print the full JSON snapshot.
         #[arg(long, default_value_t = false)]

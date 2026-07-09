@@ -26,7 +26,8 @@ use crate::cli_runtime::{
     run_strict_startup_vector_readiness_gate_with_output,
 };
 use crate::http_runtime::{
-    HttpRuntimeConfig, mcp_http_endpoint_url, resolve_http_runtime_config, serve_http,
+    HttpRuntimeConfig, mcp_http_endpoint_url, resolve_http_runtime_config,
+    routing_stats_http_endpoint_url, serve_http,
 };
 use crate::{Cli, Command, default_tracing_filter, init_tracing, startup_trace};
 
@@ -133,7 +134,13 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_context_summary_command(&config, since.as_deref(), until.as_deref(), json)?
             }
-            Command::Stats { json } => run_stats_command(json)?,
+            Command::Stats { json } => {
+                let stats_http = resolve_http_runtime_config(&cli, true)?.ok_or_else(|| {
+                    io::Error::other("stats could not resolve the MCP HTTP endpoint")
+                })?;
+                let endpoint_url = routing_stats_http_endpoint_url(stats_http.bind_addr);
+                run_stats_command(json, &endpoint_url, stats_http.auth_token.as_deref()).await?
+            }
         }
         if !matches!(command, Command::Serve) {
             startup_trace(
