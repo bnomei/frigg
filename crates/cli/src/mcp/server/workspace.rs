@@ -518,6 +518,15 @@ impl FriggMcpServer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .workspace_by_repository_id(&canonical_repository_id);
+        if let Some(workspace) = detached_workspace.as_ref() {
+            self.invalidate_session_result_handles_for_repository_ids(
+                Self::runtime_task_repository_aliases(workspace),
+            );
+        } else {
+            self.invalidate_session_result_handles_for_repository_ids([
+                canonical_repository_id.as_str(),
+            ]);
+        }
         self.session_state
             .inner
             .release_repository_id(&canonical_repository_id);
