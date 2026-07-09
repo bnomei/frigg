@@ -1316,12 +1316,20 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         "compact hybrid should still suggest exact pivots"
     );
     for next in &response.recovery.suggested_next {
-        if next.tool == "search_symbol" {
+        if next.tool == "search_symbol" || next.tool == "search_text" {
             let pivot = next.query.as_deref().unwrap_or("");
             assert!(
-                !pivot.contains(' ') || pivot.split_whitespace().count() <= 1,
-                "symbol pivot query should be identifier-like, got {pivot:?}"
+                !pivot.is_empty() && !pivot.contains(char::is_whitespace),
+                "exact pivot query should be a single token, got {pivot:?}"
             );
+            if next.tool == "search_symbol" {
+                assert!(
+                    pivot.contains('_')
+                        || (pivot.chars().any(|c| c.is_ascii_lowercase())
+                            && pivot.chars().any(|c| c.is_ascii_uppercase())),
+                    "search_symbol pivot should be snake_case or camelCase, got {pivot:?}"
+                );
+            }
         }
     }
     assert!(

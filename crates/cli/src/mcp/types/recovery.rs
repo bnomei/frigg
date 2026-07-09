@@ -950,17 +950,33 @@ impl RecoveryFields {
         let tokens = hybrid_pivot_candidate_tokens(query, matches);
         let mut suggested_next = Vec::new();
 
-        if let Some(primary) = tokens.first() {
+        // Symbol pivots require shaped identifiers (snake/camel/Pascal). Text may use a
+        // weaker secondary token only when shaped tokens exist.
+        let symbol_tokens: Vec<&String> = tokens
+            .iter()
+            .filter(|token| is_shaped_code_identifier(token))
+            .collect();
+        if let Some(primary) = symbol_tokens.first() {
             suggested_next.push(
                 SuggestedNext::tool("search_symbol")
-                    .with_query(primary.clone())
+                    .with_query((*primary).clone())
                     .with_path_class("runtime")
                     .with_reason("exact symbol pivot after hybrid discovery"),
             );
-            let text_query = tokens.get(1).cloned().unwrap_or_else(|| primary.clone());
+            let text_query = tokens
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| (*primary).clone());
             suggested_next.push(
                 SuggestedNext::tool("search_text")
                     .with_query(text_query)
+                    .with_reason("exact text pivot after hybrid discovery"),
+            );
+        } else if let Some(primary) = tokens.first() {
+            // Shaped-less tokens are text-only (never search_symbol).
+            suggested_next.push(
+                SuggestedNext::tool("search_text")
+                    .with_query(primary.clone())
                     .with_reason("exact text pivot after hybrid discovery"),
             );
         }
@@ -973,34 +989,15 @@ impl RecoveryFields {
             );
         }
 
-        // Last-resort when no code-like token was found: avoid stuffing multi-word NL into
-        // search_symbol; prefer identifier-shaped full query or text-only / path-only rows.
-        if !suggested_next
-            .iter()
-            .any(|next| next.tool == "search_symbol" || next.tool == "search_text")
-        {
-            if looks_like_code_identifier(query) {
-                suggested_next.insert(
-                    0,
-                    SuggestedNext::tool("search_symbol")
-                        .with_query(query)
-                        .with_path_class("runtime")
-                        .with_reason("exact symbol pivot after hybrid discovery"),
-                );
-                suggested_next.insert(
-                    1.min(suggested_next.len()),
-                    SuggestedNext::tool("search_text")
-                        .with_query(query)
-                        .with_reason("exact text pivot after hybrid discovery"),
-                );
-            } else if !query.is_empty() && !suggested_next.iter().any(|next| next.tool == "read_file")
-            {
-                suggested_next.push(
-                    SuggestedNext::tool("search_text")
-                        .with_query(query)
-                        .with_reason("exact text pivot after hybrid discovery"),
-                );
-            }
+        // Last-resort when no tokens: path read may already exist; otherwise multi-word NL
+        // becomes search_text only (never search_symbol). Code-shaped full queries are
+        // already collected inside hybrid_pivot_candidate_tokens.
+        if suggested_next.is_empty() && !query.is_empty() {
+            suggested_next.push(
+                SuggestedNext::tool("search_text")
+                    .with_query(query)
+                    .with_reason("exact text pivot after hybrid discovery"),
+            );
         }
 
         Self {
@@ -1300,28 +1297,39 @@ const HYBRID_PIVOT_MAX_TOKENS: usize = 2;
 const HYBRID_PIVOT_TOP_MATCHES: usize = 3;
 
 /// Collect up to two code-like pivot tokens from hybrid matches and/or a code-shaped query.
+///
+/// Scans the first ranked matches in original order (exact rows get a score boost, but do
+/// not replace the window). Dedupes by max score across sources.
 fn hybrid_pivot_candidate_tokens(
     query: &str,
     matches: &[HybridPivotMatchSource<'_>],
 ) -> Vec<String> {
-    let mut scored: Vec<(i32, String)> = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
+    // key (lowercase) -> (score, display token)
+    let mut best: std::collections::BTreeMap<String, (i32, String)> =
+        std::collections::BTreeMap::new();
 
     let mut push_token = |raw: &str, boost: i32| {
         let Some(token) = normalize_pivot_token(raw) else {
             return;
         };
-        let key = token.to_ascii_lowercase();
-        if !seen.insert(key) {
+        let score = pivot_token_quality(&token) + boost;
+        if score < 0 {
             return;
         }
-        scored.push((pivot_token_quality(&token) + boost, token));
+        let key = token.to_ascii_lowercase();
+        best.entry(key)
+            .and_modify(|(existing_score, existing_token)| {
+                if score > *existing_score {
+                    *existing_score = score;
+                    *existing_token = token.clone();
+                }
+            })
+            .or_insert((score, token));
     };
 
-    let mut ordered: Vec<&HybridPivotMatchSource<'_>> = matches.iter().collect();
-    ordered.sort_by_key(|matched| if matched.prefers_exact { 0 } else { 1 });
-
-    for matched in ordered.into_iter().take(HYBRID_PIVOT_TOP_MATCHES) {
+    // Keep original hybrid rank order for the scan window; boost exact rows instead of
+    // reordering them ahead of higher-ranked discovery hits.
+    for matched in matches.iter().take(HYBRID_PIVOT_TOP_MATCHES) {
         let row_boost = if matched.prefers_exact { 2 } else { 0 };
         if let Some(stem) = path_file_stem(matched.path) {
             push_token(stem, row_boost);
@@ -1332,13 +1340,16 @@ fn hybrid_pivot_candidate_tokens(
         }
     }
 
-    if looks_like_code_identifier(query) {
-        push_token(query, 4);
+    // Code-shaped full query is a strong signal when present.
+    if is_shaped_code_identifier(query.trim()) {
+        push_token(query.trim(), 4);
     }
 
+    let mut scored: Vec<(i32, String)> = best.into_values().collect();
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
     scored
         .into_iter()
+        .filter(|(score, _)| *score >= 0)
         .take(HYBRID_PIVOT_MAX_TOKENS)
         .map(|(_, token)| token)
         .collect()
@@ -1346,7 +1357,10 @@ fn hybrid_pivot_candidate_tokens(
 
 fn path_file_stem(path: &str) -> Option<&str> {
     let name = path.rsplit('/').next().unwrap_or(path);
-    let stem = name.split('.').next().unwrap_or(name);
+    let stem = match name.rsplit_once('.') {
+        Some((stem, _ext)) if !stem.is_empty() => stem,
+        _ => name,
+    };
     if stem.is_empty() {
         None
     } else {
@@ -1373,28 +1387,19 @@ fn normalize_pivot_token(raw: &str) -> Option<String> {
         .unwrap_or(trimmed)
         .trim()
         .trim_end_matches(':');
-    if !looks_like_code_identifier(candidate) {
+    if is_reserved_pivot_keyword(candidate) {
+        return None;
+    }
+    // Accept shaped identifiers for symbol-quality tokens; also keep weaker bare
+    // lowercase tokens for possible search_text use (callers filter for symbol).
+    if !is_shaped_code_identifier(candidate) && !is_weak_text_pivot_token(candidate) {
         return None;
     }
     Some(candidate.to_owned())
 }
 
-fn pivot_token_quality(token: &str) -> i32 {
-    let mut score = 0;
-    if token.contains('_') {
-        score += 4;
-    }
-    let has_lower = token.chars().any(|c| c.is_ascii_lowercase());
-    let has_upper = token.chars().any(|c| c.is_ascii_uppercase());
-    if has_lower && has_upper {
-        score += 4;
-    }
-    if token.len() >= 10 {
-        score += 2;
-    } else if token.len() >= 6 {
-        score += 1;
-    }
-    if matches!(
+fn is_reserved_pivot_keyword(token: &str) -> bool {
+    matches!(
         token,
         "async"
             | "await"
@@ -1422,13 +1427,71 @@ fn pivot_token_quality(token: &str) -> i32 {
             | "use"
             | "where"
             | "while"
-    ) {
-        score -= 8;
+            | "const"
+            | "static"
+            | "trait"
+            | "unsafe"
+            | "break"
+            | "continue"
+            | "if"
+            | "in"
+            | "as"
+    )
+}
+
+fn pivot_token_quality(token: &str) -> i32 {
+    let mut score = 0;
+    if token.contains('_') {
+        score += 4;
+    }
+    let has_lower = token.chars().any(|c| c.is_ascii_lowercase());
+    let has_upper = token.chars().any(|c| c.is_ascii_uppercase());
+    if has_lower && has_upper {
+        score += 4;
+    }
+    if token.len() >= 10 {
+        score += 2;
+    } else if token.len() >= 6 {
+        score += 1;
+    }
+    // Bare lowercase path stems / weak tokens score low but non-negative so they can
+    // still fill search_text when nothing shaped exists.
+    if is_shaped_code_identifier(token) {
+        score += 2;
+    } else if is_weak_text_pivot_token(token) {
+        score += 0;
     }
     score
 }
 
-fn looks_like_code_identifier(raw: &str) -> bool {
+/// Snake_case, camelCase/PascalCase, or leading-underscore identifiers suitable for
+/// `search_symbol` pivots.
+fn is_shaped_code_identifier(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if !is_ascii_identifier(trimmed) {
+        return false;
+    }
+    if trimmed.contains('_') {
+        return true;
+    }
+    let has_lower = trimmed.chars().any(|c| c.is_ascii_lowercase());
+    let has_upper = trimmed.chars().any(|c| c.is_ascii_uppercase());
+    has_lower && has_upper
+}
+
+/// Weaker bare lowercase tokens (path stems, long prose words) for optional text pivots only.
+fn is_weak_text_pivot_token(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if !is_ascii_identifier(trimmed) || is_shaped_code_identifier(trimmed) {
+        return false;
+    }
+    if is_reserved_pivot_keyword(trimmed) {
+        return false;
+    }
+    trimmed.len() >= 6
+}
+
+fn is_ascii_identifier(raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) || trimmed.len() > 96 {
         return false;
@@ -1444,21 +1507,9 @@ fn looks_like_code_identifier(raw: &str) -> bool {
     if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }
-    if !candidate
+    candidate
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
-        return false;
-    }
-    if candidate.contains('_') {
-        return true;
-    }
-    let has_lower = candidate.chars().any(|c| c.is_ascii_lowercase());
-    let has_upper = candidate.chars().any(|c| c.is_ascii_uppercase());
-    if has_lower && has_upper {
-        return true;
-    }
-    candidate.len() >= 4
 }
 
 fn extract_code_like_tokens(excerpt: &str) -> Vec<String> {
@@ -1468,7 +1519,8 @@ fn extract_code_like_tokens(excerpt: &str) -> Vec<String> {
         if current.is_empty() {
             return;
         }
-        if looks_like_code_identifier(current) {
+        // Keep raw buffers that look like identifiers after normalization.
+        if is_ascii_identifier(current) || current.contains("::") {
             tokens.push(std::mem::take(current));
         } else {
             current.clear();
@@ -1815,6 +1867,38 @@ mod tests {
                 .iter()
                 .any(|next| next.tool == "read_file" && next.path.as_deref() == Some("docs/readme.md"))
         );
+        assert!(
+            recovery
+                .suggested_next
+                .iter()
+                .all(|next| next.tool != "search_symbol"),
+            "prose-only fixtures must not emit search_symbol pivots, got {:?}",
+            recovery.suggested_next
+        );
+    }
+
+    #[test]
+    fn recovery_hybrid_discovery_exact_pivot_rejects_keywords_as_tokens() {
+        let matches = [HybridPivotMatchSource {
+            path: "src/a.rs",
+            excerpt: "async fn return true;",
+            prefers_exact: true,
+        }];
+        let recovery = RecoveryFields::hybrid_discovery_exact_pivot(
+            "where does this return true",
+            Some("src/a.rs"),
+            &matches,
+        );
+        assert_recovery_actionable(&recovery);
+        for next in &recovery.suggested_next {
+            if matches!(next.tool.as_str(), "search_symbol" | "search_text") {
+                let q = next.query.as_deref().unwrap_or("");
+                assert!(
+                    !matches!(q, "async" | "fn" | "return" | "true"),
+                    "keyword must not be pivot query, got {q:?}"
+                );
+            }
+        }
     }
 
     #[test]
