@@ -1350,8 +1350,12 @@ mod tests {
         fs::write(&inside, "fn safe() {}\n").expect("inside");
         std::os::unix::fs::symlink(&outside, &leak).expect("symlink");
 
-        assert!(FriggMcpServer::navigation_path_within_root(&repo_root, &inside));
-        assert!(!FriggMcpServer::navigation_path_within_root(&repo_root, &leak));
+        assert!(FriggMcpServer::navigation_path_within_root(
+            &repo_root, &inside
+        ));
+        assert!(!FriggMcpServer::navigation_path_within_root(
+            &repo_root, &leak
+        ));
 
         let _ = fs::remove_dir_all(workspace_root);
     }

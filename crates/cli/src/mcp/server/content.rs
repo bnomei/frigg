@@ -184,7 +184,8 @@ impl FriggMcpServer {
                     if !has_line_range {
                         let post_read_bytes = snapshot.raw_bytes_len();
                         if post_read_bytes > max_bytes {
-                            let suggested_max_bytes = post_read_bytes.min(server.config.max_file_bytes);
+                            let suggested_max_bytes =
+                                post_read_bytes.min(server.config.max_file_bytes);
                             return Err(Self::invalid_params(
                                 format!("file exceeds max_bytes={max_bytes}"),
                                 Some(json!({

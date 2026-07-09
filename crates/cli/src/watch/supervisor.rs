@@ -902,10 +902,10 @@ async fn run_supervisor(
                         dispatch_epoch,
                     )
                 };
-                if should_invalidate_worker_cache {
-                    if let Some(callback) = repository_cache_invalidation_callback.as_ref() {
-                        callback(&repository.repository_id);
-                    }
+                if should_invalidate_worker_cache
+                    && let Some(callback) = repository_cache_invalidation_callback.as_ref()
+                {
+                    callback(&repository.repository_id);
                 }
                 task_guard.finish(status, detail);
                 let _ = completion_tx.send(SupervisorCommand::IndexCompleted {

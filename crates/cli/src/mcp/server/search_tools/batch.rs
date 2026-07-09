@@ -22,6 +22,11 @@ const PER_PROBE_MATCH_CAP: usize = 40;
 /// Implicit total work budget: per-probe cap × probe count (≤ `MAX_PROBES`).
 const _TOTAL_MATCH_BUDGET: usize = PER_PROBE_MATCH_CAP * MAX_PROBES;
 
+type SearchBatchProbeOutput =
+    Result<Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>, ErrorData>;
+type SearchBatchProbeFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = SearchBatchProbeOutput> + Send + 'a>>;
+
 impl FriggMcpServer {
     pub(crate) async fn search_batch_impl(
         &self,
@@ -72,7 +77,9 @@ impl FriggMcpServer {
         let resume_from = params.resume_from.unwrap_or(0);
         let response_mode = params.response_mode;
         // Only one merge mode today; accept and apply explicitly so the field is live.
-        let _merge = params.merge.unwrap_or(SearchBatchMergeMode::RankByProbeHitStrength);
+        let _merge = params
+            .merge
+            .unwrap_or(SearchBatchMergeMode::RankByProbeHitStrength);
 
         let probe_outcomes = self
             .search_batch_run_probes_concurrent(
@@ -140,11 +147,8 @@ impl FriggMcpServer {
         });
 
         let total_merged = merged.len();
-        let page: Vec<SearchBatchMatch> = merged
-            .into_iter()
-            .skip(resume_from)
-            .take(limit)
-            .collect();
+        let page: Vec<SearchBatchMatch> =
+            merged.into_iter().skip(resume_from).take(limit).collect();
         let returned = page.len();
         let truncated = resume_from + returned < total_merged;
         let next_resume = truncated.then_some(resume_from + returned);
@@ -173,7 +177,10 @@ impl FriggMcpServer {
             response.handle_expires = Some("session".to_owned());
         }
 
-        let all_zero = response.probe_summary.iter().all(|summary| summary.hits == 0);
+        let all_zero = response
+            .probe_summary
+            .iter()
+            .all(|summary| summary.hits == 0);
         if all_zero {
             let strongest_reason = strongest_batch_zero_reason(&response.probe_summary);
             let batch_next = response
@@ -215,17 +222,7 @@ impl FriggMcpServer {
         probes: &'a [SearchBatchProbe],
         batch_repository_id: Option<&'a str>,
         response_mode: Option<crate::mcp::types::ResponseMode>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>,
-                        ErrorData,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> SearchBatchProbeFuture<'a> {
         Box::pin(async move {
             match probes {
                 [] => Ok(Vec::new()),
@@ -322,11 +319,7 @@ impl FriggMcpServer {
                 let symbol_params = SearchSymbolParams {
                     query: probe.query.clone(),
                     repository_id,
-                    path_class: Some(
-                        probe
-                            .path_class
-                            .unwrap_or(SearchSymbolPathClass::Runtime),
-                    ),
+                    path_class: Some(probe.path_class.unwrap_or(SearchSymbolPathClass::Runtime)),
                     path_regex: probe.path_regex.clone(),
                     limit: per_limit,
                     response_mode,
@@ -408,12 +401,14 @@ impl FriggMcpServer {
                     id: probe.id.clone(),
                     kind: SearchBatchProbeKind::Hybrid,
                     hits,
-                    zero_hit_reason: body.recovery.zero_hit_reason.or_else(|| {
-                        (hits == 0).then_some(ZeroHitReason::IndexedSearchComplete)
-                    }),
+                    zero_hit_reason: body
+                        .recovery
+                        .zero_hit_reason
+                        .or_else(|| (hits == 0).then_some(ZeroHitReason::IndexedSearchComplete)),
                     correction_hint: body.recovery.correction_hint.or_else(|| {
                         (hits == 0).then(|| {
-                            "Hybrid is discovery-only; pivot to search_text/search_symbol.".to_owned()
+                            "Hybrid is discovery-only; pivot to search_text/search_symbol."
+                                .to_owned()
                         })
                     }),
                     suggested_next: body.recovery.suggested_next,
@@ -457,9 +452,7 @@ fn hybrid_score(blended: f32) -> f32 {
 }
 
 /// Echo only filters actually applied by the probe kind (not raw request fields).
-fn strongest_batch_zero_reason(
-    summaries: &[SearchBatchProbeSummary],
-) -> Option<ZeroHitReason> {
+fn strongest_batch_zero_reason(summaries: &[SearchBatchProbeSummary]) -> Option<ZeroHitReason> {
     // Prefer actionable structural reasons over generic query miss.
     const PRIORITY: &[ZeroHitReason] = &[
         ZeroHitReason::IndexStalePossible,
@@ -481,9 +474,7 @@ fn strongest_batch_zero_reason(
             return Some(*reason);
         }
     }
-    summaries
-        .iter()
-        .find_map(|summary| summary.zero_hit_reason)
+    summaries.iter().find_map(|summary| summary.zero_hit_reason)
 }
 
 fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
@@ -503,9 +494,7 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
             if let Some(path_regex) = probe.path_regex.as_ref() {
                 scope = scope.with_path_regex(path_regex.clone());
             }
-            let path_class = probe
-                .path_class
-                .unwrap_or(SearchSymbolPathClass::Runtime);
+            let path_class = probe.path_class.unwrap_or(SearchSymbolPathClass::Runtime);
             scope = scope.with_path_class(path_class.as_str());
         }
         SearchBatchProbeKind::Hybrid => {
@@ -515,11 +504,7 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
     if let Some(repository_id) = probe.repository_id.as_ref() {
         scope = scope.with_repository_id(repository_id.clone());
     }
-    if scope.is_empty() {
-        None
-    } else {
-        Some(scope)
-    }
+    if scope.is_empty() { None } else { Some(scope) }
 }
 
 #[cfg(test)]

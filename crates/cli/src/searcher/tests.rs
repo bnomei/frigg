@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::PermissionsExt;
 
 use crate::domain::{FriggError, FriggResult, model::TextMatch};
+use crate::indexer::ManifestBuilder;
 use crate::settings::{
     FriggConfig, LexicalBackendMode, SemanticRuntimeConfig, SemanticRuntimeCredentials,
     SemanticRuntimeProvider,
@@ -190,21 +191,11 @@ fn seed_semantic_embeddings(
     let storage = Storage::new(db_path);
     storage.initialize()?;
 
-    let mut manifest_entries = records
+    let record_paths = records
         .iter()
-        .map(|record| {
-            let metadata = fs::metadata(workspace_root.join(&record.path))
-                .expect("semantic embedding manifest path should exist");
-            ManifestEntry {
-                path: record.path.clone(),
-                sha256: format!("hash-{}", record.path),
-                size_bytes: metadata.len(),
-                mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
-            }
-        })
+        .map(|record| record.path.as_str())
         .collect::<Vec<_>>();
-    manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
-    manifest_entries.dedup_by(|left, right| left.path == right.path);
+    let manifest_entries = manifest_entries_for_paths(workspace_root, record_paths)?;
 
     storage.upsert_manifest(repository_id, snapshot_id, &manifest_entries)?;
     let mut grouped =
@@ -241,23 +232,69 @@ fn seed_manifest_snapshot(
     let storage = Storage::new(db_path);
     storage.initialize()?;
 
-    let mut manifest_entries = paths
-        .iter()
-        .map(|path| {
-            let metadata = fs::metadata(workspace_root.join(path)).map_err(FriggError::Io)?;
-            Ok(ManifestEntry {
-                path: (*path).to_owned(),
-                sha256: format!("hash-{path}"),
-                size_bytes: metadata.len(),
-                mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
-            })
-        })
-        .collect::<FriggResult<Vec<_>>>()?;
+    let mut manifest_entries = manifest_entries_for_paths(workspace_root, paths.iter().copied())?;
     manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
     manifest_entries.dedup_by(|left, right| left.path == right.path);
 
     storage.upsert_manifest(repository_id, snapshot_id, &manifest_entries)?;
     Ok(())
+}
+
+fn manifest_entries_for_paths<'a>(
+    workspace_root: &Path,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> FriggResult<Vec<ManifestEntry>> {
+    let wanted_paths = paths
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut seen_paths = std::collections::BTreeSet::new();
+    let mut manifest_entries = ManifestBuilder::default()
+        .build(workspace_root)?
+        .into_iter()
+        .filter_map(|entry| {
+            let path = manifest_entry_relative_path(workspace_root, &entry.path);
+            if wanted_paths.contains(&path) {
+                seen_paths.insert(path.clone());
+                Some(ManifestEntry {
+                    path,
+                    sha256: entry.hash_blake3_hex,
+                    size_bytes: entry.size_bytes,
+                    mtime_ns: entry.mtime_ns,
+                })
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    for path in wanted_paths.difference(&seen_paths) {
+        manifest_entries.push(manifest_entry_for_explicit_path(workspace_root, path)?);
+    }
+    manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
+    manifest_entries.dedup_by(|left, right| left.path == right.path);
+    Ok(manifest_entries)
+}
+
+fn manifest_entry_for_explicit_path(
+    workspace_root: &Path,
+    path: &str,
+) -> FriggResult<ManifestEntry> {
+    let absolute_path = workspace_root.join(path);
+    let bytes = fs::read(&absolute_path).map_err(FriggError::Io)?;
+    let metadata = fs::metadata(&absolute_path).map_err(FriggError::Io)?;
+    Ok(ManifestEntry {
+        path: path.to_owned(),
+        sha256: blake3::hash(&bytes).to_hex().to_string(),
+        size_bytes: metadata.len(),
+        mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
+    })
+}
+
+fn manifest_entry_relative_path(workspace_root: &Path, path: &Path) -> String {
+    path.strip_prefix(workspace_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string()
 }
 
 fn semantic_record(

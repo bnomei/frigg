@@ -213,11 +213,15 @@ impl FriggMcpServer {
             .unwrap_or((None, None));
         let path = Self::relative_display_path(&candidate.root, &candidate.symbol.path);
         let path_class = Self::navigation_path_class(&path);
-        let column = (candidate.symbol.span.start_column > 0)
-            .then_some(candidate.symbol.span.start_column);
-        let excerpt = signature
-            .clone()
-            .or_else(|| Some(format!("{} {}", candidate.symbol.kind.as_str(), candidate.symbol.name)));
+        let column =
+            (candidate.symbol.span.start_column > 0).then_some(candidate.symbol.span.start_column);
+        let excerpt = signature.clone().or_else(|| {
+            Some(format!(
+                "{} {}",
+                candidate.symbol.kind.as_str(),
+                candidate.symbol.name
+            ))
+        });
         SymbolMatch {
             match_id: None,
             stable_symbol_id: Some(candidate.symbol.stable_id.clone()),

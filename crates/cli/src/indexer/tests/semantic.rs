@@ -1229,20 +1229,23 @@ fn semantic_chunking_anchors_end_line_to_embedded_segment_text() {
 #[test]
 fn semantic_chunk_build_fails_for_unreadable_manifest_file() -> FriggResult<()> {
     let workspace_root = temp_workspace_root("semantic-unreadable-manifest-file");
-    prepare_workspace(&workspace_root, &[("src/private.rs", "pub fn hidden() {}\n")])?;
+    prepare_workspace(
+        &workspace_root,
+        &[("src/private.rs", "pub fn hidden() {}\n")],
+    )?;
     let manifest = ManifestBuilder::default().build(&workspace_root)?;
     let unreadable_path = workspace_root.join("src/private.rs");
     set_file_mode(&unreadable_path, 0o000)?;
 
-    let error = match build_semantic_chunk_candidates(
-        "repo-001",
-        &workspace_root,
-        "snapshot-001",
-        &manifest,
-    ) {
-        Ok(_) => panic!("unreadable semantic manifest file should fail chunk build"),
-        Err(error) => error,
-    };
+    let result =
+        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest);
+    assert!(
+        result.is_err(),
+        "unreadable semantic manifest file should fail chunk build"
+    );
+    let error = result
+        .err()
+        .expect("checked unreadable semantic manifest file error");
 
     set_file_mode(&unreadable_path, 0o644)?;
     cleanup_workspace(&workspace_root);

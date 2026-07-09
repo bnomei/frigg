@@ -256,7 +256,10 @@ async fn core_read_match_content_parity_with_equivalent_read_file_window() {
 
     assert_eq!(read_match.content, read_file.content);
     assert_eq!(read_match.bytes, read_file.bytes);
-    assert_eq!(read_match.start_line, read_file.start_line.unwrap_or(line_start));
+    assert_eq!(
+        read_match.start_line,
+        read_file.start_line.unwrap_or(line_start)
+    );
     assert_eq!(read_match.end_line, read_file.end_line.unwrap_or(line_end));
     assert_eq!(read_match.path, read_file.path);
 }

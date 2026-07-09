@@ -444,12 +444,7 @@ fn manifest_fast_success_keeps_dirty_root_when_rerun_is_pending() {
     let workspace_root = temp_workspace_root("manifest-fast-stale-trust");
     let cache = test_validated_manifest_candidate_cache();
 
-    scheduler.record_path_change(
-        0,
-        workspace_root.join("a.rs"),
-        now,
-        debounce,
-    );
+    scheduler.record_path_change(0, workspace_root.join("a.rs"), now, debounce);
     cache
         .write()
         .expect("validated manifest candidate cache poisoned")

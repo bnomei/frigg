@@ -3,11 +3,14 @@
 //! Wires plan building, dirty-path diffing, semantic executor selection, and progress callbacks
 //! into the public `index_repository` entry points used by CLI utilities and watch refresh.
 
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
 use crate::embeddings::provider_factory::canonical_provider_model;
+use crate::languages::semantic_chunk_language_for_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::{Storage, StorageSession};
 
@@ -652,11 +655,15 @@ pub(crate) fn execute_semantic_refresh_plan(
             )
         }
         SemanticRefreshMode::IncrementalAdvance => {
+            let records_manifest = readable_semantic_records_for_incremental(
+                workspace_root,
+                &semantic_refresh.records_manifest,
+            );
             let semantic_build = build_semantic_embedding_records(
                 repository_id,
                 workspace_root,
                 snapshot_id,
-                &semantic_refresh.records_manifest,
+                &records_manifest,
                 semantic_runtime,
                 credentials,
                 executor,
@@ -674,4 +681,29 @@ pub(crate) fn execute_semantic_refresh_plan(
             )
         }
     }
+}
+
+fn readable_semantic_records_for_incremental(
+    workspace_root: &Path,
+    records_manifest: &[FileDigest],
+) -> Vec<FileDigest> {
+    records_manifest
+        .iter()
+        .filter(|entry| semantic_record_readable_for_incremental(workspace_root, entry))
+        .cloned()
+        .collect()
+}
+
+fn semantic_record_readable_for_incremental(workspace_root: &Path, entry: &FileDigest) -> bool {
+    if semantic_chunk_language_for_path(&entry.path).is_none() {
+        return true;
+    }
+    if normalize_repository_relative_path(workspace_root, &entry.path).is_err() {
+        return true;
+    }
+
+    let mut source = String::new();
+    File::open(&entry.path)
+        .and_then(|mut file| file.read_to_string(&mut source))
+        .is_ok()
 }

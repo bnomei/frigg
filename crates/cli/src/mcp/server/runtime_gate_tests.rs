@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::FriggError;
-use crate::indexer::{FileDigest, FileMetadataDigest, IndexMode};
+use crate::indexer::{FileDigest, FileMetadataDigest, IndexMode, ManifestBuilder};
 use crate::mcp::server_cache::{
     HeuristicReferenceCacheKey, RuntimeCacheFamily, RuntimeCacheFreshnessContract,
     RuntimeCacheResidency, RuntimeCacheReuseClass,
@@ -228,22 +228,51 @@ fn seed_manifest_snapshot(
         .initialize()
         .expect("manifest storage should initialize");
 
-    let mut manifest_entries = paths
+    let wanted_paths = paths
         .iter()
-        .map(|path| {
-            let metadata = fs::metadata(workspace_root.join(path))
-                .expect("manifest snapshot path should exist for test");
-            ManifestEntry {
-                path: (*path).to_owned(),
-                sha256: format!("hash-{path}"),
-                size_bytes: metadata.len(),
-                mtime_ns: metadata
-                    .modified()
-                    .ok()
-                    .and_then(FriggMcpServer::system_time_to_unix_nanos),
+        .copied()
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mut seen_paths = BTreeSet::new();
+    let mut manifest_entries = ManifestBuilder::default()
+        .build(workspace_root)
+        .expect("manifest snapshot paths should build for test")
+        .into_iter()
+        .filter_map(|entry| {
+            let path = entry
+                .path
+                .strip_prefix(workspace_root)
+                .unwrap_or(&entry.path)
+                .to_string_lossy()
+                .to_string();
+            if wanted_paths.contains(&path) {
+                seen_paths.insert(path.clone());
+                Some(ManifestEntry {
+                    path,
+                    sha256: entry.hash_blake3_hex,
+                    size_bytes: entry.size_bytes,
+                    mtime_ns: entry.mtime_ns,
+                })
+            } else {
+                None
             }
         })
         .collect::<Vec<_>>();
+    for path in wanted_paths.difference(&seen_paths) {
+        let absolute_path = workspace_root.join(path);
+        let bytes = fs::read(&absolute_path).expect("manifest snapshot path should read for test");
+        let metadata =
+            fs::metadata(&absolute_path).expect("manifest snapshot path should exist for test");
+        manifest_entries.push(ManifestEntry {
+            path: path.to_owned(),
+            sha256: blake3::hash(&bytes).to_hex().to_string(),
+            size_bytes: metadata.len(),
+            mtime_ns: metadata
+                .modified()
+                .ok()
+                .and_then(FriggMcpServer::system_time_to_unix_nanos),
+        });
+    }
     manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
     manifest_entries.dedup_by(|left, right| left.path == right.path);
 

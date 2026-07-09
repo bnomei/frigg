@@ -775,8 +775,11 @@ fn append_semantic_chunk_candidates(
                 file_context,
                 chunk_index + segment_offset,
                 segment_start_line,
-                semantic_chunk_end_line(segment_start_line, &content_text[segment_start..segment_end])
-                    .min(end_line),
+                semantic_chunk_end_line(
+                    segment_start_line,
+                    &content_text[segment_start..segment_end],
+                )
+                .min(end_line),
                 &content_text[segment_start..segment_end],
             );
             segment_start = segment_end;
@@ -809,8 +812,11 @@ fn append_semantic_chunk_candidates(
                 file_context,
                 chunk_index + segment_offset,
                 segment_start_line,
-                semantic_chunk_end_line(segment_start_line, &content_text[segment_start..byte_index])
-                    .min(end_line),
+                semantic_chunk_end_line(
+                    segment_start_line,
+                    &content_text[segment_start..byte_index],
+                )
+                .min(end_line),
                 &content_text[segment_start..byte_index],
             );
             segment_start = byte_index;

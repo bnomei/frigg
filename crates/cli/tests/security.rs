@@ -11,9 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, GoToDefinitionParams,
-    PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
-    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse, ReadPresentationMode,
-    SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM, WorkspaceParams,
+    ListRepositoriesParams, PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES,
+    PUBLIC_TOOL_NAMES, PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse,
+    ReadPresentationMode, SearchPatternType, SearchSymbolParams, SearchTextParams,
+    WRITE_CONFIRM_PARAM, WorkspaceParams,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
@@ -74,9 +75,9 @@ async fn attach_session_repositories(server: &FriggMcpServer) {
 
 async fn public_repository_ids(server: &FriggMcpServer) -> Vec<String> {
     server
-        .workspace(Parameters(WorkspaceParams::default()))
+        .list_repositories(Parameters(ListRepositoriesParams::default()))
         .await
-        .expect("workspace should succeed")
+        .expect("list_repositories should succeed")
         .0
         .repositories
         .into_iter()

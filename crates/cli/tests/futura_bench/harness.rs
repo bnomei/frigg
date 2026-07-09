@@ -6,8 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use frigg::mcp::types::{PUBLIC_TOOL_NAMES, WorkspaceParams};
 use frigg::mcp::FriggMcpServer;
+use frigg::mcp::types::{PUBLIC_TOOL_NAMES, WorkspaceParams};
 use frigg::settings::FriggConfig;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -237,11 +237,7 @@ pub fn public_tool_registered(name: &str) -> bool {
 }
 
 pub fn require(cond: bool, msg: impl Into<String>) -> Result<(), String> {
-    if cond {
-        Ok(())
-    } else {
-        Err(msg.into())
-    }
+    if cond { Ok(()) } else { Err(msg.into()) }
 }
 
 /// Decode structured MCP tool results (`read_match` / `read_file` presentation wrappers).

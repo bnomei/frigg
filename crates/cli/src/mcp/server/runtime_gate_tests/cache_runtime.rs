@@ -847,11 +847,13 @@ fn heuristic_reference_cache_skips_insert_after_invalidation_epoch_changes() {
     server.invalidate_repository_navigation_caches(repository_id);
     server.cache_heuristic_references_observing_epoch(
         cache_key.clone(),
-        Vec::new(),
-        0,
-        0,
-        0,
-        0,
+        crate::mcp::server_cache::CachedHeuristicReferences {
+            references: std::sync::Arc::new(Vec::new()),
+            source_files_discovered: 0,
+            source_read_diagnostics_count: 0,
+            source_files_loaded: 0,
+            source_bytes_loaded: 0,
+        },
         Some(stale_epoch),
     );
     assert!(

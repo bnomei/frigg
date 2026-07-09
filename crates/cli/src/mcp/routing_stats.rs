@@ -239,10 +239,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(&body).expect("snapshot JSON should parse");
         assert_eq!(value["schema_id"], "frigg.stats.routing.v1");
-        assert_eq!(
-            value["privacy"],
-            "local process only; no cloud telemetry"
-        );
+        assert_eq!(value["privacy"], "local process only; no cloud telemetry");
         assert_eq!(value["enabled"], true);
         assert_eq!(value["tool_calls"]["search_symbol"], 1);
         reset_for_tests();

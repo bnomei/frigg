@@ -310,23 +310,6 @@ fn run_ripgrep_batch(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ripgrep_batching_rejects_single_path_over_argv_budget() {
-        let oversized = "a".repeat(RIPGREP_BATCH_ARG_BYTES_LIMIT);
-        let error = batch_candidate_paths(&[oversized]).expect_err("oversized path should fail");
-        assert!(
-            error
-                .to_string()
-                .contains("candidate path exceeds ripgrep argv byte budget"),
-            "unexpected error: {error}"
-        );
-    }
-}
-
 fn parse_ripgrep_event_line(line: &str, matches: &mut Vec<TextMatch>) -> Result<(), String> {
     let value: Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
     if value.get("type").and_then(Value::as_str) != Some("match") {
@@ -392,4 +375,21 @@ fn extract_ripgrep_text(value: &Value) -> Option<String> {
 
 fn normalize_ripgrep_path(raw: &str) -> String {
     raw.strip_prefix("./").unwrap_or(raw).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ripgrep_batching_rejects_single_path_over_argv_budget() {
+        let oversized = "a".repeat(RIPGREP_BATCH_ARG_BYTES_LIMIT);
+        let error = batch_candidate_paths(&[oversized]).expect_err("oversized path should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("candidate path exceeds ripgrep argv byte budget"),
+            "unexpected error: {error}"
+        );
+    }
 }

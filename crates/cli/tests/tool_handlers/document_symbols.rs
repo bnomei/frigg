@@ -594,7 +594,10 @@ async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children
 
     assert_eq!(response.symbols.len(), 1);
     assert_eq!(response.symbols[0].symbol, "inner");
-    assert!(response.top_level_only, "top_level_only should default true");
+    assert!(
+        response.top_level_only,
+        "top_level_only should default true"
+    );
     assert_eq!(response.total_symbols, 1);
     assert_eq!(response.returned, 1);
     assert!(!response.truncated);

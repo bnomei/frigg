@@ -664,10 +664,7 @@ pub struct SearchSymbolResponse {
     pub recovery: RecoveryFields,
 }
 
-/// Path-class filter for symbol search over runtime, project, or support files.
-///
-/// Default when omitted is [`SearchSymbolPathClass::Runtime`] (runtime-first, tests
-/// require opt-in via [`SearchSymbolPathClass::Support`] or [`SearchSymbolPathClass::Any`]).
+/// Path-class filter for runtime, project, support, or all symbol search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchSymbolPathClass {

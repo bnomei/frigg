@@ -455,10 +455,8 @@ impl FriggMcpServer {
         repository_id: &str,
         root: &Path,
     ) -> Result<Option<CachedPreciseGraph>, ErrorData> {
-        let current_root_signature = Self::current_root_signature_for_repository(
-            root,
-            repository_id,
-        )?;
+        let current_root_signature =
+            Self::current_root_signature_for_repository(root, repository_id)?;
         let cached = self
             .cache_state
             .latest_precise_graph_cache
@@ -624,8 +622,8 @@ impl FriggMcpServer {
         discovery: &ScipArtifactDiscovery,
         budgets: FindReferencesResourceBudgets,
     ) -> Result<CachedPreciseGraph, ErrorData> {
-        if let Some(cached) = self
-            .try_reuse_latest_precise_graph_for_repository(repository_id, root)?
+        if let Some(cached) =
+            self.try_reuse_latest_precise_graph_for_repository(repository_id, root)?
         {
             return Ok(cached);
         }

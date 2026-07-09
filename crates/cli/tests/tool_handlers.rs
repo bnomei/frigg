@@ -12,15 +12,13 @@ use frigg::mcp::types::{
     DocumentSymbolsParams, DocumentSymbolsResponse, ExploreAnchor, ExploreCursor, ExploreOperation,
     ExploreParams, FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
     FindImplementationsResponse, FindReferencesParams, FindReferencesResponse,
-    GoToDefinitionParams, GoToDefinitionResponse, ImpactBundleParams,
-    IncomingCallsParams, IncomingCallsResponse,
-    InspectSyntaxTreeResponse, ListFilesParams, ListRepositoriesParams, NavigationMode,
-    OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadMatchParams,
-    ReadPresentationMode, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
+    GoToDefinitionParams, GoToDefinitionResponse, ImpactBundleParams, IncomingCallsParams,
+    IncomingCallsResponse, InspectSyntaxTreeResponse, ListFilesParams, ListRepositoriesParams,
+    NavigationMode, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadMatchParams,
+    ReadPresentationMode, RecoveryFields, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
     SearchHybridRankReason, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
-    RecoveryFields, SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse,
-    SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem, WorkspaceAttachAction,
-    WorkspaceAttachParams,
+    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
+    StructuralResultMode, SyntaxTreeNodeItem, WorkspaceAttachAction, WorkspaceAttachParams,
     WorkspaceCurrentParams, WorkspaceParams, WorkspacePreciseState, WorkspaceResolveMode,
     WorkspaceStorageIndexState,
 };
@@ -196,29 +194,29 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             total_matches: 0,
             matches: Vec::new(),
             result_handle: None,
-                    handle_scope: None,
-                    handle_expires: None,
+            handle_scope: None,
+            handle_expires: None,
             mode: NavigationMode::UnavailableNoPrecise,
             target_selection: None,
             metadata: None,
             note: None,
-                    recovery: RecoveryFields::default(),
-                },
+            recovery: RecoveryFields::default(),
+        },
     );
     assert_omits_absent_metadata_and_note(
         "go_to_definition",
         &GoToDefinitionResponse {
             matches: Vec::new(),
             result_handle: None,
-                    handle_scope: None,
-                    handle_expires: None,
+            handle_scope: None,
+            handle_expires: None,
             mode: NavigationMode::UnavailableNoPrecise,
             target_selection: None,
             metadata: None,
             note: None,
-                    location_warning: None,
-                    recovery: RecoveryFields::default(),
-                },
+            location_warning: None,
+            recovery: RecoveryFields::default(),
+        },
     );
     assert_omits_absent_metadata_and_note(
         "find_declarations",
@@ -229,7 +227,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
-        
+
             recovery: RecoveryFields::default(),
         },
     );
@@ -242,7 +240,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
-        
+
             recovery: RecoveryFields::default(),
         },
     );
@@ -256,7 +254,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
-        
+
             recovery: RecoveryFields::default(),
         },
     );
@@ -270,7 +268,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             target_selection: None,
             metadata: None,
             note: None,
-        
+
             recovery: RecoveryFields::default(),
         },
     );

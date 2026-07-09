@@ -1483,9 +1483,9 @@ impl FriggMcpServer {
                                 target_selection,
                                 metadata,
                                 note,
-                            
-            recovery: RecoveryFields::default(),
-        };
+
+                                recovery: RecoveryFields::default(),
+                            };
                             return Ok(Json(response));
                         }
                     };
@@ -1602,9 +1602,9 @@ impl FriggMcpServer {
                             target_selection: target_selection.clone(),
                             metadata,
                             note,
-                        
-            recovery: RecoveryFields::default(),
-        };
+
+                            recovery: RecoveryFields::default(),
+                        };
                         return Ok(Json(response));
                     }
 
@@ -1669,9 +1669,9 @@ impl FriggMcpServer {
                         target_selection: target_selection.clone(),
                         metadata,
                         note,
-                    
-            recovery: RecoveryFields::default(),
-        };
+
+                        recovery: RecoveryFields::default(),
+                    };
                     Ok(Json(response))
                 })();
 

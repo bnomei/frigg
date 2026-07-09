@@ -112,7 +112,12 @@ async fn search_batch_all_zero_emits_probe_diagnostics() {
 
     assert!(response.matches.is_empty());
     assert_eq!(response.probe_summary.len(), 2);
-    assert!(response.probe_summary.iter().all(|summary| summary.hits == 0));
+    assert!(
+        response
+            .probe_summary
+            .iter()
+            .all(|summary| summary.hits == 0)
+    );
     assert!(
         response
             .probe_summary

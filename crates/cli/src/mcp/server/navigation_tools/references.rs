@@ -343,11 +343,13 @@ impl FriggMcpServer {
         let references = resolver.finish();
         self.cache_heuristic_references_observing_epoch(
             heuristic_cache_key,
-            references.clone(),
-            source_files_discovered,
-            source_read_diagnostics_count,
-            source_files_loaded,
-            source_bytes_loaded,
+            CachedHeuristicReferences {
+                references: std::sync::Arc::new(references.clone()),
+                source_files_discovered,
+                source_read_diagnostics_count,
+                source_files_loaded,
+                source_bytes_loaded,
+            },
             Some(cache_epoch),
         );
         Ok(LoadedHeuristicReferences {

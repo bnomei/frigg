@@ -533,6 +533,38 @@ pub(in crate::searcher::policy::post_selection) fn apply_runtime_companion_test_
             .map(|entry| entry.document.path.clone())
     });
 
+    let benchmark_candidate =
+        if ctx.intent.wants_benchmarks && !matches.iter().any(is_bench_support_document) {
+            let grouped_candidate = ctx
+                .candidate_pool
+                .iter()
+                .filter(|entry| {
+                    !matches
+                        .iter()
+                        .any(|selected| selected.document == entry.document)
+                })
+                .filter(|entry| is_bench_support_candidate_path(&entry.document.path))
+                .max_by(|left, right| selection_guardrail_cmp(left, right, &state, ctx))
+                .cloned();
+            let witness_candidate = ctx
+                .witness_hits
+                .iter()
+                .filter(|hit| {
+                    !matches
+                        .iter()
+                        .any(|selected| selected.document == hit.document)
+                })
+                .filter(|hit| is_bench_support_candidate_path(&hit.document.path))
+                .max_by(|left, right| selection_guardrail_cmp_from_hit(left, right, &state, ctx))
+                .map(hybrid_ranked_evidence_from_witness_hit);
+
+            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
+                selection_guardrail_cmp(left, right, &state, ctx)
+            })
+        } else {
+            None
+        };
+
     let grouped_candidate = ctx
         .candidate_pool
         .iter()
@@ -567,37 +599,40 @@ pub(in crate::searcher::policy::post_selection) fn apply_runtime_companion_test_
         })
         .max_by(|left, right| selection_guardrail_cmp_from_hit(left, right, &state, ctx))
         .map(hybrid_ranked_evidence_from_witness_hit);
-    let candidate = choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-        selection_guardrail_cmp(left, right, &state, ctx)
-    })
-    .or_else(|| {
-        let grouped_candidate = ctx
-            .candidate_pool
-            .iter()
-            .filter(|entry| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == entry.document)
+    let candidate = benchmark_candidate
+        .or_else(|| {
+            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
+                selection_guardrail_cmp(left, right, &state, ctx)
             })
-            .filter(|entry| is_plain_test_support_path(&entry.document.path))
-            .max_by(|left, right| selection_guardrail_cmp(left, right, &state, ctx))
-            .cloned();
-        let witness_candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| is_plain_test_support_path(&hit.document.path))
-            .max_by(|left, right| selection_guardrail_cmp_from_hit(left, right, &state, ctx))
-            .map(hybrid_ranked_evidence_from_witness_hit);
-
-        choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-            selection_guardrail_cmp(left, right, &state, ctx)
         })
-    });
+        .or_else(|| {
+            let grouped_candidate = ctx
+                .candidate_pool
+                .iter()
+                .filter(|entry| {
+                    !matches
+                        .iter()
+                        .any(|selected| selected.document == entry.document)
+                })
+                .filter(|entry| is_plain_test_support_path(&entry.document.path))
+                .max_by(|left, right| selection_guardrail_cmp(left, right, &state, ctx))
+                .cloned();
+            let witness_candidate = ctx
+                .witness_hits
+                .iter()
+                .filter(|hit| {
+                    !matches
+                        .iter()
+                        .any(|selected| selected.document == hit.document)
+                })
+                .filter(|hit| is_plain_test_support_path(&hit.document.path))
+                .max_by(|left, right| selection_guardrail_cmp_from_hit(left, right, &state, ctx))
+                .map(hybrid_ranked_evidence_from_witness_hit);
+
+            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
+                selection_guardrail_cmp(left, right, &state, ctx)
+            })
+        });
     let selected_best_is_benchmark_test = selected_best
         .as_deref()
         .is_some_and(is_benchmark_test_support_path);
@@ -630,7 +665,17 @@ pub(in crate::searcher::policy::post_selection) fn apply_runtime_companion_test_
     };
 
     if should_promote {
-        insert_test_support_guardrail_candidate(matches, candidate, ctx, meta, selected_best)
+        if ctx.intent.wants_entrypoint_build_flow
+            && ctx.intent.wants_test_witness_recall
+            && selected_best.is_none()
+        {
+            insert_guardrail_candidate(matches, candidate, ctx, meta, |entry| {
+                is_test_support_guardrail_replacement(entry)
+                    && !surfaces::is_entrypoint_runtime_path(&entry.document.path)
+            })
+        } else {
+            insert_test_support_guardrail_candidate(matches, candidate, ctx, meta, selected_best)
+        }
     } else {
         matches
     }

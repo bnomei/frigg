@@ -92,11 +92,7 @@ async fn workspace_gate_live_disk_for_touched_dirty_paths() {
     let server = server_for_workspace_root(&workspace_root).await;
 
     server.test_mark_workspace_dirty_root(&workspace_root);
-    server.test_record_gate_dirty_paths(
-        &repository_id,
-        &[String::from("src/lib.rs")],
-        &[],
-    );
+    server.test_record_gate_dirty_paths(&repository_id, &[String::from("src/lib.rs")], &[]);
 
     let response = server
         .workspace(Parameters(WorkspaceParams::default()))

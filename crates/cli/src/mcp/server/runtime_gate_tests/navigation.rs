@@ -6,10 +6,9 @@ use super::*;
 use crate::domain::model::{ReferenceMatch, ReferenceMatchKind};
 use crate::mcp::server_state::NavigationTargetSelection;
 use crate::mcp::types::{
-    RecoveryFields,
     CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
     FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
-    NavigationLocation, NavigationMode, OutgoingCallsResponse,
+    NavigationLocation, NavigationMode, OutgoingCallsResponse, RecoveryFields,
 };
 use rmcp::model::ErrorCode;
 use serde::Serialize;
@@ -800,14 +799,14 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             total_matches: 1,
             matches: vec![reference_match()],
             result_handle: None,
-                    handle_scope: None,
-                    handle_expires: None,
+            handle_scope: None,
+            handle_expires: None,
             mode: NavigationMode::HeuristicNoPrecise,
             target_selection: None,
             metadata,
             note,
-                    recovery: RecoveryFields::default(),
-                },
+            recovery: RecoveryFields::default(),
+        },
         None,
     );
     let serialized = assert_compact_shape("find_references", &references);
@@ -826,7 +825,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
-        
+
             recovery: RecoveryFields::default(),
         },
         None,
@@ -845,14 +844,17 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
-        
+
             recovery: RecoveryFields::default(),
         },
         None,
     );
     assert_compact_shape("find_implementations", &implementations);
     assert_eq!(implementations.mode, NavigationMode::HeuristicNoPrecise);
-    assert_eq!(implementations.matches[0].match_id.as_deref(), Some("nav:m1"));
+    assert_eq!(
+        implementations.matches[0].match_id.as_deref(),
+        Some("nav:m1")
+    );
     assert_compact_handle(&server, &implementations.result_handle, 13, Some(5));
 
     let availability = NavigationAvailability {
@@ -871,7 +873,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
-        
+
             recovery: RecoveryFields::default(),
         },
         None,
@@ -904,7 +906,7 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             target_selection: None,
             metadata,
             note,
-        
+
             recovery: RecoveryFields::default(),
         },
         None,

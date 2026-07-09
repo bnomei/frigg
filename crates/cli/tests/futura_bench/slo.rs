@@ -174,8 +174,7 @@ fn maybe_write_snapshot(
     };
     let out = PathBuf::from(out);
     if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create SLO out parent: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create SLO out parent: {e}"))?;
     }
     let date_utc = chrono_like_utc_now();
     let status = if meets {
@@ -383,12 +382,10 @@ pub async fn run_search_text_latency(report: &Mutex<harness::BenchReport>, fixtu
     .await;
 
     cleanup_workspace_root(&root);
-    report.lock().unwrap().record(
-        "slo_search_text_vs_rg",
-        Surface::Synth,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .unwrap()
+        .record("slo_search_text_vs_rg", Surface::Synth, started, outcome);
 }
 
 fn ensure_query_in_fixture(root: &Path, query: &str) {

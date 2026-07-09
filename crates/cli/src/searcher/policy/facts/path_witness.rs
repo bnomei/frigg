@@ -3,7 +3,7 @@
 
 use super::super::super::intent::HybridRankingIntent;
 use super::super::super::path_witness_projection::StoredPathWitnessProjection;
-use super::super::super::surfaces::HybridSourceClass;
+use super::super::super::surfaces::{HybridSourceClass, is_cli_command_entrypoint_path};
 use super::{PolicyQueryContext, SharedIntentFacts, SharedPathFacts};
 
 /// Facts for path-witness recall rules from projection, live path shape, and query overlap.
@@ -13,6 +13,8 @@ pub(crate) struct PathWitnessFacts {
     pub(crate) source_class: HybridSourceClass,
     pub(crate) has_exact_query_term_match: bool,
     pub(crate) is_entrypoint: bool,
+    pub(crate) is_cli_command_entrypoint: bool,
+    pub(crate) is_python_entrypoint_runtime: bool,
     pub(crate) is_typescript_runtime_module_index: bool,
     pub(crate) is_entrypoint_build_workflow: bool,
     pub(crate) is_ci_workflow: bool,
@@ -96,6 +98,8 @@ impl PathWitnessFacts {
             },
             has_exact_query_term_match: path_match.has_exact_query_term_match,
             is_entrypoint: shared_path.is_entrypoint_runtime,
+            is_cli_command_entrypoint: is_cli_command_entrypoint_path(path),
+            is_python_entrypoint_runtime: shared_path.is_python_entrypoint_runtime,
             is_typescript_runtime_module_index: shared_path.is_typescript_runtime_module_index,
             is_entrypoint_build_workflow: shared_intent.wants_entrypoint_build_flow
                 && shared_path.is_entrypoint_build_workflow,
@@ -171,6 +175,8 @@ impl Default for PathWitnessFacts {
             source_class: HybridSourceClass::Other,
             has_exact_query_term_match: false,
             is_entrypoint: false,
+            is_cli_command_entrypoint: false,
+            is_python_entrypoint_runtime: false,
             is_typescript_runtime_module_index: false,
             is_entrypoint_build_workflow: false,
             is_ci_workflow: false,

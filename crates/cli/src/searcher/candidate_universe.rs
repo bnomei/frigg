@@ -14,8 +14,9 @@ use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_
 
 use super::attribution::elapsed_us;
 use super::candidates::{
-    hidden_workflow_candidates_for_repository, merge_candidate_files, repository_path_is_hidden,
-    normalize_repository_relative_path, root_scoped_runtime_config_candidates_for_repository,
+    hidden_workflow_candidates_for_repository, merge_candidate_files,
+    normalize_repository_relative_path, repository_path_is_hidden,
+    root_scoped_runtime_config_candidates_for_repository,
     search_root_scoped_runtime_config_candidates_for_repository,
     walk_candidate_files_for_repository,
 };
@@ -121,9 +122,10 @@ impl TextSearcher {
                 };
                 // Root-scoped runtime configs cannot match path scopes that exclude the repo root
                 // (e.g. `path_regex=^src/`). Skip the extra walk on that hot path.
-                let path_scope_excludes_root = query.path_regex.as_ref().is_some_and(|path_regex| {
-                    !path_regex.is_match("Cargo.toml") && !path_regex.is_match("package.json")
-                });
+                let path_scope_excludes_root =
+                    query.path_regex.as_ref().is_some_and(|path_regex| {
+                        !path_regex.is_match("Cargo.toml") && !path_regex.is_match("package.json")
+                    });
                 if !path_scope_excludes_root {
                     let root_config_started_at = Instant::now();
                     merge_candidate_files(

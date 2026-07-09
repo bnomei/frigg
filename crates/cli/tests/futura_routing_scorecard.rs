@@ -61,7 +61,8 @@ fn futura_routing_scorecard_skill_intent_map_and_shell_card() {
         "skill must keep scenario-first picker heading (Pick your scenario)"
     );
     assert!(
-        skill.contains("## Full shell → Frigg card") || skill.contains("| Shell habit | Frigg call |"),
+        skill.contains("## Full shell → Frigg card")
+            || skill.contains("| Shell habit | Frigg call |"),
         "skill must keep the shell → Frigg translation card"
     );
 

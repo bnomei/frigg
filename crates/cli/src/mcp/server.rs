@@ -114,22 +114,20 @@ use crate::mcp::types::{
     FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
     FindImplementationsResponse, FindReferencesParams, FindReferencesResponse,
     GoToDefinitionParams, GoToDefinitionResponse, ImpactBundleParams, ImpactBundleResponse,
-    ImplementationMatch, IncomingCallsParams,
-    IncomingCallsResponse, InspectSyntaxTreeParams, InspectSyntaxTreeResponse, ListFilesParams,
-    ListFilesResponse, ListRepositoriesParams, ListRepositoriesResponse, NavigationAvailability,
-    NavigationLocation, NavigationMode, NavigationTargetSelectionStatus,
-    NavigationTargetSelectionSummary, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams,
-    ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RecoveryFields,
-    ZeroHitDiagnostics, ZeroHitIndex, ZeroHitInput, ZeroHitReason, ZeroHitScope,
-    RepositorySummary, ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus,
-    RuntimeTaskSummary, SearchBatchParams, SearchBatchResponse, SearchHybridChannelWeightsParams,
-    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, SearchTextResponse,
+    ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, InspectSyntaxTreeParams,
+    InspectSyntaxTreeResponse, ListFilesParams, ListFilesResponse, ListRepositoriesParams,
+    ListRepositoriesResponse, NavigationAvailability, NavigationLocation, NavigationMode,
+    NavigationTargetSelectionStatus, NavigationTargetSelectionSummary, OutgoingCallsParams,
+    OutgoingCallsResponse, ReadFileParams, ReadFileResponse, ReadMatchParams, ReadMatchResponse,
+    ReadPresentationMode, RecoveryFields, RepositorySummary, ResponseMode, RuntimeStatusSummary,
+    RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary, SearchBatchParams, SearchBatchResponse,
+    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
+    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
+    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
     SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
     WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
     WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
-    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexAction,
+    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceGateAction, WorkspaceIndexAction,
     WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
     WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
     WorkspaceIndexResponse, WorkspaceParams, WorkspacePreciseArtifactFailureSummary,
@@ -138,9 +136,9 @@ use crate::mcp::types::{
     WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
     WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
     WorkspacePreciseLifecycleSummary, WorkspacePreciseState, WorkspacePreciseSummary,
-    WorkspaceGateAction, WorkspacePrepareParams, WorkspacePrepareResponse,
-    WorkspaceRecommendedAction, WorkspaceResolveMode, WorkspaceResponse,
-    WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
+    WorkspaceResolveMode, WorkspaceResponse, WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    ZeroHitDiagnostics, ZeroHitIndex, ZeroHitInput, ZeroHitReason, ZeroHitScope,
 };
 #[cfg(feature = "playbook")]
 use crate::mcp::types::{
@@ -619,8 +617,12 @@ impl FriggMcpServer {
             .collect::<Vec<_>>();
         let runtime = self.runtime_status_summary();
         let watch_active = runtime.watch_active;
-        let (recommended_action, working_tree_dirty, changed_paths_since_snapshot, fresh_enough_for) =
-            self.workspace_gate_fields(current_workspace.as_ref(), &repositories, watch_active);
+        let (
+            recommended_action,
+            working_tree_dirty,
+            changed_paths_since_snapshot,
+            fresh_enough_for,
+        ) = self.workspace_gate_fields(current_workspace.as_ref(), &repositories, watch_active);
         let routing_stats = crate::mcp::routing_stats::routing_stats_enabled()
             .then(crate::mcp::routing_stats::snapshot);
 
@@ -644,12 +646,7 @@ impl FriggMcpServer {
         current_workspace: Option<&AttachedWorkspace>,
         repositories: &[RepositorySummary],
         watch_active: bool,
-    ) -> (
-        WorkspaceGateAction,
-        bool,
-        Vec<String>,
-        Option<Vec<String>>,
-    ) {
+    ) -> (WorkspaceGateAction, bool, Vec<String>, Option<Vec<String>>) {
         if repositories.is_empty() && current_workspace.is_none() {
             // Prefer `adopt_repo` over `frigg_unavailable`: agents can still attach via
             // `workspace` with `path` / `repository_id`. `FriggUnavailable` would only fit a
@@ -677,7 +674,12 @@ impl FriggMcpServer {
             );
         }
 
-        if !watch_active && self.runtime_state.runtime_profile.persistent_state_available() {
+        if !watch_active
+            && self
+                .runtime_state
+                .runtime_profile
+                .persistent_state_available()
+        {
             // Persistent runtime expects a watch; without it, prefer waiting over stale trust.
             if working_tree_dirty {
                 return (
@@ -746,7 +748,8 @@ impl FriggMcpServer {
             .unwrap_or_else(|| workspaces[0].clone());
 
         let storage = Self::workspace_storage_summary(&primary);
-        let index_state = Some(Self::workspace_storage_index_state_label(storage.index_state).to_owned());
+        let index_state =
+            Some(Self::workspace_storage_index_state_label(storage.index_state).to_owned());
 
         let mut changed_paths = Vec::new();
         let mut working_tree_dirty = false;
@@ -1137,7 +1140,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "list_files",
-        description = "List repository files with optional path, glob, language, class, hidden-file, and pagination filters. Latency: hot when scoped (path_regex/glob); prefer over shell find/fd on attached repos. Not for content search — use search_text/search_symbol.",
+        description = "List repository files with path/glob/language/class/hidden filters and pagination. Use search_text/search_symbol for content.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1378,14 +1381,19 @@ impl FriggMcpServer {
     ) -> Result<Json<WorkspaceDetachResponse>, ErrorData> {
         let params = params.0;
         let started_at = Instant::now();
-        let repository_id = match params.repository_id.or_else(|| self.current_repository_id()) {
+        let repository_id = match params
+            .repository_id
+            .or_else(|| self.current_repository_id())
+        {
             Some(repository_id) => repository_id,
             None => {
                 let attached = self.attached_workspaces();
                 if attached.is_empty() {
                     return Err(Self::no_attached_workspaces_error("workspace_detach"));
                 }
-                return Err(Self::workspace_detach_requires_repository_id_error(&attached));
+                return Err(Self::workspace_detach_requires_repository_id_error(
+                    &attached,
+                ));
             }
         };
         let detached = self.detach_workspace(&repository_id)?;
@@ -1979,7 +1987,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_file",
-        description = "Read a bounded repository-relative source file or line window. Text mode is raw source (no line prefixes). presentation_mode=json returns path/bytes/start_line/end_line metadata; presentation_mode=citation emits LINE|content for user-facing citations.",
+        description = "Read a bounded repository-relative source file or line window. Text is raw source; JSON/citation modes add metadata or line citations.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1997,7 +2005,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_match",
-        description = "Read a bounded source window for a prior result_handle and match_id from the same call. Prefer for proof after search/nav. Content parity with an equivalent read_file(start_line,end_line) window. presentation_mode=citation emits LINE|content.",
+        description = "Read a source window for a prior result_handle and match_id. Use after search/nav proof; equivalent to read_file on the resolved range.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2015,7 +2023,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "explore",
-        description = "File-anchor only: probe/refine/zoom inside one known repository file. Not cross-repo search — use search_text/search_symbol/search_hybrid for that. Call after you already have a path.",
+        description = "Probe/refine/zoom inside one known repository file. Use after you have a path; use search_text/search_symbol/search_hybrid for discovery.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2033,7 +2041,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "rg-shaped exact search (literal default). Latency: hot when scoped (path_regex/glob); warm/cold when unscoped or huge. Prefer over shell rg for indexed source. rg -n 'a|b' → pattern_type=regex; rg -c → count_only=true (read total_matches); rg -g '**/*.rs' → glob='**/*.rs'. Prefer path_regex='^src/' for implementation questions. Do not use for vague discovery (search_hybrid) or known symbol names (search_symbol).",
+        description = "Exact text search, literal by default. Use pattern_type=regex, glob/path_regex to scope, count_only for counts; not vague discovery.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2049,7 +2057,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Discovery pivots for broad code questions without a known string, symbol, or path. Latency: warm/cold (allowed slower than exact; still returns pivots promptly). Not proof: after hybrid run search_text or search_symbol, then read_match. Compact responses include ranking_note, best_pivot_path, suggested_next, latency_class. Do not answer from rank-1 alone or shell-grep as the precision step. Do not use when the string or symbol name is already known.",
+        description = "Discovery pivots for broad code questions without known text, symbol, or path. Follow with search_text/search_symbol/read_match for proof.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2065,7 +2073,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Latency: hot when runtime-scoped; prefer over hybrid and shell rg when the name is known. Defaults to path_class=runtime (skip tests); pass path_class=support or any for tests. Rows include column/excerpt and latency_class for navigation handoff when indexed. Do not use for free-text error strings (search_text) or vague discovery (search_hybrid).",
+        description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Use path_class for tests/support; not free-text search.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2081,7 +2089,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_batch",
-        description = "Multi-probe search (2–8 text/symbol/hybrid probes run concurrently, then merged) that replaces multi-hypothesis parallel shell greps as a single Frigg call. Latency: warm for ≤3 probes, cold for larger batches; per-probe match caps bound total index work. Returns merged, deduped matches with probe_id(s), probe_summary[], suggested_next, latency_class. Prefer over same-turn multi-tool shell greps. Do not use for a single known string (search_text) or single known name (search_symbol).",
+        description = "Run 2-8 text/symbol/hybrid probes concurrently and merge results. Use for multi-hypothesis searches; use direct tools for one probe.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2097,7 +2105,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_references",
-        description = "Find definition and usage rows for a symbol or cursor location. Latency: warm with precise graph; may be colder on heuristic fallback. Prefer over whole-repo shell rg for impact. Pass symbol when known; path+line alone is denser/ambiguous.",
+        description = "Find definition and usage rows for a symbol or cursor location. Prefer symbol= when known; use over shell rg for impact checks.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2113,7 +2121,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "go_to_definition",
-        description = "Find likely definitions. Latency: warm/hot when symbol is known; rejects empty {} quickly with recovery. Prefer symbol=<name> (recommended). path+line without symbol can be ambiguous on dense lines — pass symbol or column. Prefer over shell rg for go-to-def on indexed source.",
+        description = "Find likely definitions for a symbol or cursor. Prefer symbol=; path+line without column can be ambiguous. Read proof separately.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2193,7 +2201,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "document_symbols",
-        description = "File outline for one supported source file. Latency: hot/warm for single-file outline. Defaults to top_level_only=true. Known name → use search_symbol instead. Large outlines paginate via limit/resume_from with total_symbols/returned/truncated. Not for cross-file discovery.",
+        description = "File outline for one supported source file. Defaults top_level_only=true; paginates with limit/resume_from. Known name: use search_symbol.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2209,7 +2217,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "inspect_syntax_tree",
-        description = "Return AST focus/ancestors/children around a source location. Requires line AND column together (use column=1 if unknown). Prerequisite for search_structural when node shape is unclear.",
+        description = "Return AST focus, ancestors, and children around a source location. Requires line and column; use before search_structural.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2241,7 +2249,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "impact_bundle",
-        description = "Convenience composition: symbol hits + find_references + incoming_calls (+ implementations for traits/interfaces or when include_implementations=true). Individual tools remain the source of truth. suggested_next covers tests pass and proof reads.",
+        description = "Compose symbol hits, references, callers, and optional implementations. Convenience bundle; navigation tools remain source of truth.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

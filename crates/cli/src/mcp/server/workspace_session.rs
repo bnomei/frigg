@@ -640,15 +640,47 @@ impl FriggMcpServer {
                     .initialize_with_auto_repair()
                     .map_err(|err| err.to_string())?;
                 let credentials = SemanticRuntimeCredentials::from_process_env();
-                index_repository_with_runtime_config(
+                let index_result = index_repository_with_runtime_config(
                     &workspace.runtime_repository_id,
                     &workspace.root,
                     &db_path,
                     IndexMode::ChangedOnly,
                     &semantic_runtime,
                     &credentials,
-                )
-                .map_err(|err| err.to_string())
+                );
+                match index_result {
+                    Ok(summary) => Ok(summary),
+                    Err(err) => {
+                        let error = err.to_string();
+                        if semantic_runtime.enabled
+                            && !semantic_runtime.strict_mode
+                            && error.contains("phase=semantic_refresh")
+                        {
+                            warn!(
+                                repository_id = %workspace.repository_id,
+                                error = %error,
+                                "attach semantic index failed; retrying manifest-only index"
+                            );
+                            let mut manifest_only_runtime = semantic_runtime.clone();
+                            manifest_only_runtime.enabled = false;
+                            index_repository_with_runtime_config(
+                                &workspace.runtime_repository_id,
+                                &workspace.root,
+                                &db_path,
+                                IndexMode::ChangedOnly,
+                                &manifest_only_runtime,
+                                &credentials,
+                            )
+                            .map_err(|fallback_err| {
+                                format!(
+                                    "{error}; attach manifest-only retry failed: {fallback_err}"
+                                )
+                            })
+                        } else {
+                            Err(error)
+                        }
+                    }
+                }
             })();
             server.invalidate_workspace_index_runtime_caches(&workspace, true);
             let (status, detail) = match &result {

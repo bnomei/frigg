@@ -48,6 +48,7 @@ impl FriggMcpServer {
         cached
     }
 
+    #[cfg(test)]
     pub(super) fn cache_heuristic_references(
         &self,
         cache_key: HeuristicReferenceCacheKey,
@@ -59,11 +60,13 @@ impl FriggMcpServer {
     ) {
         self.cache_heuristic_references_observing_epoch(
             cache_key,
-            references,
-            source_files_discovered,
-            source_read_diagnostics_count,
-            source_files_loaded,
-            source_bytes_loaded,
+            CachedHeuristicReferences {
+                references: std::sync::Arc::new(references),
+                source_files_discovered,
+                source_read_diagnostics_count,
+                source_files_loaded,
+                source_bytes_loaded,
+            },
             None,
         );
     }
@@ -71,11 +74,7 @@ impl FriggMcpServer {
     pub(super) fn cache_heuristic_references_observing_epoch(
         &self,
         cache_key: HeuristicReferenceCacheKey,
-        references: Vec<HeuristicReference>,
-        source_files_discovered: usize,
-        source_read_diagnostics_count: usize,
-        source_files_loaded: usize,
-        source_bytes_loaded: u64,
+        cached: CachedHeuristicReferences,
         cache_epoch: Option<u64>,
     ) {
         let mut cache = self
@@ -83,29 +82,17 @@ impl FriggMcpServer {
             .heuristic_reference_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cache_epoch) = cache_epoch {
-            if self
+        if let Some(cache_epoch) = cache_epoch
+            && self
                 .cache_state
                 .heuristic_reference_cache_epoch
                 .load(Ordering::Relaxed)
                 != cache_epoch
-            {
-                return;
-            }
+        {
+            return;
         }
 
-        let inserted = cache
-            .insert(
-                cache_key,
-                CachedHeuristicReferences {
-                    references: Arc::new(references),
-                    source_files_discovered,
-                    source_read_diagnostics_count,
-                    source_files_loaded,
-                    source_bytes_loaded,
-                },
-            )
-            .is_none();
+        let inserted = cache.insert(cache_key, cached).is_none();
         if inserted {
             self.record_runtime_cache_event(
                 RuntimeCacheFamily::HeuristicReference,

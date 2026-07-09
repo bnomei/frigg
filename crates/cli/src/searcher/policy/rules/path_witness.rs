@@ -71,6 +71,25 @@ const SCORE_RULES: &[ScoreRule<PathWitnessFacts>] = &[
         path_witness_build_flow_bonus,
     ),
     ScoreRule::when(
+        "path_witness.cli_command_entrypoint_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::query_mentions_cli_leaf(),
+            pred::is_cli_command_entrypoint_leaf(),
+        ]),
+        path_witness_cli_command_entrypoint_bonus,
+    ),
+    ScoreRule::when(
+        "path_witness.python_entrypoint_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_python_entrypoint_runtime_leaf(),
+        ]),
+        path_witness_python_entrypoint_bonus,
+    ),
+    ScoreRule::when(
         "path_witness.workflow_bonus",
         PolicyStage::PathWitness,
         Predicate::all(&[pred::is_entrypoint_build_workflow_leaf()]),

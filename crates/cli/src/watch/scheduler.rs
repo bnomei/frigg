@@ -223,7 +223,8 @@ impl RepositoryWatchState {
                 self.manifest_fast_inflight_paths = started_paths.iter().cloned().collect();
                 self.recent_paths.clear();
                 if !started_paths.is_empty() {
-                    self.semantic_followup_paths.extend(started_paths.iter().cloned());
+                    self.semantic_followup_paths
+                        .extend(started_paths.iter().cloned());
                 }
                 started_paths
             }

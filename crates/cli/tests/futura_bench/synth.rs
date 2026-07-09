@@ -162,12 +162,10 @@ async fn run_zero_hit(report: &Mutex<harness::BenchReport>, fixture: &std::path:
     }
     .await;
     cleanup_workspace_root(&root);
-    report.lock().unwrap().record(
-        "zero_hit_recovery_synth",
-        Surface::Synth,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .unwrap()
+        .record("zero_hit_recovery_synth", Surface::Synth, started, outcome);
 }
 
 async fn run_handle_path(report: &Mutex<harness::BenchReport>, fixture: &std::path::Path) {
@@ -189,7 +187,10 @@ async fn run_handle_path(report: &Mutex<harness::BenchReport>, fixture: &std::pa
             .map_err(|e| format!("handle search failed: {e}"))?
             .0;
 
-        require(!search.matches.is_empty(), format!("no handle hits: {search:?}"))?;
+        require(
+            !search.matches.is_empty(),
+            format!("no handle hits: {search:?}"),
+        )?;
         let result_handle = search
             .result_handle
             .ok_or_else(|| "missing result_handle".to_owned())?;
@@ -260,11 +261,7 @@ async fn run_post_edit_dirty_gate(report: &Mutex<harness::BenchReport>, fixture:
 
         // Simulate watch/hot-reindex queue notifications after the edit (same APIs production uses).
         server.test_mark_workspace_dirty_root(&root);
-        server.test_record_gate_dirty_paths(
-            &repository_id,
-            &[String::from("src/lib.rs")],
-            &[],
-        );
+        server.test_record_gate_dirty_paths(&repository_id, &[String::from("src/lib.rs")], &[]);
 
         let response = server
             .workspace(Parameters(WorkspaceParams {
@@ -306,7 +303,9 @@ async fn run_post_edit_dirty_gate(report: &Mutex<harness::BenchReport>, fixture:
         // Path-scoped only: never interpret gate as repo-wide shell grep license.
         if let Some(fresh) = response.fresh_enough_for.as_ref() {
             require(
-                fresh.iter().all(|t| t == "read_file" || t == "read_match" || t == "search_text"),
+                fresh
+                    .iter()
+                    .all(|t| t == "read_file" || t == "read_match" || t == "search_text"),
                 format!("fresh_enough_for should stay path-scoped tools: {fresh:?}"),
             )?;
         }

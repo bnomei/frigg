@@ -348,14 +348,13 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
 ) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
-    if let Some(cache) = cache {
-        if cache
+    if let Some(cache) = cache
+        && cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .bypass_if_dirty_root(root)
-        {
-            return Ok(None);
-        }
+    {
+        return Ok(None);
     }
 
     let Some(latest) = storage.load_latest_manifest_for_repository(repository_id)? else {

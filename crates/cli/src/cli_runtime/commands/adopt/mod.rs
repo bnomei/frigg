@@ -1042,7 +1042,14 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, true, false, TEST_MCP_SERVER_URL).expect("apply uninstall"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                true,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply uninstall"),
             1
         );
         assert!(!root.join("AGENTS.md").exists());
@@ -1184,7 +1191,14 @@ mod tests {
             Some("frigg-hook-diverged")
         );
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply hook"),
             1
         );
 
@@ -1240,7 +1254,14 @@ mod tests {
             Some("frigg-hook-diverged")
         );
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply hook"),
             1
         );
 
@@ -1287,7 +1308,14 @@ mod tests {
         .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply hook"),
             1
         );
 
@@ -1312,7 +1340,14 @@ mod tests {
         .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("reapply hook"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("reapply hook"),
             0
         );
         fs::remove_dir_all(root).expect("remove temp root");
@@ -1341,7 +1376,14 @@ mod tests {
                 .any(|entry| entry.target == AdoptTarget::Hook)
         );
 
-        apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply all with hook");
+        apply_plan_entries(
+            &plan,
+            AgentsPolicy::Lightweight,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("apply all with hook");
         let value: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
         )
@@ -1376,7 +1418,14 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                false,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply hook"),
             1
         );
         let value: serde_json::Value = serde_json::from_str(
@@ -1422,8 +1471,14 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, AgentsPolicy::Lightweight, true, false, TEST_MCP_SERVER_URL)
-                .expect("apply hook uninstall"),
+            apply_plan_entries(
+                &plan,
+                AgentsPolicy::Lightweight,
+                true,
+                false,
+                TEST_MCP_SERVER_URL
+            )
+            .expect("apply hook uninstall"),
             1
         );
         let value: serde_json::Value = serde_json::from_str(
@@ -1479,8 +1534,14 @@ mod tests {
             },
         ]);
 
-        let err = apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL)
-            .expect_err("later invalid managed block should fail apply");
+        let err = apply_plan_entries(
+            &plan,
+            AgentsPolicy::Lightweight,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect_err("later invalid managed block should fail apply");
         assert!(
             err.to_string().contains("invalid nested or unmatched"),
             "unexpected apply error: {err}"
@@ -1590,8 +1651,14 @@ mod tests {
             reason: Some("test-forced-update".to_owned()),
         }]);
 
-        let err = apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, true, TEST_MCP_SERVER_URL)
-            .expect_err("symlinked target escape should fail before reading");
+        let err = apply_plan_entries(
+            &plan,
+            AgentsPolicy::Lightweight,
+            false,
+            true,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect_err("symlinked target escape should fail before reading");
 
         let message = err.to_string();
         assert!(
@@ -1627,8 +1694,14 @@ mod tests {
         )
         .expect("build adopt plan");
 
-        let err = apply_plan_entries(&plan, AgentsPolicy::Lightweight, false, false, TEST_MCP_SERVER_URL)
-            .expect_err("symlinked parent escape should fail");
+        let err = apply_plan_entries(
+            &plan,
+            AgentsPolicy::Lightweight,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect_err("symlinked parent escape should fail");
 
         assert!(err.to_string().contains("escapes canonical workspace root"));
         assert!(!outside.join("rules/frigg.mdc").exists());

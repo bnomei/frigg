@@ -635,10 +635,15 @@ impl FriggMcpServer {
         {
             Ok(freshness) => freshness,
             Err(err) => {
+                let snapshot_id = Storage::new(&workspace.db_path)
+                    .load_latest_manifest_for_repository(&workspace.runtime_repository_id)
+                    .ok()
+                    .flatten()
+                    .map(|manifest| manifest.snapshot_id);
                 return WorkspaceIndexComponentSummary {
                     state: WorkspaceIndexComponentState::Error,
                     reason: Some(err),
-                    snapshot_id: None,
+                    snapshot_id,
                     compatible_snapshot_id: None,
                     provider,
                     model,

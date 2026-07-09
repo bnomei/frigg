@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::domain::PathClass;
-use crate::languages::{supported_language_for_path, LanguageCapability};
+use crate::languages::{LanguageCapability, supported_language_for_path};
 
 pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
     let normalized = relative_path.trim_start_matches("./");

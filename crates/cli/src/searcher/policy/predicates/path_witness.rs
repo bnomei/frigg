@@ -126,6 +126,14 @@ fn is_entrypoint(ctx: &PathWitnessFacts) -> bool {
     ctx.is_entrypoint
 }
 
+fn is_cli_command_entrypoint(ctx: &PathWitnessFacts) -> bool {
+    ctx.is_cli_command_entrypoint
+}
+
+fn is_python_entrypoint_runtime(ctx: &PathWitnessFacts) -> bool {
+    ctx.is_python_entrypoint_runtime
+}
+
 fn is_entrypoint_build_workflow(ctx: &PathWitnessFacts) -> bool {
     ctx.is_entrypoint_build_workflow
 }
@@ -460,6 +468,20 @@ pub(crate) const fn is_entrypoint_leaf() -> PredicateLeaf<PathWitnessFacts> {
     PredicateLeaf::new("candidate.entrypoint", is_entrypoint)
 }
 
+pub(crate) const fn is_cli_command_entrypoint_leaf() -> PredicateLeaf<PathWitnessFacts> {
+    PredicateLeaf::new(
+        "candidate.cli_command_entrypoint",
+        is_cli_command_entrypoint,
+    )
+}
+
+pub(crate) const fn is_python_entrypoint_runtime_leaf() -> PredicateLeaf<PathWitnessFacts> {
+    PredicateLeaf::new(
+        "candidate.python_entrypoint_runtime",
+        is_python_entrypoint_runtime,
+    )
+}
+
 pub(crate) const fn is_entrypoint_build_workflow_leaf() -> PredicateLeaf<PathWitnessFacts> {
     PredicateLeaf::new(
         "candidate.entrypoint_build_workflow",
@@ -704,6 +726,8 @@ mod tests {
         facts.query_mentions_cli = true;
         facts.has_exact_query_term_match = true;
         facts.is_entrypoint = true;
+        facts.is_cli_command_entrypoint = true;
+        facts.is_python_entrypoint_runtime = true;
         facts.is_ci_workflow = true;
         facts.is_config_artifact = true;
         facts.source_class = crate::searcher::surfaces::HybridSourceClass::Runtime;
@@ -717,6 +741,8 @@ mod tests {
         assert!((query_mentions_cli_leaf().eval)(&facts));
         assert!((has_exact_query_term_match_leaf().eval)(&facts));
         assert!((is_entrypoint_leaf().eval)(&facts));
+        assert!((is_cli_command_entrypoint_leaf().eval)(&facts));
+        assert!((is_python_entrypoint_runtime_leaf().eval)(&facts));
         assert!((is_ci_workflow_leaf().eval)(&facts));
         assert!((is_config_artifact_leaf().eval)(&facts));
         assert!((path_stem_is_main_leaf().eval)(&facts));

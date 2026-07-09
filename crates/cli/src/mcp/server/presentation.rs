@@ -29,6 +29,17 @@ impl FriggMcpServer {
         matches!(Self::response_mode(mode), ResponseMode::Full)
     }
 
+    fn attach_recovery_index_if_missing(
+        recovery: &mut RecoveryFields,
+        index: Option<ZeroHitIndex>,
+    ) {
+        if recovery.index.is_none()
+            && let Some(index) = index
+        {
+            recovery.index = Some(index);
+        }
+    }
+
     fn store_session_result_handle(
         &self,
         _tool_name: &'static str,
@@ -80,6 +91,7 @@ impl FriggMcpServer {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn session_result_handle_match(
         &self,
         result_handle: &str,
@@ -545,14 +557,13 @@ impl FriggMcpServer {
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
         if response.latency_class.is_none() {
-            response.latency_class = Some(Self::search_text_latency_class(params, response.total_matches));
+            response.latency_class = Some(Self::search_text_latency_class(
+                params,
+                response.total_matches,
+            ));
         }
         if response.total_matches == 0 {
-            let repository_ids = params
-                .repository_id
-                .clone()
-                .into_iter()
-                .collect::<Vec<_>>();
+            let repository_ids = params.repository_id.clone().into_iter().collect::<Vec<_>>();
             let index = self.zero_hit_index_for_repositories(&repository_ids);
             if response.recovery.is_empty() {
                 let pattern_type_is_literal =
@@ -581,11 +592,9 @@ impl FriggMcpServer {
                         .with_non_recursive_glob_hint(params.query.as_str(), glob);
                 }
                 crate::mcp::routing_stats::record_zero_hit();
-            } else if response.recovery.index.is_none() {
+            } else {
                 // Live search paths may have composed recovery before index was available.
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         } else if response.recovery.scope.is_none() {
             // Scope echo on non-empty hits when filters were applied.
@@ -617,9 +626,8 @@ impl FriggMcpServer {
         if params.count_only == Some(true) || params.files_with_matches == Some(true) {
             return LatencyClass::Hot;
         }
-        let scoped = params.path_regex.is_some()
-            || params.glob.is_some()
-            || params.repository_id.is_some();
+        let scoped =
+            params.path_regex.is_some() || params.glob.is_some() || params.repository_id.is_some();
         if scoped && total_matches < 50 {
             LatencyClass::Hot
         } else if scoped {
@@ -651,8 +659,7 @@ impl FriggMcpServer {
         }
         // Compact discovery pivots — always present; never treat hybrid as proof.
         if response.ranking_note.is_none() {
-            response.ranking_note =
-                Some("discovery_only; confirm with exact search".to_owned());
+            response.ranking_note = Some("discovery_only; confirm with exact search".to_owned());
         }
         if response.best_pivot_path.is_none() {
             response.best_pivot_path = response
@@ -686,10 +693,8 @@ impl FriggMcpServer {
                     reason_override: None,
                 });
                 crate::mcp::routing_stats::record_zero_hit();
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         } else if !response.matches.is_empty() && response.recovery.suggested_next.is_empty() {
             response.recovery = RecoveryFields::hybrid_discovery_exact_pivot(
@@ -796,9 +801,8 @@ impl FriggMcpServer {
                 let scope = Some(scope).filter(|scope| !scope.is_empty());
                 response.recovery = if effective_path_class == SearchSymbolPathClass::Runtime {
                     if let Some(name) = query {
-                        RecoveryFields::runtime_zero_name_known(name).with_diagnostics(
-                            ZeroHitDiagnostics { scope, index },
-                        )
+                        RecoveryFields::runtime_zero_name_known(name)
+                            .with_diagnostics(ZeroHitDiagnostics { scope, index })
                     } else {
                         RecoveryFields::for_zero_hit(ZeroHitInput {
                             tool: "search_symbol",
@@ -820,10 +824,8 @@ impl FriggMcpServer {
                     })
                 };
                 crate::mcp::routing_stats::record_zero_hit();
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -861,10 +863,8 @@ impl FriggMcpServer {
                     index,
                     reason_override,
                 });
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -915,15 +915,9 @@ impl FriggMcpServer {
                         reason_override,
                     })
                 };
-                if response.recovery.index.is_none() {
-                    if let Some(index) = index {
-                        response.recovery.index = Some(index);
-                    }
-                }
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -959,10 +953,8 @@ impl FriggMcpServer {
                     index,
                     reason_override,
                 });
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -998,10 +990,8 @@ impl FriggMcpServer {
                     index,
                     reason_override,
                 });
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -1037,10 +1027,8 @@ impl FriggMcpServer {
                     index,
                     reason_override,
                 });
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -1076,10 +1064,8 @@ impl FriggMcpServer {
                     index,
                     reason_override,
                 });
-            } else if response.recovery.index.is_none() {
-                if let Some(index) = index {
-                    response.recovery.index = Some(index);
-                }
+            } else {
+                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         }
         if !Self::should_return_full_response(response_mode) {
@@ -1356,7 +1342,10 @@ mod tests {
             "zero-hit should serialize index block when workspace signals exist: {value}"
         );
         assert!(value["index"].get("index_state").is_some());
-        assert!(value.get("recovery").is_none(), "recovery must be flattened");
+        assert!(
+            value.get("recovery").is_none(),
+            "recovery must be flattened"
+        );
     }
 
     #[test]

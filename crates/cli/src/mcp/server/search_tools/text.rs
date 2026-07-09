@@ -212,12 +212,10 @@ impl FriggMcpServer {
                             reason_override: None,
                         });
                         if let Some(glob) = params_for_blocking.glob.as_deref() {
-                            response.recovery = response
-                                .recovery
-                                .with_non_recursive_glob_hint(
-                                    params_for_blocking.query.as_str(),
-                                    glob,
-                                );
+                            response.recovery = response.recovery.with_non_recursive_glob_hint(
+                                params_for_blocking.query.as_str(),
+                                glob,
+                            );
                         }
                     } else {
                         let mut scope = ZeroHitScope::default();

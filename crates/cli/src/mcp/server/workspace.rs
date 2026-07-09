@@ -524,7 +524,7 @@ impl FriggMcpServer {
             );
         } else {
             self.invalidate_session_result_handles_for_repository_ids([
-                canonical_repository_id.as_str(),
+                canonical_repository_id.as_str()
             ]);
         }
         self.session_state

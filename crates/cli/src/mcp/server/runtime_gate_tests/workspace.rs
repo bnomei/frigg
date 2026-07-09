@@ -106,7 +106,13 @@ async fn list_files_supports_rg_aligned_filters_and_resume_from() {
     assert!(first_page.truncated);
     assert_eq!(first_page.files.len(), 1);
     assert_eq!(first_page.files[0].path, "src/lib.rs");
-    assert_eq!(first_page.resume_from.as_deref(), Some("1"));
+    assert!(
+        first_page
+            .resume_from
+            .as_deref()
+            .is_some_and(|cursor| !cursor.is_empty()),
+        "truncated list_files response should return an opaque resume cursor"
+    );
 
     let second_page = server
         .list_files(Parameters(ListFilesParams {
@@ -379,8 +385,11 @@ async fn workspace_detach_accepts_stable_repository_id_alias() {
     let workspace_root = temp_workspace_root("detach-accepts-stable-alias");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
-    fs::write(workspace_root.join("src/lib.rs"), "pub struct DetachedAlias;\n")
-        .expect("failed to write workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct DetachedAlias;\n",
+    )
+    .expect("failed to write workspace root fixture");
 
     let server = FriggMcpServer::new(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])

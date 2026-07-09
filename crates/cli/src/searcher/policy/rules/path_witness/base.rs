@@ -13,6 +13,18 @@ pub(super) fn path_witness_build_flow_bonus(_ctx: &PathWitnessFacts) -> Option<P
     Some(PolicyEffect::Add(3.2))
 }
 
+pub(super) fn path_witness_cli_command_entrypoint_bonus(
+    _ctx: &PathWitnessFacts,
+) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(8.0))
+}
+
+pub(super) fn path_witness_python_entrypoint_bonus(
+    _ctx: &PathWitnessFacts,
+) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(5.0))
+}
+
 pub(super) fn path_witness_workflow_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
     ctx.is_entrypoint_build_workflow
         .then_some(PolicyEffect::Add(if ctx.path_overlap == 0 {

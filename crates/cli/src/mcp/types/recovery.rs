@@ -7,10 +7,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Stable zero-hit reason codes for search/navigation empty results.
-///
-/// Defined here so recovery builders and later zero-hit contracts share one serde-stable enum.
-/// Values are snake_case on the wire.
+/// Stable snake_case reason codes for empty search/navigation results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ZeroHitReason {
@@ -434,12 +431,8 @@ impl RecoveryFields {
             scope.path_regex.is_some() || scope.glob.is_some() || scope.path_class.is_some()
         });
         if scope_is_tight {
-            let path_regex = scope
-                .as_ref()
-                .and_then(|scope| scope.path_regex.as_deref());
-            let path_class = scope
-                .as_ref()
-                .and_then(|scope| scope.path_class.as_deref());
+            let path_regex = scope.as_ref().and_then(|scope| scope.path_regex.as_deref());
+            let path_class = scope.as_ref().and_then(|scope| scope.path_class.as_deref());
             return Self::scoped_miss(query.unwrap_or(""), path_regex, path_class)
                 .attach_scope_index(scope, index);
         }
@@ -472,12 +465,8 @@ impl RecoveryFields {
                 Self::literal_looks_like_regex(query.unwrap_or(""))
             }
             ZeroHitReason::ScopeExcludedAllCandidates => {
-                let path_regex = scope
-                    .as_ref()
-                    .and_then(|scope| scope.path_regex.as_deref());
-                let path_class = scope
-                    .as_ref()
-                    .and_then(|scope| scope.path_class.as_deref());
+                let path_regex = scope.as_ref().and_then(|scope| scope.path_regex.as_deref());
+                let path_class = scope.as_ref().and_then(|scope| scope.path_class.as_deref());
                 Self::scoped_miss(query.unwrap_or(""), path_regex, path_class)
             }
             ZeroHitReason::IndexStalePossible => {
@@ -490,9 +479,7 @@ impl RecoveryFields {
             ZeroHitReason::WrongRepositoryPossible => Self::wrong_repo_possible(None),
             ZeroHitReason::NoIndexCoverage => Self::detached_session(),
             ZeroHitReason::ToolUnavailable => Self::tool_unavailable(tool),
-            ZeroHitReason::PreciseGraphUnavailable => {
-                Self::precise_graph_unavailable(tool, query)
-            }
+            ZeroHitReason::PreciseGraphUnavailable => Self::precise_graph_unavailable(tool, query),
             ZeroHitReason::PathClassNotIndexed => {
                 Self::path_class_not_indexed(query, scope.as_ref())
             }
@@ -535,7 +522,10 @@ impl RecoveryFields {
                         .with_query(query)
                         .with_reason("exact text pivot after hybrid zero"),
                 );
-            } else if matches!(tool, "find_references" | "go_to_definition" | "find_declarations") {
+            } else if matches!(
+                tool,
+                "find_references" | "go_to_definition" | "find_declarations"
+            ) {
                 suggested_next.push(
                     SuggestedNext::tool("search_symbol")
                         .with_symbol(query)
@@ -670,8 +660,7 @@ impl RecoveryFields {
         let mut suggested_next = vec![
             SuggestedNext::tool("search_text")
                 .with_reason("search without path_class when class coverage is missing"),
-            SuggestedNext::tool("list_files")
-                .with_reason("verify which path classes are present"),
+            SuggestedNext::tool("list_files").with_reason("verify which path classes are present"),
         ];
         if let Some(query) = query {
             suggested_next[0] = SuggestedNext::tool("search_text")
@@ -708,8 +697,7 @@ impl RecoveryFields {
                 "No literal matches for query that looks like a regular expression: {query:?}."
             )),
             correction_hint: Some(
-                "Retry search_text with pattern_type=regex (default is literal)."
-                    .to_owned(),
+                "Retry search_text with pattern_type=regex (default is literal).".to_owned(),
             ),
             related_tools: vec!["search_text".to_owned()],
             suggested_next: vec![
@@ -729,9 +717,7 @@ impl RecoveryFields {
         let name = name.trim();
         Self {
             error_code: Some("ZERO_HIT_RUNTIME_SCOPE".to_owned()),
-            message: Some(format!(
-                "No runtime-class hits for known name {name:?}."
-            )),
+            message: Some(format!("No runtime-class hits for known name {name:?}.")),
             correction_hint: Some(
                 "Broaden path_class beyond runtime, or retry with search_text for textual hits."
                     .to_owned(),
@@ -800,8 +786,7 @@ impl RecoveryFields {
             }
         };
         let mut suggested_next = vec![
-            SuggestedNext::tool("workspace")
-                .with_reason("check dirty paths and index freshness"),
+            SuggestedNext::tool("workspace").with_reason("check dirty paths and index freshness"),
         ];
         if let Some(path) = changed_paths.first() {
             suggested_next.push(
@@ -881,8 +866,9 @@ impl RecoveryFields {
             vec![
                 SuggestedNext::tool("workspace")
                     .with_reason("confirm adoption, dirty paths, and index freshness"),
-                SuggestedNext::tool("search_text")
-                    .with_reason("retry one exact probe with broader scope after reading probe_summary"),
+                SuggestedNext::tool("search_text").with_reason(
+                    "retry one exact probe with broader scope after reading probe_summary",
+                ),
             ]
         } else {
             suggested_next
@@ -983,11 +969,7 @@ impl RecoveryFields {
     }
 
     /// Scoped search returned zero; broaden path filters.
-    pub fn scoped_miss(
-        query: &str,
-        path_regex: Option<&str>,
-        path_class: Option<&str>,
-    ) -> Self {
+    pub fn scoped_miss(query: &str, path_regex: Option<&str>, path_class: Option<&str>) -> Self {
         let query = query.trim();
         let mut scope_bits = Vec::new();
         if let Some(path_regex) = path_regex.filter(|value| !value.is_empty()) {
@@ -1001,7 +983,7 @@ impl RecoveryFields {
         } else {
             scope_bits.join(" and ")
         };
-        let broader_path_regex = path_regex.and_then(|raw| broaden_path_regex_hint(raw));
+        let broader_path_regex = path_regex.and_then(broaden_path_regex_hint);
         let mut suggested_next = vec![
             SuggestedNext::tool("search_text")
                 .with_query(query)
@@ -1247,12 +1229,12 @@ fn broaden_path_regex_hint(path_regex: &str) -> Option<String> {
         return None;
     }
     // Common tight runtime roots → one level broader.
-    if let Some(stripped) = trimmed.strip_prefix('^') {
-        if let Some((head, _)) = stripped.split_once('/') {
-            if !head.is_empty() && head != ".*" {
-                return Some(format!("^{head}/"));
-            }
-        }
+    if let Some(stripped) = trimmed.strip_prefix('^')
+        && let Some((head, _)) = stripped.split_once('/')
+        && !head.is_empty()
+        && head != ".*"
+    {
+        return Some(format!("^{head}/"));
     }
     None
 }
@@ -1309,7 +1291,10 @@ mod tests {
     fn recovery_literal_looks_like_regex_builder_is_actionable() {
         let recovery = RecoveryFields::literal_looks_like_regex(r"foo|bar");
         assert_recovery_actionable(&recovery);
-        assert_eq!(recovery.error_code.as_deref(), Some("QUERY_LOOKS_LIKE_REGEX"));
+        assert_eq!(
+            recovery.error_code.as_deref(),
+            Some("QUERY_LOOKS_LIKE_REGEX")
+        );
         assert_eq!(
             recovery.zero_hit_reason,
             Some(ZeroHitReason::QueryLooksLikeRegex)
@@ -1325,7 +1310,10 @@ mod tests {
     fn recovery_for_search_text_zero_hit_wires_regex_trap_only_for_literals() {
         let recovery = RecoveryFields::for_search_text_zero_hit(r"foo|bar", true);
         assert_recovery_actionable(&recovery);
-        assert_eq!(recovery.error_code.as_deref(), Some("QUERY_LOOKS_LIKE_REGEX"));
+        assert_eq!(
+            recovery.error_code.as_deref(),
+            Some("QUERY_LOOKS_LIKE_REGEX")
+        );
 
         let explicit_regex = RecoveryFields::for_search_text_zero_hit(r"foo|bar", false);
         assert_recovery_actionable(&explicit_regex);
@@ -1380,7 +1368,10 @@ mod tests {
         assert_eq!(scope.path_class.as_deref(), Some("runtime"));
         assert_eq!(scope.repository_id.as_deref(), Some("repo-1"));
         assert_eq!(
-            recovery.index.as_ref().and_then(|index| index.index_state.as_deref()),
+            recovery
+                .index
+                .as_ref()
+                .and_then(|index| index.index_state.as_deref()),
             Some("ready")
         );
 
@@ -1389,13 +1380,26 @@ mod tests {
         assert_eq!(value["scope"]["path_regex"], "^src/catalog/");
         assert_eq!(value["index"]["index_state"], "ready");
         assert!(value["message"].as_str().is_some_and(|m| !m.is_empty()));
-        assert!(value["correction_hint"].as_str().is_some_and(|m| !m.is_empty()));
-        assert!(value["suggested_next"].as_array().is_some_and(|v| !v.is_empty()));
+        assert!(
+            value["correction_hint"]
+                .as_str()
+                .is_some_and(|m| !m.is_empty())
+        );
+        assert!(
+            value["suggested_next"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        );
     }
 
     #[test]
     fn recovery_for_zero_hit_nav_and_symbol_are_actionable() {
-        for tool in ["search_symbol", "search_hybrid", "find_references", "go_to_definition"] {
+        for tool in [
+            "search_symbol",
+            "search_hybrid",
+            "find_references",
+            "go_to_definition",
+        ] {
             let recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
                 tool,
                 query: Some("MissingSymbol"),
@@ -1436,10 +1440,8 @@ mod tests {
 
     #[test]
     fn recovery_stale_dirty_paths_builder_is_actionable() {
-        let recovery = RecoveryFields::stale_dirty_paths(&[
-            "src/a.rs".to_owned(),
-            "src/b.rs".to_owned(),
-        ]);
+        let recovery =
+            RecoveryFields::stale_dirty_paths(&["src/a.rs".to_owned(), "src/b.rs".to_owned()]);
         assert_recovery_actionable(&recovery);
         assert_eq!(
             recovery.zero_hit_reason,
@@ -1474,8 +1476,10 @@ mod tests {
 
     #[test]
     fn recovery_hybrid_discovery_exact_pivot_builder_is_actionable() {
-        let recovery =
-            RecoveryFields::hybrid_discovery_exact_pivot("where is catalog", Some("src/catalog.rs"));
+        let recovery = RecoveryFields::hybrid_discovery_exact_pivot(
+            "where is catalog",
+            Some("src/catalog.rs"),
+        );
         assert_recovery_actionable(&recovery);
         assert!(
             recovery
@@ -1487,11 +1491,8 @@ mod tests {
 
     #[test]
     fn recovery_scoped_miss_builder_is_actionable() {
-        let recovery = RecoveryFields::scoped_miss(
-            "catalog_entries",
-            Some("^src/catalog/"),
-            Some("runtime"),
-        );
+        let recovery =
+            RecoveryFields::scoped_miss("catalog_entries", Some("^src/catalog/"), Some("runtime"));
         assert_recovery_actionable(&recovery);
         assert_eq!(
             recovery.error_code.as_deref(),
@@ -1553,7 +1554,12 @@ mod tests {
     fn recovery_missing_line_column_pair_builder_is_actionable() {
         let recovery = RecoveryFields::missing_line_column_pair("inspect_syntax_tree");
         assert_recovery_actionable(&recovery);
-        assert!(recovery.message.as_ref().is_some_and(|m| m.contains("column")));
+        assert!(
+            recovery
+                .message
+                .as_ref()
+                .is_some_and(|m| m.contains("column"))
+        );
     }
 
     #[test]
@@ -1580,15 +1586,23 @@ mod tests {
         assert_eq!(value["error_code"], "QUERY_LOOKS_LIKE_REGEX");
         assert_eq!(value["zero_hit_reason"], "query_looks_like_regex");
         assert!(value["correction_hint"].as_str().is_some());
-        assert!(value["related_tools"].as_array().is_some_and(|v| !v.is_empty()));
-        assert!(value["suggested_next"].as_array().is_some_and(|v| !v.is_empty()));
+        assert!(
+            value["related_tools"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        );
+        assert!(
+            value["suggested_next"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        );
         assert_eq!(value["suggested_next"][0]["pattern_type"], "regex");
     }
 
     #[test]
     fn zero_hit_reason_serde_snake_case_is_stable() {
-        let value = serde_json::to_value(ZeroHitReason::IndexedSearchComplete)
-            .expect("serialize enum");
+        let value =
+            serde_json::to_value(ZeroHitReason::IndexedSearchComplete).expect("serialize enum");
         assert_eq!(value, json!("indexed_search_complete"));
         let parsed: ZeroHitReason =
             serde_json::from_value(json!("wrong_repository_possible")).expect("parse enum");

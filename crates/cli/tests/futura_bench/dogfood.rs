@@ -11,10 +11,10 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use frigg::mcp::types::{
-    PUBLIC_TOOL_NAMES, DocumentSymbolsParams, ImpactBundleParams, ListFilesParams,
-    ReadFileParams, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, ResponseMode,
-    SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind, SearchHybridParams,
-    SearchPatternType, SearchSymbolParams, SearchTextParams, WorkspaceParams,
+    DocumentSymbolsParams, ImpactBundleParams, ListFilesParams, PUBLIC_TOOL_NAMES, ReadFileParams,
+    ReadMatchParams, ReadMatchResponse, ReadPresentationMode, ResponseMode, SearchBatchParams,
+    SearchBatchProbe, SearchBatchProbeKind, SearchHybridParams, SearchPatternType,
+    SearchSymbolParams, SearchTextParams, WorkspaceParams,
 };
 use rmcp::handler::server::wrapper::Parameters;
 
@@ -44,7 +44,10 @@ fn prepare_dogfood_workspace() -> (PathBuf, bool) {
         "missing dogfood fixture at {}",
         fixture.display()
     );
-    (materialize_fixture_workspace(&fixture, "dogfood-board"), true)
+    (
+        materialize_fixture_workspace(&fixture, "dogfood-board"),
+        true,
+    )
 }
 
 pub async fn run_all(report: &Mutex<harness::BenchReport>) {
@@ -344,12 +347,10 @@ async fn run_read_match_handle(report: &Mutex<harness::BenchReport>, root: &Path
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "read_match_handle_path",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .unwrap()
+        .record("read_match_handle_path", Surface::Dogfood, started, outcome);
 }
 
 async fn run_ignored_docs_absence(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -386,12 +387,10 @@ async fn run_ignored_docs_absence(report: &Mutex<harness::BenchReport>, root: &P
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "ignored_docs_absence",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .unwrap()
+        .record("ignored_docs_absence", Surface::Dogfood, started, outcome);
 }
 
 async fn run_citation_read_file(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -428,10 +427,12 @@ async fn run_citation_read_file(report: &Mutex<harness::BenchReport>, root: &Pat
         Ok(())
     }
     .await;
-    report
-        .lock()
-        .unwrap()
-        .record("citation_mode_read_file", Surface::Dogfood, started, outcome);
+    report.lock().unwrap().record(
+        "citation_mode_read_file",
+        Surface::Dogfood,
+        started,
+        outcome,
+    );
 }
 
 async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -452,7 +453,10 @@ async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &
             .await
             .map_err(|e| format!("list_files failed: {e}"))?
             .0;
-        require(first.files.len() <= 2, format!("limit=2 over-returned: {:?}", first.files))?;
+        require(
+            first.files.len() <= 2,
+            format!("limit=2 over-returned: {:?}", first.files),
+        )?;
         require(
             first.total_files >= first.files.len(),
             format!("total_files inconsistent: {first:?}"),
@@ -484,12 +488,10 @@ async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "list_files_pagination",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .unwrap()
+        .record("list_files_pagination", Surface::Dogfood, started, outcome);
 }
 
 async fn run_document_symbols_outline(report: &Mutex<harness::BenchReport>, root: &Path) {

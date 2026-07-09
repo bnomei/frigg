@@ -1142,11 +1142,10 @@ mod tests {
             .with_timezone(&Utc);
 
         let result = ContextSummaryWindow::resolve(None, Some("-262143-01-15"), now);
-        assert!(result.is_err());
-        match result {
-            Err(ContextSummaryError::InvalidDate(_)) => {}
-            other => panic!("expected InvalidDate, got {other:?}"),
-        }
+        assert!(
+            matches!(result, Err(ContextSummaryError::InvalidDate(_))),
+            "expected InvalidDate, got {result:?}"
+        );
     }
 
     #[test]

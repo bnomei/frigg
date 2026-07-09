@@ -413,7 +413,7 @@ fn hybrid_ranking_python_entrypoint_queries_prefer_canonical_entrypoints_over_ba
     config.semantic_runtime = semantic_runtime_enabled(false);
     config.max_search_results = 8;
     let searcher = TextSearcher::new(config);
-    let output = searcher.search_hybrid_with_filters_using_executor(
+    let output = searcher.search_hybrid_with_filters_using_executor_with_trace(
         SearchHybridQuery {
             query: "entry point bootstrap app startup cli main config tests benchmark workflow"
                 .to_owned(),
@@ -433,6 +433,23 @@ fn hybrid_ranking_python_entrypoint_queries_prefer_canonical_entrypoints_over_ba
 
     let ranked_paths = output
         .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let witness_paths = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| {
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.document.path.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let grouped_paths = output
+        .coverage_grouped_pool
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
@@ -456,7 +473,8 @@ fn hybrid_ranking_python_entrypoint_queries_prefer_canonical_entrypoints_over_ba
             .iter()
             .take(8)
             .any(|path| *path == "autogpt_platform/backend/backend/copilot/executor/__main__.py"),
-        "__main__.py should remain visible via path-shaped witness recall even without content overlap: {ranked_paths:?}"
+        "__main__.py should remain visible via path-shaped witness recall even without content overlap: ranked={ranked_paths:?} witness={witness_paths:?} grouped={grouped_paths:?} trace={:?}",
+        output.post_selection_trace
     );
     assert!(
         ranked_paths

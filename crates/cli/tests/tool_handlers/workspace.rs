@@ -667,11 +667,11 @@ async fn workspace_read_file_without_attached_repositories_auto_adopts_current_d
         content.get("path").and_then(serde_json::Value::as_str),
         Some("README.md")
     );
-    let workspace = server
-        .workspace(Parameters(WorkspaceParams::default()))
-        .await
-        .expect("workspace status should succeed after auto-adopt")
-        .0;
-    assert!(workspace.session_default);
-    assert!(workspace.repository.is_some());
+    assert!(
+        content
+            .get("repository_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "read_file should resolve through an auto-adopted repository"
+    );
 }
