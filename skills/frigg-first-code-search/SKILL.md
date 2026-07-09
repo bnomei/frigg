@@ -97,6 +97,7 @@ BAD: read_match with a match_id from another result_handle
 BAD: repo-wide shell rg to "confirm" an explainable Frigg zero
 BAD: throwaway shell rg on indexed src when Frigg is attached
 BAD: calling tools only in a stale schema cache, not in live tools/list
+BAD: treat search_batch as one cheap multi-pattern scan / expect early-exit across probes
 ```
 
 ---
@@ -150,17 +151,20 @@ Each card: **Trigger / Habit / Frigg path / Fallback / Proof / Done / Product su
 | --- | --- |
 | **Trigger** | Several plausible strings or symbols; would fire 3–6 greps in one turn |
 | **Habit** | Parallel `grep`/`rg`/`Grep` in one message |
-| **Frigg path** | Prefer `search_batch([...])` (shipped). Same-turn parallel `search_text` / `search_symbol` only if batch is unavailable on the live surface. |
+| **Frigg path** | Prefer `search_batch([...])`: **independent** concurrent probes, then merge/dedupe. Same-turn parallel `search_text` / `search_symbol` only if batch is unavailable on the live surface. |
 | **Fallback** | Shell only if Frigg unregistered or path unindexed |
 | **Proof** | `read_match` on best merged hit |
 | **Done** | Multi-hypothesis answer cites Frigg proof; no parallel shell on indexed source |
-| **Product support** | `search_batch` shipped — probe summaries, dedupe, `suggested_next`, handles |
+| **Product support** | 2–8 probes, each a full search; `probe_summary` per probe; path:line dedupe; handles / `suggested_next`. **Not** a single shared multi-query walk or early-exit fusion. |
 
 ```text
 PREFERRED: search_batch([
   { id, kind: text|symbol|hybrid, query, path_regex?, glob?, path_class? },
   ...  // 2..=8 probes
 ])
+
+Mental model: same as parallel Frigg searches in one call — not one fused rg with many patterns.
+Prefer text+symbol probes for multi-guess; use hybrid probes sparingly (vague only); still proof via read_match.
 
 ELSE — only if tools/list lacks search_batch:
   search_text(probe_1, path_regex=^src/)

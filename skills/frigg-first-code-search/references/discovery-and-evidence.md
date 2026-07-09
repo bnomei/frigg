@@ -33,7 +33,7 @@ Typical next move:
 
 When you would fire 3–6 shell greps in one turn:
 
-- **Preferred:** `search_batch` with 2–8 typed probes (merged, deduped results + probe summaries). Shipped on the core surface.
+- **Preferred:** `search_batch` with 2–8 **independent** typed probes run concurrently, then merged/deduped (plus `probe_summary`). Cost scales with probe count; not a single shared multi-query index walk. Shipped on the core surface.
 - **Fallback only:** same-turn parallel `search_text` and/or `search_symbol` when `search_batch` is absent from live `tools/list`.
 - Do **not** mix parallel shell grep with Frigg search on indexed source while Frigg is healthy.
 

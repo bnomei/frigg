@@ -61,7 +61,7 @@ Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is at
 
 ## Security Or Pattern Sweep
 
-1. Prefer `search_batch` with multiple text/symbol (and optional hybrid) probes when available
+1. Prefer `search_batch` with multiple independent text/symbol (and optional hybrid) probes when available — concurrent full searches, then merge (not one fused multi-query walk)
 2. Prefer `search_batch`; only if missing from tools/list, same-turn parallel Frigg `search_text` / `search_symbol` probes (not parallel shell grep)
 3. Scope runtime with `path_regex` / `path_class`; upgrade to safe regex only when literal underfills
 4. `read_match` or `read_file` to validate true positives on indexed source

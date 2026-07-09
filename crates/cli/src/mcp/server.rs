@@ -2089,7 +2089,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_batch",
-        description = "Run 2-8 text/symbol/hybrid probes concurrently and merge results. Use for multi-hypothesis searches; use direct tools for one probe.",
+        description = "Run 2-8 independent text/symbol/hybrid probes concurrently, then dedupe/merge hits. Each probe is a full search (not one shared index walk). Prefer for multi-hypothesis guesses; use search_text/search_symbol/search_hybrid alone for a single probe.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

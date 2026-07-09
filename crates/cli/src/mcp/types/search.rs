@@ -748,9 +748,11 @@ pub struct SearchBatchProbe {
 /// Parameters for `search_batch` multi-probe search.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchBatchParams {
-    /// 2..=8 typed probes executed and merged in one call.
+    /// 2..=8 typed probes. Each entry runs as its own text/symbol/hybrid search;
+    /// results are merged after all complete (not one shared multi-query walk).
     pub probes: Vec<SearchBatchProbe>,
-    /// Merge policy. Defaults to `rank_by_probe_hit_strength`.
+    /// Post-merge ranking only (default `rank_by_probe_hit_strength`). Does not change
+    /// how probes run: probes stay independent concurrent searches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<SearchBatchMergeMode>,
     /// Max merged match rows to return.
