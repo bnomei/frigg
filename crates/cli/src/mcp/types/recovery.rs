@@ -457,7 +457,6 @@ impl RecoveryFields {
             return Self::stale_dirty_paths(changed).attach_scope_index(scope, index);
         }
 
-        // Default complete zero: indexed search finished with no matches.
         Self::indexed_search_complete(tool, query).attach_scope_index(scope, index)
     }
 
@@ -1080,6 +1079,45 @@ impl RecoveryFields {
         }
     }
 
+    /// Multiple same-rank definition candidates require a tighter anchor.
+    pub fn disambiguation_required(query: Option<&str>) -> Self {
+        let mut suggested_next = vec![
+            SuggestedNext::tool("go_to_definition")
+                .with_reason("retry with path+line (and column) from target_selection.candidates"),
+            SuggestedNext::tool("search_symbol")
+                .with_path_class("runtime")
+                .with_reason("list candidate symbols before re-calling go_to_definition"),
+        ];
+        if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
+            suggested_next.insert(
+                0,
+                SuggestedNext::tool("go_to_definition")
+                    .with_symbol(query)
+                    .with_reason("disambiguate by re-calling with path+line for this symbol"),
+            );
+        }
+        Self {
+            error_code: Some("DISAMBIGUATION_REQUIRED".to_owned()),
+            message: Some(
+                "go_to_definition found multiple same-rank candidates; pass path+line or a stable_symbol_id."
+                    .to_owned(),
+            ),
+            correction_hint: Some(
+                "Inspect target_selection.candidates and retry go_to_definition with path+line or stable_symbol_id. This is not a missing SCIP/precise-graph failure."
+                    .to_owned(),
+            ),
+            related_tools: vec![
+                "go_to_definition".to_owned(),
+                "search_symbol".to_owned(),
+                "document_symbols".to_owned(),
+            ],
+            suggested_next,
+            zero_hit_reason: Some(ZeroHitReason::QueryMiss),
+            scope: None,
+            index: None,
+        }
+    }
+
     /// Syntax inspection missing required line/column pair.
     pub fn missing_line_column_pair(tool_name: &str) -> Self {
         let tool_name = tool_name.trim();
@@ -1453,6 +1491,23 @@ mod tests {
         assert_eq!(
             recovery.error_code.as_deref(),
             Some("EMPTY_GO_TO_DEFINITION")
+        );
+    }
+
+    #[test]
+    fn recovery_disambiguation_required_builder_is_actionable() {
+        let recovery = RecoveryFields::disambiguation_required(Some("Handler"));
+        assert_recovery_actionable(&recovery);
+        assert_eq!(
+            recovery.error_code.as_deref(),
+            Some("DISAMBIGUATION_REQUIRED")
+        );
+        assert!(
+            recovery
+                .correction_hint
+                .as_ref()
+                .is_some_and(|hint| hint.contains("not a missing SCIP")),
+            "disambiguation recovery must not steer toward precise-graph wait"
         );
     }
 

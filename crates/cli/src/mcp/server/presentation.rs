@@ -877,16 +877,32 @@ impl FriggMcpServer {
                     .target_selection
                     .as_ref()
                     .map(|selection| selection.symbol_query.as_str());
-                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "go_to_definition",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope: None,
-                    index,
-                    reason_override,
-                });
+                let disambiguation_required = response.target_selection.as_ref().is_some_and(
+                    |selection| {
+                        selection.status
+                            == crate::mcp::types::NavigationTargetSelectionStatus::DisambiguationRequired
+                    },
+                );
+                response.recovery = if disambiguation_required {
+                    RecoveryFields::disambiguation_required(query)
+                } else {
+                    let reason_override =
+                        matches!(response.mode, NavigationMode::UnavailableNoPrecise)
+                            .then_some(ZeroHitReason::PreciseGraphUnavailable);
+                    RecoveryFields::for_zero_hit(ZeroHitInput {
+                        tool: "go_to_definition",
+                        query,
+                        pattern_type_is_literal: None,
+                        scope: None,
+                        index: index.clone(),
+                        reason_override,
+                    })
+                };
+                if response.recovery.index.is_none() {
+                    if let Some(index) = index {
+                        response.recovery.index = Some(index);
+                    }
+                }
             } else if response.recovery.index.is_none() {
                 if let Some(index) = index {
                     response.recovery.index = Some(index);
@@ -1415,17 +1431,14 @@ mod tests {
         assert_eq!(response.handle_expires.as_deref(), Some("session"));
         let handle = response.result_handle.expect("handle");
 
-        // Same handle + correct match_id resolves.
         assert!(matches!(
             server.session_result_handle_lookup(&handle, "search:m1"),
             SessionResultHandleLookup::Found(_)
         ));
-        // Missing handle is stale.
         assert!(matches!(
             server.session_result_handle_lookup("result-missing", "search:m1"),
             SessionResultHandleLookup::StaleHandle
         ));
-        // Existing handle + foreign match_id is mixed.
         assert!(matches!(
             server.session_result_handle_lookup(&handle, "nav:m9"),
             SessionResultHandleLookup::MixedHandle { .. }
@@ -1530,5 +1543,50 @@ mod tests {
         assert!(!defs.recovery.is_empty());
         let defs_value = serde_json::to_value(&defs).expect("serialize defs");
         assert!(defs_value.get("zero_hit_reason").is_some());
+    }
+
+    #[test]
+    fn go_to_definition_disambiguation_does_not_claim_precise_graph_unavailable() {
+        let server = presentation_test_server();
+        let defs = server.present_go_to_definition_response(
+            GoToDefinitionResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                mode: NavigationMode::UnavailableNoPrecise,
+                target_selection: Some(NavigationTargetSelectionSummary {
+                    status: NavigationTargetSelectionStatus::DisambiguationRequired,
+                    symbol_query: "Handler".to_owned(),
+                    selected_stable_symbol_id: None,
+                    candidate_count: 2,
+                    same_rank_candidate_count: 2,
+                    ambiguous_query: true,
+                    candidates: Vec::new(),
+                }),
+                metadata: None,
+                note: None,
+                location_warning: None,
+                recovery: RecoveryFields::default(),
+            },
+            None,
+        );
+        assert_eq!(
+            defs.recovery.error_code.as_deref(),
+            Some("DISAMBIGUATION_REQUIRED")
+        );
+        assert_ne!(
+            defs.recovery.zero_hit_reason,
+            Some(ZeroHitReason::PreciseGraphUnavailable)
+        );
+        assert!(
+            defs.recovery
+                .correction_hint
+                .as_ref()
+                .is_some_and(|hint| !hint.to_ascii_lowercase().contains("scip")
+                    || hint.contains("not a missing SCIP")),
+            "disambiguation must not be presented as SCIP absence: {:?}",
+            defs.recovery.correction_hint
+        );
     }
 }
