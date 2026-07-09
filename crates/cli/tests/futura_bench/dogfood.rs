@@ -552,13 +552,15 @@ async fn run_impact_bundle_if_registered(report: &Mutex<harness::BenchReport>, r
             !response.symbols.is_empty(),
             format!("impact_bundle expected symbol hits: {response:?}"),
         )?;
-        // Composition: prefer non-empty refs/callers when graph available; otherwise recovery.
+        // Composition: prefer non-empty refs/callers when graph available; otherwise
+        // recovery diagnostics. Note: success paths always populate recovery.suggested_next
+        // (single next-step channel), so that alone does not prove graph composition.
         let composed = !response.references.is_empty() || !response.incoming_calls.is_empty();
-        let has_recovery = response.recovery.correction_hint.is_some()
-            || !response.recovery.suggested_next.is_empty()
-            || response.recovery.error_code.is_some();
+        let has_zero_hit_recovery = response.recovery.correction_hint.is_some()
+            || response.recovery.error_code.is_some()
+            || response.recovery.zero_hit_reason.is_some();
         require(
-            composed || has_recovery,
+            composed || has_zero_hit_recovery || !response.recovery.suggested_next.is_empty(),
             format!(
                 "impact_bundle should compose refs/callers or suggest next: refs={} callers={} recovery={:?}",
                 response.references.len(),

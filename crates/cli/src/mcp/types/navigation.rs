@@ -654,18 +654,18 @@ mod tests {
         let value = serde_json::to_value(&success).expect("serialize success impact");
         let next = value["suggested_next"]
             .as_array()
-            .expect("flattened recovery must expose suggested_next once");
+            .expect("flattened recovery must expose suggested_next");
         assert_eq!(next.len(), 2);
-        assert!(
-            value.as_object().expect("object").keys().filter(|k| *k == "suggested_next").count()
-                == 1,
-            "exactly one suggested_next key after serialize"
+        assert_eq!(
+            next[0]["tool"], "read_match",
+            "success next steps serialize from recovery.suggested_next"
         );
-        // Compact-relevant fields stay present on success.
+        // Compact-relevant fields stay present on success; no nested recovery envelope.
         assert_eq!(value["symbol"], "catalog_entries");
         assert_eq!(value["symbols_result_handle"], "symbols:h1");
         assert_eq!(value["references_result_handle"], "refs:h1");
         assert!(value.get("error_code").is_none());
+        assert!(value.get("recovery").is_none());
 
         // Zero-hit shaped recovery still single-channel.
         let zero = ImpactBundleResponse {
