@@ -593,6 +593,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 | User citation | `read_file` json/citation or host Read |
 | References / callers | `find_references`, `incoming_calls` |
 | Callees | `outgoing_calls` (confirm with read) |
+| Trait / interface impls | `find_implementations` |
 | Definition | `go_to_definition(symbol=...)` |
 | AST shape | `inspect_syntax_tree` + `search_structural` (tier-3) |
 | In-file zoom (extended) | `explore` — not a substitute for `search_text` |

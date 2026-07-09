@@ -201,9 +201,8 @@ mod tests {
     fn skill_scenario_tools_are_subset_of_public_tool_names() {
         use crate::mcp::types::PUBLIC_TOOL_NAMES;
 
-        let Some(skill) = workspace_file("skills/frigg-first-code-search/SKILL.md") else {
-            return;
-        };
+        let skill = workspace_file("skills/frigg-first-code-search/SKILL.md")
+            .expect("bundled skill skills/frigg-first-code-search/SKILL.md must exist for SSOT guard");
 
         // Scenario tools the skill actually routes to (must stay ⊆ public SSOT).
         // Not every PUBLIC_TOOL_NAMES entry is required to appear in the skill prose.
@@ -229,9 +228,14 @@ mod tests {
         ];
 
         for tool_name in SCENARIO_TOOLS {
+            // Prefer code-span citations so prose like "code exploration" or phantom
+            // names like workspace_index cannot satisfy the SSOT guard. Accept either
+            // a bare `` `tool` `` span or a call form `` `tool(...)` ``.
+            let cited = skill.contains(&format!("`{tool_name}`"))
+                || skill.contains(&format!("`{tool_name}("));
             assert!(
-                skill.contains(tool_name),
-                "bundled skill should reference scenario tool `{tool_name}`"
+                cited,
+                "bundled skill should cite scenario tool `{tool_name}` in a markdown code span"
             );
             assert!(
                 PUBLIC_TOOL_NAMES.contains(tool_name),

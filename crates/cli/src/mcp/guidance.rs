@@ -317,7 +317,9 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
             .with_description("Machine-readable supported languages and capability notes.")
             .with_mime_type("application/json"),
         Resource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
-            .with_description("Machine-readable core vs extended tool-surface policy.")
+            .with_description(
+                "Live machine catalog of core vs extended MCP tools (active_tools, profile manifests). Prefer over inventory freezes.",
+            )
             .with_mime_type("application/json"),
         Resource::new(
             SHELL_REPLACEMENT_MAP_RESOURCE_URI,
