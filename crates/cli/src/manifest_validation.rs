@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::domain::{FriggError, FriggResult};
 use crate::embeddings::provider_factory::canonical_provider_model;
 use crate::indexer::{
-    FileDigest, FileMetadataDigest, ManifestBuildDiagnostic, ManifestBuilder, ManifestBuildOutput,
+    FileDigest, FileMetadataDigest, ManifestBuildDiagnostic, ManifestBuildOutput, ManifestBuilder,
     ManifestMetadataBuildOutput,
 };
 use crate::languages::semantic_chunk_language_for_path;
@@ -55,7 +55,9 @@ fn validate_manifest_file_digests_for_root(
     root: &Path,
     file_digests: &[FileDigest],
 ) -> Option<Vec<FileDigest>> {
-    let live_output = ManifestBuilder::default().build_with_diagnostics(root).ok()?;
+    let live_output = ManifestBuilder::default()
+        .build_with_diagnostics(root)
+        .ok()?;
     validate_manifest_file_digests_against_live_output(root, file_digests, live_output)
 }
 
@@ -283,26 +285,12 @@ impl ValidatedManifestCandidateCache {
         )
     }
 
-    /// Ready entry for a root without requiring a snapshot id from storage.
-    /// Used for the warm `search_text` path so we can skip opening SQLite.
-    pub(crate) fn ready_for_root(
-        &mut self,
-        root: &Path,
-    ) -> Option<(String, Arc<Vec<FileDigest>>)> {
-        let key = Self::cache_key(root);
-        match self.entries.get(&key) {
-            Some(ValidatedManifestCandidateCacheEntry::Ready {
-                snapshot_id,
-                digests,
-            }) => {
-                self.stats.hits += 1;
-                Some((snapshot_id.clone(), Arc::clone(digests)))
-            }
-            Some(ValidatedManifestCandidateCacheEntry::Dirty) => {
-                self.stats.dirty_bypasses += 1;
-                None
-            }
-            None => None,
+    pub(crate) fn bypass_if_dirty_root(&mut self, root: &Path) -> bool {
+        if self.is_dirty_root(root) {
+            self.stats.dirty_bypasses += 1;
+            true
+        } else {
+            false
         }
     }
 
@@ -360,18 +348,12 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
 ) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
-    // Warm path: serve Ready digests without opening SQLite. Dirty/miss fall through.
     if let Some(cache) = cache {
-        let mut guard = cache
+        if cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some((snapshot_id, digests)) = guard.ready_for_root(root) {
-            return Ok(Some(SharedValidatedManifestSnapshot {
-                snapshot_id,
-                digests: Arc::new(file_metadata_digests_from_file_digests(digests.as_ref())),
-            }));
-        }
-        if guard.is_dirty_root(root) {
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .bypass_if_dirty_root(root)
+        {
             return Ok(None);
         }
     }
@@ -388,7 +370,6 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
             .lookup(root, &snapshot_id);
         match lookup {
             ValidatedManifestCandidateCacheLookup::Hit(digests) => {
-                // Snapshot-id-matched Ready entry (rare after ready_for_root short-circuit).
                 return Ok(Some(SharedValidatedManifestSnapshot {
                     snapshot_id,
                     digests: Arc::new(file_metadata_digests_from_file_digests(digests.as_ref())),
@@ -846,6 +827,76 @@ mod tests {
     }
 
     #[test]
+    fn latest_validated_manifest_snapshot_shared_checks_storage_before_ready_cache()
+    -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("shared-cache-storage-refresh");
+        fs::create_dir_all(&workspace_root)
+            .expect("manifest-validation workspace root should be creatable");
+        let file_path = workspace_root.join("src.rs");
+        fs::write(&file_path, "fn cached() {}\n")
+            .expect("manifest-validation fixture file should be writable");
+
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .expect("manifest-validation db path should have a parent"),
+        )
+        .expect("manifest-validation db parent should be creatable");
+        let storage = Storage::new(&db_path);
+        storage.initialize()?;
+        seed_manifest_snapshot(&storage, "repo-001", "snapshot-001", &file_path)?;
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        let first = latest_validated_manifest_snapshot_shared(
+            &storage,
+            "repo-001",
+            &workspace_root,
+            Some(&cache),
+        )?
+        .expect("initial shared manifest validation should populate cache");
+        assert_eq!(first.snapshot_id, "snapshot-001");
+        assert_eq!(first.digests.len(), 1);
+
+        fs::write(workspace_root.join("new_file.rs"), "fn refreshed() {}\n")
+            .expect("new fixture file should be writable");
+        let refreshed_manifest =
+            ManifestBuilder::default().build_with_diagnostics(&workspace_root)?;
+        let refreshed_entries = refreshed_manifest
+            .entries
+            .into_iter()
+            .map(|digest| ManifestEntry {
+                path: digest.path.display().to_string(),
+                sha256: digest.hash_blake3_hex,
+                size_bytes: digest.size_bytes,
+                mtime_ns: digest.mtime_ns,
+            })
+            .collect::<Vec<_>>();
+        storage.upsert_manifest("repo-001", "snapshot-002", &refreshed_entries)?;
+
+        let second = latest_validated_manifest_snapshot_shared(
+            &storage,
+            "repo-001",
+            &workspace_root,
+            Some(&cache),
+        )?
+        .expect("refreshed storage snapshot should validate and replace cache");
+
+        assert_eq!(second.snapshot_id, "snapshot-002");
+        assert_eq!(second.digests.len(), 2);
+        assert!(second.digests.iter().any(|digest| {
+            digest
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "new_file.rs")
+        }));
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    #[test]
     fn latest_validated_manifest_snapshot_shared_rejects_cached_snapshot_missing_new_file()
     -> FriggResult<()> {
         let workspace_root = temp_workspace_root("shared-cache-detects-new-file");
@@ -918,8 +969,8 @@ mod tests {
         let file_path = workspace_root.join("src.rs");
         fs::write(&file_path, "fn hash_checked() {}\n")
             .expect("manifest-validation fixture file should be writable");
-        let metadata = fs::metadata(&file_path)
-            .expect("manifest-validation fixture metadata should resolve");
+        let metadata =
+            fs::metadata(&file_path).expect("manifest-validation fixture metadata should resolve");
 
         let db_path = workspace_root.join(".frigg/provenance.db");
         fs::create_dir_all(
