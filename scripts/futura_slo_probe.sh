@@ -25,6 +25,6 @@ export FUTURA_SLO_OUT="$OUT"
 echo "Running head-to-head probe (release futura_bench)..."
 echo "FUTURA_SLO_OUT=$FUTURA_SLO_OUT"
 
-cargo test -p frigg --test futura_bench --release -- --nocapture
+cargo test -p frigg --features futura-bench --test futura_bench --release -- --nocapture
 
 echo "Wrote/updated: $OUT"

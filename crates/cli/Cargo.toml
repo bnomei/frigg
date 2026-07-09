@@ -61,6 +61,7 @@ walkdir.workspace = true
 [features]
 default = ["local-embeddings"]
 local-embeddings = ["dep:fastembed", "dep:hf-hub"]
+futura-bench = []
 playbook = []
 
 [package.metadata.binstall]
@@ -143,3 +144,4 @@ path = "tests/futura_routing_scorecard.rs"
 [[test]]
 name = "futura_bench"
 path = "tests/futura_bench.rs"
+required-features = ["futura-bench"]

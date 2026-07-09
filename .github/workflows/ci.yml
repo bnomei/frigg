@@ -83,7 +83,7 @@ jobs:
         env:
           FUTURA_BENCH_OUT: ${{ runner.temp }}/futura-bench-summary.json
           FUTURA_SLO_OUT: ${{ runner.temp }}/futura-slo-snapshot.md
-        run: cargo test -p frigg --test futura_bench --release -- --nocapture
+        run: cargo test -p frigg --features futura-bench --test futura_bench --release -- --nocapture
       - name: Upload futura-bench summary
         if: always()
         uses: actions/upload-artifact@v4

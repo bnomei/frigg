@@ -1,3 +1,3 @@
 [alias]
 # Release alias: competitive frigg_p95<=1.5×rg is enforced under --release.
-futura-bench = "test -p frigg --test futura_bench --release -- --nocapture"
+futura-bench = "test -p frigg --features futura-bench --test futura_bench --release -- --nocapture"
