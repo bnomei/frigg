@@ -704,14 +704,12 @@ impl FriggMcpServer {
             crate::mcp::routing_stats::record_recovery_issued();
         }
         if !Self::should_return_full_response(response_mode) {
+            // Agent compact must not surface semantic readiness (disabled / unavailable /
+            // degraded / lexical-only). Full mode keeps warnings and channel health.
+            // Compact keeps metadata only when context_efficiency was explicitly requested.
             response.metadata = response.metadata.and_then(|mut metadata| {
-                let lexical_only_mode = metadata.lexical_only_mode;
-                let warning = metadata.warning.take();
                 let context_efficiency = metadata.context_efficiency.take();
-                if lexical_only_mode != Some(true)
-                    && warning.is_none()
-                    && context_efficiency.is_none()
-                {
+                if context_efficiency.is_none() {
                     return None;
                 }
                 Some(SearchHybridMetadata {
@@ -725,9 +723,9 @@ impl FriggMcpServer {
                     semantic_candidate_count: None,
                     semantic_hit_count: None,
                     semantic_match_count: None,
-                    lexical_only_mode,
+                    lexical_only_mode: None,
                     query_shape: None,
-                    warning,
+                    warning: None,
                     exact_pivot_assistance: None,
                     witness_demotion_applied: None,
                     diagnostics_count: 0,

@@ -1302,12 +1302,11 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .expect("compact search_hybrid should succeed")
         .0;
 
-    // Compact may retain thin lexical_only_mode disclosure when semantic is off.
-    if let Some(metadata) = response.metadata.as_ref() {
-        assert_eq!(metadata.lexical_only_mode, Some(true));
-        assert!(metadata.channels.is_empty());
-        assert!(metadata.utility.is_none());
-    }
+    // Compact must not surface semantic readiness (warning / lexical_only) to agents.
+    assert!(
+        response.metadata.is_none(),
+        "compact search_hybrid without context_efficiency should omit metadata when semantic is off"
+    );
     assert_eq!(
         response.ranking_note.as_deref(),
         Some("discovery_only; confirm with exact search")
@@ -1338,14 +1337,78 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .await
         .expect("compact search_hybrid with explicit false context efficiency should succeed")
         .0;
-    if let Some(metadata) = explicit_false.metadata.as_ref() {
-        assert_eq!(metadata.lexical_only_mode, Some(true));
-        assert!(metadata.context_efficiency.is_none());
-    }
+    assert!(
+        explicit_false.metadata.is_none(),
+        "compact search_hybrid should omit readiness metadata even with explicit false context_efficiency"
+    );
     assert_eq!(
         explicit_false.ranking_note.as_deref(),
         Some("discovery_only; confirm with exact search")
     );
+}
+
+#[tokio::test]
+async fn core_search_hybrid_compact_hides_semantic_readiness_while_full_keeps_it() {
+    let server = server_for_fixture().await;
+    let full = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello from fixture".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
+        }))
+        .await
+        .expect("full search_hybrid should succeed")
+        .0;
+    let full_metadata = full
+        .metadata
+        .as_ref()
+        .expect("full search_hybrid should expose metadata when semantic is off");
+    assert_eq!(full_metadata.lexical_only_mode, Some(true));
+    assert!(
+        full_metadata
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("semantic retrieval is disabled")),
+        "full mode should keep semantic readiness warning for operators"
+    );
+
+    let compact = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello from fixture".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: None,
+            include_context_efficiency: None,
+        }))
+        .await
+        .expect("compact search_hybrid should succeed")
+        .0;
+    assert!(
+        compact.metadata.is_none(),
+        "compact search_hybrid must omit readiness metadata so agents stay unaware of semantic warm-up/off"
+    );
+    assert_eq!(
+        compact.ranking_note.as_deref(),
+        Some("discovery_only; confirm with exact search")
+    );
+    assert!(
+        !compact.matches.is_empty() || full.matches.is_empty(),
+        "compact should still return the same hit presence as the corpus allows"
+    );
+    if !full.matches.is_empty() {
+        assert!(
+            !compact.matches.is_empty(),
+            "compact should still return matches when full does"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1561,6 +1624,14 @@ async fn core_search_hybrid_compact_opt_in_keeps_context_efficiency_metadata() {
     );
     assert_eq!(metadata.channels.len(), 0);
     assert!(metadata.stage_attribution.is_none());
+    assert!(
+        metadata.lexical_only_mode.is_none(),
+        "compact opt-in must not surface lexical_only_mode readiness"
+    );
+    assert!(
+        metadata.warning.is_none(),
+        "compact opt-in must not surface semantic readiness warnings"
+    );
     let response_value = serde_json::to_value(&response).expect("response should serialize");
     assert!(response_value.get("note").is_none());
 
@@ -1645,10 +1716,10 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
         .expect("compact search_hybrid should succeed for code-shaped query")
         .0;
 
-    if let Some(metadata) = compact.metadata.as_ref() {
-        assert_eq!(metadata.lexical_only_mode, Some(true));
-        assert!(metadata.channels.is_empty());
-    }
+    assert!(
+        compact.metadata.is_none(),
+        "compact search_hybrid must not surface lexical_only_mode or readiness warnings"
+    );
     assert_eq!(
         compact.ranking_note.as_deref(),
         Some("discovery_only; confirm with exact search")
