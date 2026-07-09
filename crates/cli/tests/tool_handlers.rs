@@ -271,7 +271,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             note: None,
 
             trust: frigg::mcp::types::NavigationEdgeTrust::Provisional,
-            trust_note: String::new(),
+            trust_note: frigg::mcp::types::OUTGOING_CALLS_TRUST_NOTE.to_owned(),
             recovery: RecoveryFields::default(),
         },
     );

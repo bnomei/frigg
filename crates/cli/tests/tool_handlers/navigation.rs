@@ -2019,6 +2019,16 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
     assert_eq!(outgoing.matches[0].relation, "calls");
     assert_eq!(outgoing.matches[0].precision.as_deref(), Some("precise"));
     assert_response_metadata_has_freshness(&outgoing.metadata, "outgoing_calls");
+    assert_eq!(
+        outgoing.trust,
+        frigg::mcp::types::NavigationEdgeTrust::Provisional,
+        "live outgoing_calls must keep wire trust=provisional"
+    );
+    assert!(
+        outgoing.trust_note.contains("provisional") && outgoing.trust_note.contains("read_file"),
+        "live outgoing_calls must keep always-on trust_note: {}",
+        outgoing.trust_note
+    );
 
     cleanup_workspace_root(&workspace_root);
 }

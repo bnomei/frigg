@@ -686,7 +686,7 @@ impl FriggMcpServer {
                             note,
 
                             trust: NavigationEdgeTrust::Provisional,
-                            trust_note: String::new(),
+                            trust_note: crate::mcp::types::OUTGOING_CALLS_TRUST_NOTE.to_owned(),
                             recovery: RecoveryFields::default(),
                         }));
                     }
@@ -791,7 +791,7 @@ impl FriggMcpServer {
                         note,
 
                         trust: NavigationEdgeTrust::Provisional,
-                        trust_note: String::new(),
+                        trust_note: crate::mcp::types::OUTGOING_CALLS_TRUST_NOTE.to_owned(),
                         recovery: RecoveryFields::default(),
                     }));
                 }
@@ -841,7 +841,7 @@ impl FriggMcpServer {
                         note,
 
                         trust: NavigationEdgeTrust::Provisional,
-                        trust_note: String::new(),
+                        trust_note: crate::mcp::types::OUTGOING_CALLS_TRUST_NOTE.to_owned(),
                         recovery: RecoveryFields::default(),
                     }));
                 }
@@ -964,7 +964,7 @@ impl FriggMcpServer {
                     note,
 
                     trust: NavigationEdgeTrust::Provisional,
-                    trust_note: String::new(),
+                    trust_note: crate::mcp::types::OUTGOING_CALLS_TRUST_NOTE.to_owned(),
                     recovery: RecoveryFields::default(),
                 }))
             })()

@@ -657,7 +657,7 @@ mod tests {
     use crate::mcp::types::{RecoveryFields, SuggestedNext};
 
     #[test]
-    fn outgoing_calls_trust_is_always_provisional_in_compact_json() {
+    fn with_provisional_honesty_forces_provisional_on_wire() {
         use super::{
             NavigationEdgeTrust, NavigationMode, OUTGOING_CALLS_TRUST_NOTE, OutgoingCallsResponse,
         };

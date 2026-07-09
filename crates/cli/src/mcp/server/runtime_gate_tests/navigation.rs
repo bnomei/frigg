@@ -907,8 +907,9 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             metadata,
             note,
 
-            trust: crate::mcp::types::NavigationEdgeTrust::Provisional,
-            trust_note: String::new(),
+            // Prove present forces provisional honesty even if a caller lied.
+            trust: crate::mcp::types::NavigationEdgeTrust::Verified,
+            trust_note: "bogus".to_owned(),
             recovery: RecoveryFields::default(),
         },
         None,

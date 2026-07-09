@@ -489,7 +489,7 @@ Trust order for review:
 2. `read_file` / `read_match` + defs/refs — proof  
 3. `search_structural` — awkward AST evidence (tier-3)  
 4. `incoming_calls` — call-flow hint  
-5. `outgoing_calls` — always `trust=provisional` / `trust_note` until body proof
+5. `outgoing_calls` — always `trust=provisional` + `trust_note` on the wire; confirm edges with body reads (does not upgrade wire trust to verified)
 
 Evidence packet shape (multi-claim answers) — every review/security finding needs path/line witnesses:
 
