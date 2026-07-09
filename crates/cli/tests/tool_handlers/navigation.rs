@@ -3197,7 +3197,10 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
     // Prefer real refs/callers when the fixture supports SCIP/heuristic resolution.
     if !response.references.is_empty() {
         assert!(
-            response.references.iter().any(|r| r.path.contains("lib.rs")),
+            response
+                .references
+                .iter()
+                .any(|r| r.path.contains("lib.rs")),
             "fixture references should point at lib.rs: {:?}",
             response.references
         );
@@ -3219,12 +3222,105 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         "impact_bundle should suggest tests pass + proof reads"
     );
     assert!(
-        response.suggested_next.iter().any(|step| step.tool == "read_match"
-            || step.tool == "search_text"
-            || step.tool == "read_file"),
+        response
+            .suggested_next
+            .iter()
+            .any(|step| step.tool == "read_match"
+                || step.tool == "search_text"
+                || step.tool == "read_file"),
         "suggested_next should include proof/tests guidance: {:?}",
         response.suggested_next
     );
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_anchors_followups_to_selected_symbol_location() {
+    let workspace_root = temp_workspace_root("impact-bundle-anchor-selected-symbol");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\npub fn caller() { target(); }\n",
+    )
+    .expect("failed to seed primary fixture source");
+    fs::write(
+        src_root.join("other.rs"),
+        "pub fn target() {}\npub fn other_caller() { target(); }\n",
+    )
+    .expect("failed to seed duplicate fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "impact_bundle_duplicate_target.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#src/lib.rs::target", "range": [0, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#src/lib.rs::target", "range": [1, 18, 24], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#src/lib.rs::target",
+                  "display_name": "target",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            },
+            {
+              "relative_path": "src/other.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#src/other.rs::target", "range": [0, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#src/other.rs::target", "range": [1, 24, 30], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#src/other.rs::target",
+                  "display_name": "target",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            symbol: "target".to_owned(),
+            path_class: Some(SearchSymbolPathClass::Runtime),
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("impact_bundle should compose duplicate-name target")
+        .0;
+
+    let selected_path = response
+        .symbols
+        .first()
+        .expect("impact_bundle should include selected symbol")
+        .path
+        .clone();
+    assert_eq!(selected_path, "src/lib.rs");
+    assert!(
+        !response.references.is_empty(),
+        "selected target should resolve references instead of disambiguating: {response:?}"
+    );
+    assert!(
+        response
+            .references
+            .iter()
+            .all(|reference| reference.path == selected_path),
+        "references should stay anchored to selected symbol path {selected_path}: {:?}",
+        response.references
+    );
+
     cleanup_workspace_root(&workspace_root);
 }
 
@@ -3241,7 +3337,10 @@ async fn impact_bundle_missing_symbol_returns_recovery() {
         .0;
 
     assert!(response.symbols.is_empty());
-    assert_eq!(response.recovery.error_code.as_deref(), Some("MISSING_SYMBOL"));
+    assert_eq!(
+        response.recovery.error_code.as_deref(),
+        Some("MISSING_SYMBOL")
+    );
     assert!(!response.suggested_next.is_empty());
 }
 

@@ -21,17 +21,18 @@ impl FriggMcpServer {
                 error_code: Some("MISSING_SYMBOL".to_owned()),
                 message: Some("impact_bundle requires a non-empty symbol.".to_owned()),
                 correction_hint: Some(
-                    "Pass symbol=<name> (runtime path_class is the default)."
-                        .to_owned(),
+                    "Pass symbol=<name> (runtime path_class is the default).".to_owned(),
                 ),
                 related_tools: vec![
                     "search_symbol".to_owned(),
                     "find_references".to_owned(),
                     "incoming_calls".to_owned(),
                 ],
-                suggested_next: vec![SuggestedNext::tool("search_symbol")
-                    .with_path_class("runtime")
-                    .with_reason("resolve a symbol name before impact_bundle")],
+                suggested_next: vec![
+                    SuggestedNext::tool("search_symbol")
+                        .with_path_class("runtime")
+                        .with_reason("resolve a symbol name before impact_bundle"),
+                ],
                 zero_hit_reason: Some(ZeroHitReason::QueryMiss),
                 scope: None,
                 index: None,
@@ -56,9 +57,7 @@ impl FriggMcpServer {
             }));
         }
 
-        let path_class = params
-            .path_class
-            .unwrap_or(SearchSymbolPathClass::Runtime);
+        let path_class = params.path_class.unwrap_or(SearchSymbolPathClass::Runtime);
         let path_class_label = match path_class {
             SearchSymbolPathClass::Runtime => "runtime",
             SearchSymbolPathClass::Project => "project",
@@ -146,13 +145,23 @@ impl FriggMcpServer {
             );
         }
 
+        let selected_symbol = symbols_response
+            .matches
+            .first()
+            .expect("non-empty symbols response should have a first match")
+            .clone();
+        let selected_repository_id = Some(selected_symbol.repository_id.clone());
+        let selected_path = Some(selected_symbol.path.clone());
+        let selected_line = Some(selected_symbol.line);
+        let selected_column = selected_symbol.column;
+
         let references_response = self
             .find_references_impl(FindReferencesParams {
-                symbol: Some(symbol.clone()),
-                repository_id: params.repository_id.clone(),
-                path: None,
-                line: None,
-                column: None,
+                symbol: None,
+                repository_id: selected_repository_id.clone(),
+                path: selected_path.clone(),
+                line: selected_line,
+                column: selected_column,
                 include_definition: Some(false),
                 include_follow_up_structural: None,
                 limit: None,
@@ -163,11 +172,11 @@ impl FriggMcpServer {
 
         let incoming_response = self
             .incoming_calls_impl(IncomingCallsParams {
-                symbol: Some(symbol.clone()),
-                repository_id: params.repository_id.clone(),
-                path: None,
-                line: None,
-                column: None,
+                symbol: None,
+                repository_id: selected_repository_id.clone(),
+                path: selected_path.clone(),
+                line: selected_line,
+                column: selected_column,
                 include_follow_up_structural: None,
                 limit: None,
                 response_mode: params.response_mode,
@@ -175,11 +184,7 @@ impl FriggMcpServer {
             .await?
             .0;
 
-        let primary_kind = symbols_response
-            .matches
-            .first()
-            .map(|row| row.kind.to_ascii_lowercase())
-            .unwrap_or_default();
+        let primary_kind = selected_symbol.kind.to_ascii_lowercase();
         let kind_wants_impls = primary_kind.contains("trait")
             || primary_kind.contains("interface")
             || primary_kind == "protocol";
@@ -190,11 +195,11 @@ impl FriggMcpServer {
             if include_implementations {
                 let impl_response = self
                     .find_implementations_impl(FindImplementationsParams {
-                        symbol: Some(symbol.clone()),
-                        repository_id: params.repository_id.clone(),
-                        path: None,
-                        line: None,
-                        column: None,
+                        symbol: None,
+                        repository_id: selected_repository_id.clone(),
+                        path: selected_path.clone(),
+                        line: selected_line,
+                        column: selected_column,
                         include_follow_up_structural: None,
                         limit: None,
                         response_mode: params.response_mode,
@@ -258,6 +263,10 @@ impl FriggMcpServer {
                     "path_class": response.path_class,
                     "repository_id": execution_context.repository_hint,
                     "include_implementations": include_implementations,
+                    "selected_repository_id": selected_symbol.repository_id,
+                    "selected_path": selected_symbol.path,
+                    "selected_line": selected_symbol.line,
+                    "selected_column": selected_symbol.column,
                 }),
                 json!({
                     "symbols_count": response.symbols.len(),
