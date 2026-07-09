@@ -151,6 +151,23 @@ impl FriggMcpServer {
             .retain(|handle| retained_handles.contains(handle));
     }
 
+    /// Drop one session handle entry (used when a composer discards nested tool handles).
+    pub(super) fn drop_session_result_handle(&self, result_handle: &str) {
+        if result_handle.is_empty() {
+            return;
+        }
+        let mut cache = self
+            .session_state
+            .inner
+            .result_handles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.entries.remove(result_handle);
+        cache
+            .insertion_order
+            .retain(|handle| handle != result_handle);
+    }
+
     /// Maps tool names to short `match_id` scope prefixes (`search:m1`, `nav:m1`, …).
     pub(super) fn result_handle_scope_for_tool(tool_name: &str) -> &'static str {
         match tool_name {
@@ -1543,6 +1560,39 @@ mod tests {
         assert!(!defs.recovery.is_empty());
         let defs_value = serde_json::to_value(&defs).expect("serialize defs");
         assert!(defs_value.get("zero_hit_reason").is_some());
+    }
+
+    #[test]
+    fn drop_session_result_handle_removes_entry() {
+        let server = presentation_test_server();
+        let mut matches = vec![crate::domain::model::TextMatch {
+            match_id: None,
+            repository_id: "repo".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            line: 1,
+            column: 1,
+            excerpt: "fn x() {}".to_owned(),
+            witness_score_hint_millis: None,
+            witness_provenance_ids: None,
+        }];
+        let handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut matches)
+            .expect("handle should be stored");
+        assert!(matches!(
+            server.session_result_handle_lookup(
+                &handle,
+                matches[0].match_id.as_deref().expect("match id")
+            ),
+            SessionResultHandleLookup::Found(_)
+        ));
+        server.drop_session_result_handle(&handle);
+        assert!(matches!(
+            server.session_result_handle_lookup(
+                &handle,
+                matches[0].match_id.as_deref().expect("match id")
+            ),
+            SessionResultHandleLookup::StaleHandle
+        ));
     }
 
     #[test]

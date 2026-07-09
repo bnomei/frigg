@@ -297,6 +297,11 @@ impl FriggMcpServer {
                 };
                 let result = self.search_text_impl(text_params).await?;
                 let body = result.0;
+                // Nested full search tools mint session handles the batch response does not
+                // return; drop them so they cannot thrash the session handle budget.
+                if let Some(handle) = body.result_handle.as_deref() {
+                    self.drop_session_result_handle(handle);
+                }
                 let hits = body.total_matches;
                 let rows = body
                     .matches
@@ -341,6 +346,9 @@ impl FriggMcpServer {
                 };
                 let result = self.search_symbol_impl(symbol_params).await?;
                 let body = result.0;
+                if let Some(handle) = body.result_handle.as_deref() {
+                    self.drop_session_result_handle(handle);
+                }
                 let hits = body.matches.len();
                 let rows = body
                     .matches
@@ -385,6 +393,9 @@ impl FriggMcpServer {
                 };
                 let result = self.search_hybrid_impl(hybrid_params).await?;
                 let body = result.0;
+                if let Some(handle) = body.result_handle.as_deref() {
+                    self.drop_session_result_handle(handle);
+                }
                 let hits = body.matches.len();
                 let rows = body
                     .matches
