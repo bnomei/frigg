@@ -66,7 +66,10 @@ Common outputs:
 - `matches`
 - `result_handle`
 - `mode`
+- `ambiguous_location` / `location_warning` when path+line was used **without** `symbol` (do not edit from those defs until re-resolved with `symbol=`)
 - `metadata` and `note` only when `response_mode=full`
+
+**Path+line trap:** Prefer `search_symbol` → `go_to_definition(symbol=…)`. On dense lines, path+line alone can jump to the wrong identity. When `ambiguous_location=true` (or `location_warning` is set), retry with `symbol` (and `column` from the symbol hit when present). `column: 1` means unknown — not a safe dense-line disambiguator.
 
 Inspect per-match precision hints when present:
 - `precision`
@@ -74,11 +77,11 @@ Inspect per-match precision hints when present:
 - `relation`
 - `follow_up_structural`
 
-If a location-based jump underfills, try:
-- `search_symbol`
+If a location-based jump underfills or is flagged ambiguous, try:
+- `search_symbol` then `go_to_definition(symbol=…)`
 - `document_symbols`
 - `find_references`
-- a tighter source location on the actual token
+- a tighter source location on the actual token (path+line+column **and** symbol when known)
 
 For `find_implementations`, be more cautious on generic traits or blanket impl patterns. `heuristic_no_precise` can still be useful, but it is weaker evidence than a concrete precise implementation edge.
 

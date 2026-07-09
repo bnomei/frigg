@@ -161,7 +161,13 @@ impl FriggMcpServer {
         }
         let path_class = Self::navigation_path_class(&path);
         let (container, signature) = Self::symbol_context_for_index(corpus, symbol_index);
-        let column = (symbol.span.start_column > 0).then_some(symbol.span.start_column);
+        // Always ship a 1-based column for navigation handoff (EXP-nav-path-line-trap).
+        // Unknown/zero spans use column 1 so agents can pass column without inventing path-only jumps.
+        let column = Some(if symbol.span.start_column > 0 {
+            symbol.span.start_column
+        } else {
+            1
+        });
         let excerpt = signature
             .clone()
             .or_else(|| Some(format!("{} {}", symbol.kind.as_str(), symbol.name)));

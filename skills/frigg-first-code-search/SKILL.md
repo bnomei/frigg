@@ -93,6 +93,7 @@ BAD: Frigg search + parallel shell grep on indexed source
 BAD: unscoped zero-hit conclusion
 BAD: document_symbols for a known name
 BAD: go_to_definition(path, line) without symbol on dense lines
+BAD: ignore ambiguous_location=true / location_warning and edit from path+line defs
 BAD: read_match with a match_id from another result_handle
 BAD: repo-wide shell rg to "confirm" an explainable Frigg zero
 BAD: throwaway shell rg on indexed src when Frigg is attached
@@ -247,9 +248,10 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 | **Product support** | Runtime-first defaults, `column`/`excerpt`, empty-`{}` rejection |
 
 ```text
-1. search_symbol(name, path_class=runtime)
-2. go_to_definition(symbol=name)   # always pass symbol
-3. read_match OR read_file
+1. search_symbol(name, path_class=runtime)  # prefer symbol + column from hit when present
+2. go_to_definition(symbol=name)            # always pass symbol; never path+line alone
+3. If path+line only was used: check ambiguous_location / location_warning before editing
+4. read_match OR read_file
 ```
 
 ### Impact
@@ -608,7 +610,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 | References / callers | `find_references`, `incoming_calls` |
 | Callees | `outgoing_calls` (confirm with read) |
 | Trait / interface impls | `find_implementations` |
-| Definition | `go_to_definition(symbol=...)` |
+| Definition | `go_to_definition(symbol=...)` (not path+line alone; trust `ambiguous_location`) |
 | AST shape | `inspect_syntax_tree` + `search_structural` (tier-3) |
 | In-file zoom (extended) | `explore` — not a substitute for `search_text` |
 | Repo health / adoption | `workspace` gate |

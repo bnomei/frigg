@@ -145,7 +145,13 @@ pub struct GoToDefinitionResponse {
     /// Soft warning when path+line without `symbol` looks dense/ambiguous.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location_warning: Option<String>,
-    /// Flattened recovery fields on empty definition results.
+    /// Machine-obvious flag: path+line without `symbol` may have resolved the wrong target.
+    ///
+    /// Always check this (or `location_warning`) before trusting definition matches for edits.
+    /// Prefer retrying with `symbol=<name>` from `search_symbol` (and `column` when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambiguous_location: Option<bool>,
+    /// Flattened recovery fields on empty definition results (and soft re-plan on ambiguous hits).
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -621,6 +627,51 @@ mod tests {
         EvidencePacket, EvidencePacketClaim, ImpactBundleResponse, NavigationMode,
     };
     use crate::mcp::types::{RecoveryFields, SuggestedNext};
+
+    #[test]
+    fn go_to_definition_ambiguous_location_serializes_when_true() {
+        use super::GoToDefinitionResponse;
+        use crate::mcp::types::{NavigationMode, RecoveryFields};
+        use serde_json::json;
+
+        let response = GoToDefinitionResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            handle_scope: None,
+            handle_expires: None,
+            mode: NavigationMode::HeuristicNoPrecise,
+            target_selection: None,
+            metadata: None,
+            note: None,
+            location_warning: Some("dense line".to_owned()),
+            ambiguous_location: Some(true),
+            recovery: RecoveryFields {
+                correction_hint: Some("retry with symbol".to_owned()),
+                ..RecoveryFields::default()
+            },
+        };
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(value["ambiguous_location"], json!(true));
+        assert_eq!(value["location_warning"], "dense line");
+        assert_eq!(value["correction_hint"], "retry with symbol");
+
+        let quiet = GoToDefinitionResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            handle_scope: None,
+            handle_expires: None,
+            mode: NavigationMode::Precise,
+            target_selection: None,
+            metadata: None,
+            note: None,
+            location_warning: None,
+            ambiguous_location: None,
+            recovery: RecoveryFields::default(),
+        };
+        let quiet_value = serde_json::to_value(&quiet).expect("serialize quiet");
+        assert!(quiet_value.get("ambiguous_location").is_none());
+        assert!(quiet_value.get("location_warning").is_none());
+    }
 
     #[test]
     fn impact_bundle_response_single_suggested_next_channel() {

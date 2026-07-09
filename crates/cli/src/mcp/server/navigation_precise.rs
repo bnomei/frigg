@@ -150,6 +150,7 @@ impl FriggMcpServer {
                     metadata,
                     note,
                     location_warning: None,
+                    ambiguous_location: None,
                     recovery: RecoveryFields::default(),
                 }),
                 corpus.repository_id.clone(),

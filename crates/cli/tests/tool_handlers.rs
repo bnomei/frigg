@@ -215,6 +215,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             metadata: None,
             note: None,
             location_warning: None,
+            ambiguous_location: None,
             recovery: RecoveryFields::default(),
         },
     );

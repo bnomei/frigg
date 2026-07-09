@@ -3119,6 +3119,16 @@ async fn navigation_go_to_definition_path_line_without_symbol_sets_location_warn
         response.location_warning.is_some(),
         "path+line without symbol should surface location_warning: {response:?}"
     );
+    assert_eq!(
+        response.ambiguous_location,
+        Some(true),
+        "path+line without symbol must set ambiguous_location for agent branching: {response:?}"
+    );
+    assert!(
+        response.recovery.correction_hint.is_some()
+            || !response.recovery.suggested_next.is_empty(),
+        "path+line trap should surface recovery replan even with matches: {response:?}"
+    );
     cleanup_workspace_root(&workspace_root);
 }
 
