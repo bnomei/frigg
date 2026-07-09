@@ -608,4 +608,5 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/navigation-and-structure.md](references/navigation-and-structure.md) — defs, refs, calls, outline, structural
 - [references/workflows.md](references/workflows.md) — extended narrative loops (aligned with scenario cards above)
 - [references/workspace-and-runtime.md](references/workspace-and-runtime.md) — `workspace`, adoption, runtime
-- [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list`
+- [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list` / `runtime.tools_exposed`
+- Live machine surface (not inventory freezes): MCP `frigg://policy/tool-surface.json`

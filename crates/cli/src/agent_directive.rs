@@ -195,6 +195,63 @@ mod tests {
         );
     }
 
+    /// Live-surface SSOT: scenario tools the skill routes to must stay on the public MCP set.
+    /// Inventory freezes and non-public `#[tool]` handlers are not a second catalog.
+    #[test]
+    fn skill_scenario_tools_are_subset_of_public_tool_names() {
+        use crate::mcp::types::PUBLIC_TOOL_NAMES;
+
+        let Some(skill) = workspace_file("skills/frigg-first-code-search/SKILL.md") else {
+            return;
+        };
+
+        // Scenario tools the skill actually routes to (must stay ⊆ public SSOT).
+        // Not every PUBLIC_TOOL_NAMES entry is required to appear in the skill prose.
+        const SCENARIO_TOOLS: &[&str] = &[
+            "workspace",
+            "list_files",
+            "read_file",
+            "read_match",
+            "search_text",
+            "search_hybrid",
+            "search_symbol",
+            "search_batch",
+            "find_references",
+            "go_to_definition",
+            "find_implementations",
+            "incoming_calls",
+            "outgoing_calls",
+            "document_symbols",
+            "inspect_syntax_tree",
+            "search_structural",
+            "impact_bundle",
+            "explore",
+        ];
+
+        for tool_name in SCENARIO_TOOLS {
+            assert!(
+                skill.contains(tool_name),
+                "bundled skill should reference scenario tool `{tool_name}`"
+            );
+            assert!(
+                PUBLIC_TOOL_NAMES.contains(tool_name),
+                "skill scenario tool `{tool_name}` must be listed in PUBLIC_TOOL_NAMES (live SSOT)"
+            );
+        }
+
+        for phantom in [
+            "workspace_index",
+            "workspace_attach",
+            "workspace_reindex",
+            "deep_search",
+        ] {
+            assert!(
+                !PUBLIC_TOOL_NAMES.contains(&phantom),
+                "phantom `{phantom}` must stay off PUBLIC_TOOL_NAMES"
+            );
+        }
+    }
+
     #[test]
     fn managed_block_version_matches_directive_version_constant() {
         assert!(MANAGED_BLOCK_START.contains(FRIGG_DIRECTIVE_VERSION));

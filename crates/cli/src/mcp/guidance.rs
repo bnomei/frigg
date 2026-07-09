@@ -233,6 +233,7 @@ fn support_matrix_advanced_consumers() -> Vec<String> {
 
 fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
     let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
+    let active = manifest_for_tool_surface_profile(active_profile);
     let core_guidance = if cfg!(feature = "playbook") {
         "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore or playbook tools."
     } else {
@@ -240,11 +241,25 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
     };
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.tool_surface.v1",
+        // Live SSOT for hosts/operators: generated from code manifests, not inventory freezes.
+        "live": true,
+        "source_of_truth": {
+            "public_tool_names": "crates/cli/src/mcp/types.rs::PUBLIC_TOOL_NAMES",
+            "profile_manifest": "crates/cli/src/mcp/tool_surface.rs::manifest_for_tool_surface_profile",
+            "process_registered": "workspace.runtime.tools_exposed or MCP tools/list"
+        },
+        "not_authoritative": [
+            "Historical inventory freezes (for example docs/futura-phase0-inventory.md) are forensic only",
+            "Host schema caches and non-public #[tool] handlers are not the public surface"
+        ],
         "default_profile": ToolSurfaceProfile::Extended.as_str(),
         "active_profile": active_profile.as_str(),
         "core_tools": core.tool_names,
         "extended_only_tools": extended_only_tool_names(),
+        // Tools registered for the active profile (same set tools_exposed reports at runtime).
+        "active_tools": active.tool_names,
         "guidance": [
+            "This resource is the machine-readable live tool surface. Prefer it (or tools/list / workspace.runtime.tools_exposed) over Phase 0 / systems inventory freezes.",
             "Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads.",
             "Use workspace for compact workspace status or to adopt a target path/repository; repo-aware tools auto-adopt sensible defaults when possible.",
             "Before shell rg/grep/find/fd/cat/sed for code exploration, use list_files, search_text, search_symbol, search_batch, search_hybrid, read_file, read_match, impact_bundle, or navigation tools.",
@@ -622,6 +637,17 @@ mod tests {
             parsed["default_profile"].as_str(),
             Some(ToolSurfaceProfile::Extended.as_str())
         );
+        assert_eq!(parsed["live"], json!(true));
+        assert_eq!(
+            parsed["source_of_truth"]["public_tool_names"].as_str(),
+            Some("crates/cli/src/mcp/types.rs::PUBLIC_TOOL_NAMES")
+        );
+        assert!(
+            parsed["not_authoritative"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty()),
+            "tool-surface.json should mark inventory freezes as non-authoritative"
+        );
         assert_eq!(
             parsed["core_tools"].as_array(),
             Some(
@@ -636,6 +662,47 @@ mod tests {
         assert_eq!(
             parsed["extended_only_tools"].as_array(),
             Some(&expected_extended_only)
+        );
+        assert_eq!(
+            parsed["active_tools"].as_array(),
+            Some(
+                &extended
+                    .tool_names
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect::<Vec<_>>()
+            ),
+            "active_tools must match the active profile manifest (live SSOT)"
+        );
+    }
+
+    #[test]
+    fn tool_surface_active_tools_follow_core_profile() {
+        let json = resource_text(TOOL_SURFACE_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("tool surface policy JSON should parse");
+        let core =
+            crate::mcp::tool_surface::manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
+        assert_eq!(parsed["active_profile"].as_str(), Some("core"));
+        assert_eq!(
+            parsed["active_tools"].as_array(),
+            Some(
+                &core
+                    .tool_names
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert!(
+            !parsed["active_tools"]
+                .as_array()
+                .expect("active_tools")
+                .iter()
+                .any(|entry| entry == "explore"),
+            "core active_tools must omit extended-only explore"
         );
     }
 

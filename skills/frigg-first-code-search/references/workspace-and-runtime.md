@@ -33,7 +33,12 @@ Important `workspace` outputs:
 - `gate_hint` — optional plain-language recovery when the action is non-obvious (especially `reindex`)
 - `working_tree_dirty`, `changed_paths_since_snapshot`, `watch_active`, `fresh_enough_for`
 
-**Tool surface honesty:** `runtime.tools_exposed` is authoritative for which Frigg tools this server registered. Prefer it (or live `tools/list`) over host schema caches, inventory freezes, or non-public `#[tool]` handlers in source. Lifecycle tools such as `workspace_index` / `workspace_attach` are not public and never appear here.
+**Tool surface honesty / live SSOT:**
+- Process: `runtime.tools_exposed` or live `tools/list` for **this** server
+- Machine catalog: MCP resource `frigg://policy/tool-surface.json` (`live: true`, `active_tools`, core vs extended) — generated from `PUBLIC_TOOL_NAMES` + profile manifests
+- Code: `PUBLIC_TOOL_NAMES` / `manifest_for_tool_surface_profile` in the Frigg crate
+
+**Not authoritative:** Phase 0 / systems inventory freezes, host schema caches, non-public `#[tool]` handlers. Lifecycle tools such as `workspace_index` / `workspace_attach` are not public and never appear in `tools_exposed` / `active_tools`.
 
 **`recommended_action=reindex` is not an MCP tool.** Public Frigg MCP has no reindex/write tool. It means the index substrate is not Ready: run CLI `frigg index` (or operator lifecycle / attach-side ensure). Prefer reading `gate_hint` when present; do not invent `workspace_reindex` or shell-grep the repo as a trust patch.
 
