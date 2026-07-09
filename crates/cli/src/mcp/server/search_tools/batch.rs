@@ -458,16 +458,32 @@ fn hybrid_score(blended: f32) -> f32 {
     5.0 + blended.max(0.0)
 }
 
+/// Echo only filters actually applied by the probe kind (not raw request fields).
 fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
     let mut scope = ZeroHitScope::default();
-    if let Some(path_regex) = probe.path_regex.as_ref() {
-        scope = scope.with_path_regex(path_regex.clone());
-    }
-    if let Some(glob) = probe.glob.as_ref() {
-        scope = scope.with_glob(glob.clone());
-    }
-    if let Some(path_class) = probe.path_class {
-        scope = scope.with_path_class(path_class.as_str());
+    match probe.kind {
+        SearchBatchProbeKind::Text => {
+            // Text maps path_regex + glob; path_class is not a SearchTextParams field.
+            if let Some(path_regex) = probe.path_regex.as_ref() {
+                scope = scope.with_path_regex(path_regex.clone());
+            }
+            if let Some(glob) = probe.glob.as_ref() {
+                scope = scope.with_glob(glob.clone());
+            }
+        }
+        SearchBatchProbeKind::Symbol => {
+            // Symbol maps path_regex + path_class (default runtime); glob is unused.
+            if let Some(path_regex) = probe.path_regex.as_ref() {
+                scope = scope.with_path_regex(path_regex.clone());
+            }
+            let path_class = probe
+                .path_class
+                .unwrap_or(SearchSymbolPathClass::Runtime);
+            scope = scope.with_path_class(path_class.as_str());
+        }
+        SearchBatchProbeKind::Hybrid => {
+            // Hybrid has no path_regex/glob/path_class params; only repository scope applies.
+        }
     }
     if let Some(repository_id) = probe.repository_id.as_ref() {
         scope = scope.with_repository_id(repository_id.clone());
@@ -494,6 +510,58 @@ mod tests {
     fn kind_rank_prefers_symbol() {
         assert!(kind_rank(SearchBatchProbeKind::Symbol) < kind_rank(SearchBatchProbeKind::Text));
         assert!(kind_rank(SearchBatchProbeKind::Text) < kind_rank(SearchBatchProbeKind::Hybrid));
+    }
+
+    #[test]
+    fn probe_scope_echoes_only_applied_filters_per_kind() {
+        let hybrid = SearchBatchProbe {
+            id: "h".to_owned(),
+            kind: SearchBatchProbeKind::Hybrid,
+            query: "foo".to_owned(),
+            path_regex: Some("^src/".to_owned()),
+            glob: Some("**/*.rs".to_owned()),
+            path_class: Some(SearchSymbolPathClass::Runtime),
+            repository_id: Some("repo-1".to_owned()),
+            pattern_type: None,
+        };
+        let hybrid_scope = probe_scope(&hybrid).expect("repo scope");
+        assert_eq!(hybrid_scope.repository_id.as_deref(), Some("repo-1"));
+        assert!(hybrid_scope.path_regex.is_none());
+        assert!(hybrid_scope.glob.is_none());
+        assert!(hybrid_scope.path_class.is_none());
+
+        let text = SearchBatchProbe {
+            id: "t".to_owned(),
+            kind: SearchBatchProbeKind::Text,
+            query: "foo".to_owned(),
+            path_regex: Some("^src/".to_owned()),
+            glob: Some("**/*.rs".to_owned()),
+            path_class: Some(SearchSymbolPathClass::Support),
+            repository_id: None,
+            pattern_type: None,
+        };
+        let text_scope = probe_scope(&text).expect("text filters");
+        assert_eq!(text_scope.path_regex.as_deref(), Some("^src/"));
+        assert_eq!(text_scope.glob.as_deref(), Some("**/*.rs"));
+        assert!(
+            text_scope.path_class.is_none(),
+            "text probes do not apply path_class"
+        );
+
+        let symbol = SearchBatchProbe {
+            id: "s".to_owned(),
+            kind: SearchBatchProbeKind::Symbol,
+            query: "Foo".to_owned(),
+            path_regex: Some("^src/".to_owned()),
+            glob: Some("**/*.rs".to_owned()),
+            path_class: None,
+            repository_id: None,
+            pattern_type: None,
+        };
+        let symbol_scope = probe_scope(&symbol).expect("symbol filters");
+        assert_eq!(symbol_scope.path_regex.as_deref(), Some("^src/"));
+        assert!(symbol_scope.glob.is_none());
+        assert_eq!(symbol_scope.path_class.as_deref(), Some("runtime"));
     }
 
     #[test]
