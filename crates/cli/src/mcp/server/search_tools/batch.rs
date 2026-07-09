@@ -175,27 +175,14 @@ impl FriggMcpServer {
 
         let all_zero = response.probe_summary.iter().all(|summary| summary.hits == 0);
         if all_zero {
-            let probes: Vec<&str> = params
-                .probes
-                .iter()
-                .map(|probe| probe.query.as_str())
-                .collect();
-            response.recovery = RecoveryFields::multi_hypothesis(&probes);
-            response.recovery.error_code = Some("BATCH_ALL_ZERO".to_owned());
-            response.recovery.message = Some(
-                "All search_batch probes returned zero hits; inspect probe_summary for per-probe diagnostics."
-                    .to_owned(),
-            );
-            let mut batch_next = response
+            let strongest_reason = strongest_batch_zero_reason(&response.probe_summary);
+            let batch_next = response
                 .probe_summary
                 .iter()
                 .flat_map(|summary| summary.suggested_next.iter().cloned())
                 .take(6)
                 .collect::<Vec<_>>();
-            if batch_next.is_empty() {
-                batch_next = response.recovery.suggested_next.clone();
-            }
-            response.recovery.suggested_next = batch_next;
+            response.recovery = RecoveryFields::batch_all_zero(strongest_reason, batch_next);
         } else if let Some(top) = response.matches.first() {
             response.recovery.suggested_next = vec![
                 SuggestedNext::tool("read_match")
@@ -470,6 +457,35 @@ fn hybrid_score(blended: f32) -> f32 {
 }
 
 /// Echo only filters actually applied by the probe kind (not raw request fields).
+fn strongest_batch_zero_reason(
+    summaries: &[SearchBatchProbeSummary],
+) -> Option<ZeroHitReason> {
+    // Prefer actionable structural reasons over generic query miss.
+    const PRIORITY: &[ZeroHitReason] = &[
+        ZeroHitReason::IndexStalePossible,
+        ZeroHitReason::NoIndexCoverage,
+        ZeroHitReason::ScopeExcludedAllCandidates,
+        ZeroHitReason::QueryLooksLikeRegex,
+        ZeroHitReason::WrongRepositoryPossible,
+        ZeroHitReason::PathClassNotIndexed,
+        ZeroHitReason::PreciseGraphUnavailable,
+        ZeroHitReason::IndexedSearchComplete,
+        ZeroHitReason::QueryMiss,
+        ZeroHitReason::ToolUnavailable,
+    ];
+    for reason in PRIORITY {
+        if summaries
+            .iter()
+            .any(|summary| summary.zero_hit_reason == Some(*reason))
+        {
+            return Some(*reason);
+        }
+    }
+    summaries
+        .iter()
+        .find_map(|summary| summary.zero_hit_reason)
+}
+
 fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
     let mut scope = ZeroHitScope::default();
     match probe.kind {
@@ -521,6 +537,54 @@ mod tests {
     fn kind_rank_prefers_symbol() {
         assert!(kind_rank(SearchBatchProbeKind::Symbol) < kind_rank(SearchBatchProbeKind::Text));
         assert!(kind_rank(SearchBatchProbeKind::Text) < kind_rank(SearchBatchProbeKind::Hybrid));
+    }
+
+    #[test]
+    fn strongest_batch_zero_reason_prefers_actionable_codes() {
+        let summaries = vec![
+            SearchBatchProbeSummary {
+                id: "a".to_owned(),
+                kind: SearchBatchProbeKind::Text,
+                hits: 0,
+                zero_hit_reason: Some(ZeroHitReason::QueryMiss),
+                correction_hint: None,
+                suggested_next: Vec::new(),
+                scope: None,
+            },
+            SearchBatchProbeSummary {
+                id: "b".to_owned(),
+                kind: SearchBatchProbeKind::Text,
+                hits: 0,
+                zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
+                correction_hint: None,
+                suggested_next: Vec::new(),
+                scope: None,
+            },
+        ];
+        assert_eq!(
+            strongest_batch_zero_reason(&summaries),
+            Some(ZeroHitReason::ScopeExcludedAllCandidates)
+        );
+    }
+
+    #[test]
+    fn batch_all_zero_recovery_is_not_multi_hypothesis() {
+        let recovery = RecoveryFields::batch_all_zero(
+            Some(ZeroHitReason::ScopeExcludedAllCandidates),
+            Vec::new(),
+        );
+        assert_eq!(recovery.error_code.as_deref(), Some("BATCH_ALL_ZERO"));
+        assert_eq!(
+            recovery.zero_hit_reason,
+            Some(ZeroHitReason::ScopeExcludedAllCandidates)
+        );
+        assert!(
+            recovery
+                .correction_hint
+                .as_ref()
+                .is_some_and(|hint| !hint.contains("Prefer search_batch")),
+            "post-batch recovery must not recommend re-entering multi_hypothesis routing"
+        );
     }
 
     #[test]

@@ -871,6 +871,44 @@ impl RecoveryFields {
         }
     }
 
+    /// All `search_batch` probes returned zero hits after the batch already ran.
+    pub fn batch_all_zero(
+        strongest_reason: Option<ZeroHitReason>,
+        suggested_next: Vec<SuggestedNext>,
+    ) -> Self {
+        let zero_hit_reason = strongest_reason.unwrap_or(ZeroHitReason::QueryMiss);
+        let suggested_next = if suggested_next.is_empty() {
+            vec![
+                SuggestedNext::tool("workspace")
+                    .with_reason("confirm adoption, dirty paths, and index freshness"),
+                SuggestedNext::tool("search_text")
+                    .with_reason("retry one exact probe with broader scope after reading probe_summary"),
+            ]
+        } else {
+            suggested_next
+        };
+        Self {
+            error_code: Some("BATCH_ALL_ZERO".to_owned()),
+            message: Some(
+                "All search_batch probes returned zero hits; inspect probe_summary for per-probe diagnostics."
+                    .to_owned(),
+            ),
+            correction_hint: Some(
+                "Inspect probe_summary zero_hit_reason/scope; broaden filters, fix the query, or refresh the index. Do not re-issue the same multi-hypothesis batch unchanged."
+                    .to_owned(),
+            ),
+            related_tools: vec![
+                "search_text".to_owned(),
+                "search_symbol".to_owned(),
+                "workspace".to_owned(),
+            ],
+            suggested_next,
+            zero_hit_reason: Some(zero_hit_reason),
+            scope: None,
+            index: None,
+        }
+    }
+
     /// After a symbol hit, impact tools are the natural next step.
     pub fn impact_after_symbol(symbol: &str) -> Self {
         let symbol = symbol.trim();
