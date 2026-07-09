@@ -478,6 +478,15 @@ pub struct ImpactBundleParams {
 }
 
 /// Composed impact response: symbol hits + references + callers (+ optional impls).
+///
+/// **One next-step channel:** follow-ups live only in flattened
+/// [`RecoveryFields::suggested_next`] (same pattern as `search_batch`). There is no
+/// second top-level `suggested_next` field — dual channels caused serde ambiguity and
+/// agents reading full mode for “more next steps” found nothing extra.
+///
+/// Compact (default) keeps: composed match arrays, handles, modes, and recovery/next.
+/// Full `response_mode` is forwarded to child search/nav calls for diagnostics only;
+/// it does not add a second recovery channel on the bundle itself.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleResponse {
     pub symbol: String,
@@ -500,10 +509,7 @@ pub struct ImpactBundleResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub implementations_mode: Option<NavigationMode>,
     pub implementations_included: bool,
-    /// Suggested next steps for tests pass + proof reads.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub suggested_next: Vec<super::SuggestedNext>,
-    /// Flattened recovery when the symbol is missing or impact is empty.
+    /// Flattened recovery + **only** `suggested_next` channel (success and zero-hit paths).
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
 }
@@ -611,7 +617,100 @@ pub struct SearchStructuralResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvidencePacket, EvidencePacketClaim};
+    use super::{
+        EvidencePacket, EvidencePacketClaim, ImpactBundleResponse, NavigationMode,
+    };
+    use crate::mcp::types::{RecoveryFields, SuggestedNext};
+
+    #[test]
+    fn impact_bundle_response_single_suggested_next_channel() {
+        // Success-shaped: next steps only via flattened recovery (no dual top-level field).
+        let success = ImpactBundleResponse {
+            symbol: "catalog_entries".to_owned(),
+            path_class: "runtime".to_owned(),
+            symbols: Vec::new(),
+            symbols_result_handle: Some("symbols:h1".to_owned()),
+            references: Vec::new(),
+            references_result_handle: Some("refs:h1".to_owned()),
+            references_mode: NavigationMode::Precise,
+            incoming_calls: Vec::new(),
+            incoming_calls_result_handle: None,
+            incoming_calls_mode: NavigationMode::Precise,
+            implementations: Vec::new(),
+            implementations_result_handle: None,
+            implementations_mode: None,
+            implementations_included: false,
+            recovery: RecoveryFields {
+                suggested_next: vec![
+                    SuggestedNext::tool("read_match").with_reason("proof clusters"),
+                    SuggestedNext::tool("search_text")
+                        .with_query("catalog_entries")
+                        .with_path_regex("^tests/")
+                        .with_reason("tests pass"),
+                ],
+                ..RecoveryFields::default()
+            },
+        };
+        let value = serde_json::to_value(&success).expect("serialize success impact");
+        let next = value["suggested_next"]
+            .as_array()
+            .expect("flattened recovery must expose suggested_next once");
+        assert_eq!(next.len(), 2);
+        assert!(
+            value.as_object().expect("object").keys().filter(|k| *k == "suggested_next").count()
+                == 1,
+            "exactly one suggested_next key after serialize"
+        );
+        // Compact-relevant fields stay present on success.
+        assert_eq!(value["symbol"], "catalog_entries");
+        assert_eq!(value["symbols_result_handle"], "symbols:h1");
+        assert_eq!(value["references_result_handle"], "refs:h1");
+        assert!(value.get("error_code").is_none());
+
+        // Zero-hit shaped recovery still single-channel.
+        let zero = ImpactBundleResponse {
+            symbol: "missing_sym".to_owned(),
+            path_class: "runtime".to_owned(),
+            symbols: Vec::new(),
+            symbols_result_handle: None,
+            references: Vec::new(),
+            references_result_handle: None,
+            references_mode: NavigationMode::UnavailableNoPrecise,
+            incoming_calls: Vec::new(),
+            incoming_calls_result_handle: None,
+            incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
+            implementations: Vec::new(),
+            implementations_result_handle: None,
+            implementations_mode: None,
+            implementations_included: false,
+            recovery: RecoveryFields {
+                error_code: Some("ZERO_HIT".to_owned()),
+                message: Some("no symbol hits".to_owned()),
+                suggested_next: vec![SuggestedNext::tool("search_symbol")
+                    .with_symbol("missing_sym")
+                    .with_reason("retry")],
+                ..RecoveryFields::default()
+            },
+        };
+        let zero_value = serde_json::to_value(&zero).expect("serialize zero impact");
+        assert_eq!(
+            zero_value["suggested_next"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0),
+            1
+        );
+        assert_eq!(zero_value["error_code"], "ZERO_HIT");
+        // Round-trip: deserializing must not invent a second channel field.
+        assert!(zero_value.get("recovery").is_none());
+        let back: ImpactBundleResponse =
+            serde_json::from_value(zero_value).expect("deserialize impact");
+        assert_eq!(back.recovery.suggested_next.len(), 1);
+        assert_eq!(back.recovery.error_code.as_deref(), Some("ZERO_HIT"));
+
+        // Flattened recovery: suggested_next appears at top level JSON, not nested under recovery.
+        assert!(value.get("recovery").is_none());
+    }
 
     #[test]
     fn evidence_packet_claim_serde_round_trip() {

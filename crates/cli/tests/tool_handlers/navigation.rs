@@ -3163,6 +3163,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         )
         || response.recovery.correction_hint.is_some()
         || response
+            .recovery
             .suggested_next
             .iter()
             .any(|step| step.tool == "find_references" || step.tool == "search_text");
@@ -3172,7 +3173,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         response.references.len(),
         response.references_mode,
         response.recovery,
-        response.suggested_next
+        response.recovery.suggested_next
     );
 
     let callers_ok = !response.incoming_calls.is_empty()
@@ -3183,6 +3184,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
                 | NavigationMode::PrecisePartial
         )
         || response
+            .recovery
             .suggested_next
             .iter()
             .any(|step| step.tool == "incoming_calls" || step.tool == "read_file");
@@ -3191,7 +3193,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         "impact_bundle must surface incoming_calls or provisional/mode guidance: callers={}, mode={:?}, suggested_next={:?}",
         response.incoming_calls.len(),
         response.incoming_calls_mode,
-        response.suggested_next
+        response.recovery.suggested_next
     );
 
     // Prefer real refs/callers when the fixture supports SCIP/heuristic resolution.
@@ -3218,18 +3220,19 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
     }
 
     assert!(
-        !response.suggested_next.is_empty(),
+        !response.recovery.suggested_next.is_empty(),
         "impact_bundle should suggest tests pass + proof reads"
     );
     assert!(
         response
+            .recovery
             .suggested_next
             .iter()
             .any(|step| step.tool == "read_match"
                 || step.tool == "search_text"
                 || step.tool == "read_file"),
         "suggested_next should include proof/tests guidance: {:?}",
-        response.suggested_next
+        response.recovery.suggested_next
     );
     cleanup_workspace_root(&workspace_root);
 }
@@ -3341,7 +3344,7 @@ async fn impact_bundle_missing_symbol_returns_recovery() {
         response.recovery.error_code.as_deref(),
         Some("MISSING_SYMBOL")
     );
-    assert!(!response.suggested_next.is_empty());
+    assert!(!response.recovery.suggested_next.is_empty());
 }
 
 #[tokio::test]
@@ -3361,7 +3364,7 @@ async fn impact_bundle_unknown_symbol_returns_recovery() {
 
     assert!(response.symbols.is_empty());
     assert!(
-        !response.recovery.is_empty() || !response.suggested_next.is_empty(),
-        "unknown symbol must surface recovery or suggested_next: {response:?}"
+        !response.recovery.is_empty(),
+        "unknown symbol must surface recovery/suggested_next: {response:?}"
     );
 }

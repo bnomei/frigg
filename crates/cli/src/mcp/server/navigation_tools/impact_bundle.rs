@@ -52,7 +52,7 @@ impl FriggMcpServer {
                 implementations_result_handle: None,
                 implementations_mode: None,
                 implementations_included: false,
-                suggested_next: recovery.suggested_next.clone(),
+                // Single channel: recovery.suggested_next only (flattened).
                 recovery,
             }));
         }
@@ -90,9 +90,8 @@ impl FriggMcpServer {
                     reason_override: None,
                 });
             }
-            let mut suggested_next = recovery.suggested_next.clone();
-            if suggested_next.is_empty() {
-                suggested_next = vec![
+            if recovery.suggested_next.is_empty() {
+                recovery.suggested_next = vec![
                     SuggestedNext::tool("search_symbol")
                         .with_symbol(symbol.clone())
                         .with_path_class(path_class_label.clone())
@@ -135,7 +134,6 @@ impl FriggMcpServer {
                 implementations_result_handle: None,
                 implementations_mode: None,
                 implementations_included: false,
-                suggested_next,
                 recovery,
             };
             return self.finalize_read_only_tool(
@@ -215,6 +213,7 @@ impl FriggMcpServer {
                 (Vec::new(), None, None)
             };
 
+        // Success path: still one channel — next steps live in recovery.suggested_next only.
         let mut suggested_next = vec![
             SuggestedNext::tool("search_text")
                 .with_query(symbol.clone())
@@ -234,6 +233,10 @@ impl FriggMcpServer {
                     .with_reason("include trait/interface implementations when relevant"),
             );
         }
+        let recovery = RecoveryFields {
+            suggested_next,
+            ..RecoveryFields::default()
+        };
 
         let response = ImpactBundleResponse {
             symbol: symbol.clone(),
@@ -250,8 +253,7 @@ impl FriggMcpServer {
             implementations_result_handle,
             implementations_mode,
             implementations_included: include_implementations,
-            suggested_next,
-            recovery: RecoveryFields::default(),
+            recovery,
         };
 
         let provenance_result = self

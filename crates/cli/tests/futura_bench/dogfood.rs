@@ -558,7 +558,7 @@ async fn run_impact_bundle_if_registered(report: &Mutex<harness::BenchReport>, r
             || !response.recovery.suggested_next.is_empty()
             || response.recovery.error_code.is_some();
         require(
-            composed || has_recovery || !response.suggested_next.is_empty(),
+            composed || has_recovery,
             format!(
                 "impact_bundle should compose refs/callers or suggest next: refs={} callers={} recovery={:?}",
                 response.references.len(),

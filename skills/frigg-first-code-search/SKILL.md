@@ -266,7 +266,8 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 
 ```text
 PREFERRED: impact_bundle(symbol, path_class=runtime)
-  → suggested_next for tests pass + read_match proof
+  → suggested_next (single recovery channel; compact default) for tests pass + read_match proof
+  // full response_mode only forwards diagnostics to child nav/search — not a second next-step list
 
 OR sequential:
 search_symbol(anchor, path_class=runtime)
@@ -573,7 +574,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 1. Omit `repository_id` in single-repo work unless multi-repo or wrong default.
 2. Pick scenario from the table — do not default to grep.
 3. Search tier: **symbol** (known name) → **text** (known string) → **hybrid** (vague only) → **batch/parallel** (several guesses).
-4. Compact responses first; `response_mode=full` only for ranking diagnostics.
+4. Compact responses first; `response_mode=full` only for ranking diagnostics (impact_bundle: one `suggested_next` via recovery flatten — full is not more next-steps).
 5. Navigate with the **`symbol`** parameter.
 6. Proof: `read_match` → `read_file`.
 7. Cite: json/citation `read_file` or host Read when required.
