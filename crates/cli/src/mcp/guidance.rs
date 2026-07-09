@@ -137,6 +137,18 @@ fn shell_replacement_map_json() -> String {
                 "params": ["query", "path_regex", "path_class", "limit"]
             },
             {
+                "shell": "parallel multi-grep / multi-hypothesis probes",
+                "tool": "search_batch",
+                "params": ["probes", "merge", "limit", "repository_id", "response_mode"],
+                "note": "2..=8 independent concurrent text/symbol/hybrid probes, then merge/dedupe — not one shared multi-query walk"
+            },
+            {
+                "shell": "usages / callers / blast radius for a known symbol",
+                "tool": "impact_bundle",
+                "params": ["symbol", "path_class", "repository_id", "response_mode"],
+                "note": "prefer before sequential find_references + incoming_calls + implementations"
+            },
+            {
                 "shell": "cat path",
                 "tool": "read_file",
                 "params": ["path"]
@@ -149,7 +161,7 @@ fn shell_replacement_map_json() -> String {
             {
                 "shell": "follow definitions/references/calls",
                 "tool": "navigation tools",
-                "params": ["go_to_definition", "find_references", "find_implementations", "incoming_calls", "outgoing_calls"]
+                "params": ["go_to_definition", "find_references", "find_implementations", "incoming_calls", "outgoing_calls", "impact_bundle"]
             }
         ]
     }))
@@ -235,8 +247,8 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "guidance": [
             "Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads.",
             "Use workspace for compact workspace status or to adopt a target path/repository; repo-aware tools auto-adopt sensible defaults when possible.",
-            "Before shell rg/grep/find/fd/cat/sed for code exploration, use list_files, search_text, search_symbol, read_file, read_match, or navigation tools.",
-            "Use search_hybrid only for broad discovery-style repository questions; use search_text for rg-shaped literal or safe-regex code scans, including grouped alternation and path_regex narrowing; pass the search term as query, not pattern; use search_symbol for known identifiers; use list_files for rg --files-shaped listing.",
+            "Before shell rg/grep/find/fd/cat/sed for code exploration, use list_files, search_text, search_symbol, search_batch, search_hybrid, read_file, read_match, impact_bundle, or navigation tools.",
+            "Use search_hybrid only for broad discovery-style repository questions; use search_text for rg-shaped literal or safe-regex code scans, including grouped alternation and path_regex narrowing; pass the search term as query, not pattern; use search_symbol for known identifiers; use search_batch for multi-hypothesis guesses (2..=8 independent concurrent probes, then merge); use impact_bundle for usages/callers/blast radius of a known symbol; use list_files for rg --files-shaped listing.",
             "Use shell tools as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
@@ -271,10 +283,12 @@ Shell replacement map:\n\
 - `rg -n \"foo|bar\"` -> `search_text` with regex mode\n\
 - `rg -n \"text\" path/` -> `search_text` with `path_regex`\n\
 - identifier/API/type/class/function lookup -> `search_symbol`\n\
+- parallel multi-grep / multi-hypothesis probes -> `search_batch` (2..=8 independent concurrent probes, then merge/dedupe; not one shared multi-query walk)\n\
+- usages / callers / blast radius for a known symbol -> prefer `impact_bundle(symbol)` before sequential navigation tools\n\
 - `cat path` -> `read_file`\n\
 - `sed -n '10,80p' path` -> `read_file` with `start_line`, `end_line`, or `line_count`\n\
-- follow definitions/references/calls -> navigation tools\n\n\
-Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and file-containment probes (`files_with_matches`). For `search_text`, pass the search term as `query`, not `pattern`. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers.\n\n\
+- follow definitions/references/calls -> navigation tools (or `impact_bundle` when the symbol is already known)\n\n\
+Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and file-containment probes (`files_with_matches`). For `search_text`, pass the search term as `query`, not `pattern`. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers. Use `search_batch` when you would fire several Frigg probes in one turn (text/symbol/hybrid); each probe is a full independent search, then results merge. Prefer `impact_bundle` for impact/refactor questions with a known symbol before chaining `find_references` / `incoming_calls` / `find_implementations` by hand.\n\n\
 `read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)` in the extended profile.\n\n\
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
 Semantic retrieval remains an optional accelerator, not the grounding layer.\n\n\
@@ -369,7 +383,7 @@ pub(crate) fn read_guidance_prompt(
     text.push_str(
         "Routing policy:\n\
 1. Prefer Frigg for code discovery, navigation, exact code search, and bounded source reads.\n\
-2. Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet; use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation and `path_regex`; use `search_symbol` for known identifiers.\n\
+2. Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet; use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation and `path_regex`; use `search_symbol` for known identifiers; use `search_batch` for multi-hypothesis guesses (2..=8 independent concurrent probes, then merge); prefer `impact_bundle(symbol)` for usages/callers/blast radius before sequential navigation.\n\
 3. Use shell tools as the exception for non-code files, git/filesystem inspection, explicit live-disk verification, trivial one-offs, or ripgrep-specific flags outside `search_text`.\n\
 4. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 5. Treat semantic retrieval as optional acceleration only. When broad discovery is weak, pivot to lexical, graph, and source-witness evidence instead of diagnosing runtime state by default.\n\
@@ -668,6 +682,51 @@ mod tests {
                             .iter()
                             .any(|param| param == "files_with_matches=true")
                 })
+        );
+        assert!(
+            parsed["replacements"]
+                .as_array()
+                .expect("replacements should be an array")
+                .iter()
+                .any(|entry| entry["tool"] == json!("search_batch")),
+            "shell map should list search_batch for multi-hypothesis work"
+        );
+        assert!(
+            parsed["replacements"]
+                .as_array()
+                .expect("replacements should be an array")
+                .iter()
+                .any(|entry| entry["tool"] == json!("impact_bundle")),
+            "shell map should list impact_bundle for usages/callers"
+        );
+    }
+
+    #[test]
+    fn guidance_surfaces_mention_search_batch_and_impact_bundle() {
+        let shell_guidance = resource_text(SHELL_GUIDANCE_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let tool_surface = resource_text(TOOL_SURFACE_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let shell_map = resource_text(SHELL_REPLACEMENT_MAP_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let prompt = read_guidance_prompt(
+            ROUTING_GUIDE_PROMPT_NAME,
+            None,
+            ToolSurfaceProfile::Extended,
+        )
+        .expect("routing prompt should exist");
+        let prompt_text = format!("{prompt:?}");
+
+        for surface in [&shell_guidance, &tool_surface, &shell_map, &prompt_text] {
+            assert!(
+                surface.contains("search_batch"),
+                "guidance surface missing search_batch: {surface:.200}"
+            );
+            assert!(
+                surface.contains("impact_bundle"),
+                "guidance surface missing impact_bundle: {surface:.200}"
+            );
+        }
+        assert!(
+            shell_guidance.contains("independent concurrent"),
+            "shell guidance should describe batch as independent concurrent probes"
         );
     }
 
