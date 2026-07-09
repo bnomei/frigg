@@ -42,6 +42,87 @@ fn runtime_status_watch_status_mode_off_when_watch_disabled() {
 }
 
 #[test]
+fn watch_status_refreshing_matches_runtime_repository_id_alias() {
+    use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus, WatchStatusReason};
+    use crate::mcp::workspace_registry::AttachedWorkspace;
+    use std::path::PathBuf;
+
+    let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+    let server = FriggMcpServer::new_with_runtime(
+        fixture_config(),
+        RuntimeProfile::StdioAttached,
+        true,
+        Arc::clone(&runtime_task_registry),
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
+    );
+
+    // Dual-id workspace: stable public id differs from watch/task runtime id.
+    let workspace = AttachedWorkspace {
+        repository_id: "myrepo-deadbeef".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
+        display_name: "myrepo".to_owned(),
+        root: PathBuf::from("/tmp/frigg-watch-status-dual-id"),
+        db_path: PathBuf::from("/tmp/frigg-watch-status-dual-id/.frigg/frigg.db"),
+    };
+
+    runtime_task_registry
+        .write()
+        .expect("task registry lock")
+        .start_task(
+            RuntimeTaskKind::ChangedIndex,
+            "repo-001", // registered under runtime id only
+            "refresh",
+            None,
+        );
+
+    let active = server
+        .runtime_state
+        .runtime_task_registry
+        .read()
+        .expect("read tasks")
+        .active_tasks();
+    assert!(
+        active
+            .iter()
+            .any(|task| task.status == RuntimeTaskStatus::Running
+                && task.repository_id == "repo-001")
+    );
+
+    let status = server.watch_status_summary(Some(&workspace), &active);
+    assert_eq!(
+        status.reason,
+        WatchStatusReason::Refreshing,
+        "refresh tasks keyed by runtime_repository_id must count for the session workspace"
+    );
+    assert_eq!(status.repository_id.as_deref(), Some("myrepo-deadbeef"));
+}
+
+#[test]
+fn watch_status_no_lease_when_watch_on_without_runtime_or_lease() {
+    use crate::mcp::types::WatchStatusReason;
+    use crate::mcp::workspace_registry::AttachedWorkspace;
+    use std::path::PathBuf;
+
+    let server = FriggMcpServer::new_with_runtime(
+        fixture_config(),
+        RuntimeProfile::StdioAttached,
+        true,
+        Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
+    );
+    let workspace = AttachedWorkspace {
+        repository_id: "stable-id".to_owned(),
+        runtime_repository_id: "repo-009".to_owned(),
+        display_name: "ws".to_owned(),
+        root: PathBuf::from("/tmp/frigg-watch-status-no-lease"),
+        db_path: PathBuf::from("/tmp/frigg-watch-status-no-lease/.frigg/frigg.db"),
+    };
+    let status = server.watch_status_summary(Some(&workspace), &[]);
+    assert_eq!(status.reason, WatchStatusReason::NoLease);
+    assert_eq!(status.lease_count, 0);
+}
+
+#[test]
 fn runtime_status_tools_exposed_matches_filtered_router() {
     use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
     use crate::mcp::types::PUBLIC_TOOL_NAMES;
