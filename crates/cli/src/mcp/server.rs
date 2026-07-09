@@ -627,6 +627,8 @@ impl FriggMcpServer {
         let gate_hint = workspace_gate_hint(recommended_action);
         let routing_stats = crate::mcp::routing_stats::routing_stats_enabled()
             .then(crate::mcp::routing_stats::snapshot);
+        let (lexical_ready, semantic_ready) =
+            self.workspace_substrate_ready_flags(current_workspace.as_ref());
 
         WorkspaceResponse {
             repository,
@@ -639,8 +641,35 @@ impl FriggMcpServer {
             changed_paths_since_snapshot,
             watch_active: Some(watch_active),
             fresh_enough_for,
+            lexical_ready,
+            semantic_ready,
             routing_stats,
         }
+    }
+
+    /// Optional lexical/semantic ready flags for agent health vocabulary (not full scorecards).
+    fn workspace_substrate_ready_flags(
+        &self,
+        current_workspace: Option<&AttachedWorkspace>,
+    ) -> (Option<bool>, Option<bool>) {
+        use crate::mcp::types::WorkspaceIndexComponentState;
+
+        let Some(workspace) = current_workspace else {
+            return (None, None);
+        };
+        let storage = Self::workspace_storage_summary(workspace);
+        let lexical = self.workspace_lexical_index_summary(workspace, &storage);
+        let semantic = self.workspace_semantic_index_summary(workspace, &storage);
+        let lexical_ready = Some(matches!(
+            lexical.state,
+            WorkspaceIndexComponentState::Ready
+        ));
+        // Disabled semantic is not a freshness failure — treat as non-blocking ready.
+        let semantic_ready = Some(matches!(
+            semantic.state,
+            WorkspaceIndexComponentState::Ready | WorkspaceIndexComponentState::Disabled
+        ));
+        (lexical_ready, semantic_ready)
     }
 
     /// Computes workspace gate fields.

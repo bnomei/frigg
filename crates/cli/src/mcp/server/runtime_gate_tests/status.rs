@@ -28,6 +28,20 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
 }
 
 #[test]
+fn runtime_status_watch_status_mode_off_when_watch_disabled() {
+    use crate::mcp::types::WatchStatusReason;
+
+    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
+    let status = server.runtime_status_summary();
+    let watch_status = status
+        .watch_status
+        .expect("watch_status should always be present on runtime summary");
+    // Fixture servers do not enable watch for the MCP unit-test constructor.
+    assert_eq!(watch_status.reason, WatchStatusReason::ModeOff);
+    assert_eq!(watch_status.lease_count, 0);
+}
+
+#[test]
 fn runtime_status_tools_exposed_matches_filtered_router() {
     use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
     use crate::mcp::types::PUBLIC_TOOL_NAMES;

@@ -250,6 +250,11 @@ impl FriggMcpServer {
         tools_exposed.sort();
         tools_exposed.dedup();
 
+        let session_repo_id = self
+            .current_workspace()
+            .map(|workspace| workspace.repository_id.clone());
+        let watch_status = Some(self.watch_status_summary(session_repo_id.as_deref(), &active_tasks));
+
         RuntimeStatusSummary {
             profile: self.runtime_state.runtime_profile,
             persistent_state_available: self
@@ -257,11 +262,91 @@ impl FriggMcpServer {
                 .runtime_profile
                 .persistent_state_available(),
             watch_active: self.runtime_state.runtime_watch_active,
+            watch_status,
             tool_surface_profile: self.tool_surface_profile.as_str().to_owned(),
             tools_exposed,
             status_tool: "workspace".to_owned(),
             active_tasks,
             recent_tasks,
+        }
+    }
+
+    /// Compact agent-facing watch projection from mode, leases, and active refresh tasks.
+    ///
+    /// Does not dump raw `WatchEvent` history. Reserved reasons (debounce/backoff/blocked/degraded)
+    /// stay unused until supervisor observability is wired into MCP state.
+    pub(super) fn watch_status_summary(
+        &self,
+        repository_id: Option<&str>,
+        active_tasks: &[crate::mcp::types::RuntimeTaskSummary],
+    ) -> crate::mcp::types::WatchStatusSummary {
+        use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus, WatchStatusReason, WatchStatusSummary};
+
+        if !self.runtime_state.runtime_watch_active {
+            return WatchStatusSummary {
+                reason: WatchStatusReason::ModeOff,
+                lease_count: 0,
+                repository_id: repository_id.map(ToOwned::to_owned),
+                detail: Some("watch mode disabled for this transport/profile".to_owned()),
+            };
+        }
+
+        let (lease_count, has_runtime) = {
+            let guard = self
+                .runtime_state
+                .watch_runtime
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match (guard.as_ref(), repository_id) {
+                (Some(runtime), Some(repo_id)) => {
+                    let status = runtime.lease_status(repo_id);
+                    (status.lease_count, true)
+                }
+                (Some(_), None) => (0, true),
+                (None, _) => (0, false),
+            }
+        };
+
+        if !has_runtime {
+            return WatchStatusSummary {
+                reason: WatchStatusReason::ModeOff,
+                lease_count: 0,
+                repository_id: repository_id.map(ToOwned::to_owned),
+                detail: Some("watch runtime not started".to_owned()),
+            };
+        }
+
+        let refresh_running = active_tasks.iter().any(|task| {
+            task.status == RuntimeTaskStatus::Running
+                && matches!(
+                    task.kind,
+                    RuntimeTaskKind::ChangedIndex | RuntimeTaskKind::SemanticRefresh
+                )
+                && repository_id.is_none_or(|repo_id| task.repository_id == repo_id)
+        });
+        if refresh_running {
+            return WatchStatusSummary {
+                reason: WatchStatusReason::Refreshing,
+                lease_count,
+                repository_id: repository_id.map(ToOwned::to_owned),
+                detail: Some("incremental refresh task running".to_owned()),
+            };
+        }
+
+        if lease_count == 0 {
+            return WatchStatusSummary {
+                reason: WatchStatusReason::NoLease,
+                lease_count: 0,
+                repository_id: repository_id.map(ToOwned::to_owned),
+                detail: Some("no active watch lease for session repository".to_owned()),
+            };
+        }
+
+        WatchStatusSummary {
+            reason: WatchStatusReason::Active,
+            lease_count,
+            repository_id: repository_id.map(ToOwned::to_owned),
+            detail: None,
         }
     }
 }

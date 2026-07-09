@@ -28,10 +28,13 @@ Important `workspace` outputs:
 - `repository`
 - `session_default`
 - `repositories`
-- `runtime` — includes `tool_surface_profile` (`core`|`extended`) and **`tools_exposed`** (sorted tool names registered on **this process** after filtering)
-- `recommended_action` — session gate next step (`ready`, `adopt_repo`, `wait_watch`, `reindex`, `use_live_disk_for_touched_files`, …)
+- `runtime` — includes `tool_surface_profile` (`core`|`extended`), **`tools_exposed`**, and **`watch_status`** (`reason`, `lease_count`, optional `repository_id` / `detail`)
+- `recommended_action` — session gate next step (`ready`, `adopt_repo`, `wait_watch`, `reindex`, `use_live_disk_for_touched_files`, …) — **primary agent decision**
 - `gate_hint` — optional plain-language recovery when the action is non-obvious (especially `reindex`)
 - `working_tree_dirty`, `changed_paths_since_snapshot`, `watch_active`, `fresh_enough_for`
+- `lexical_ready` / `semantic_ready` — optional substrate flags only; not full health scorecards; do not install generators mid-task from these alone
+
+**`watch_status.reason` values (compact):** `mode_off`, `no_lease`, `refreshing`, `active` (plus reserved: `debouncing`, `retry_backoff`, `blocked`, `notify_degraded` when projected later). Use to **explain** `wait_watch`, not to replace the gate action.
 
 **Tool surface honesty / live SSOT:**
 - Process: `runtime.tools_exposed` or live `tools/list` for **this** server
@@ -79,7 +82,9 @@ For explicit semantic troubleshooting only, inspect `workspace.runtime`.
 - If a tool says it cannot resolve a repository, call `workspace` with `path=<repo root or any file inside it>`.
 - Use `workspace` to see the session default and runtime tasks when debugging wrong-repo or freshness issues.
 - After edits: check workspace freshness, then either re-search with Frigg or use **path-scoped** live reads for touched files only — never treat live-disk as a license for repo-wide shell grep.
-- Branch on gate: `ready` → Frigg; `use_live_disk_for_touched_files` → touched paths only; `wait_watch` → wait for watch; `reindex` → CLI `frigg index` / operator (not MCP).
+- Branch on gate: `ready` → Frigg; `use_live_disk_for_touched_files` → touched paths only; `wait_watch` → wait for watch (read `runtime.watch_status`); `reindex` → CLI `frigg index` / operator (not MCP).
+- Health vocab: prefer `recommended_action` + recovery zeros; use `lexical_ready`/`semantic_ready` only as secondary substrate signals (never full generator scorecards mid-task).
+- Progressive disclosure: skill scenarios are agent SSOT; `frigg://policy/*` resources are machine/host secondary surfaces — keep aligned but not a second full skill.
 - Prefer **HTTP** for shared and long-running multi-client work; stdio is for one local client that owns the process.
 - Harness-specific MCP registration/schema flukes are outside Frigg's product contract; trust `runtime.tools_exposed` / live `tools/list` over stale host schema caches.
 - Use CLI `frigg index` only intentionally, usually when you explicitly want to refresh repository-derived data.

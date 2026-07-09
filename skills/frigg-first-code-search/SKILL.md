@@ -344,13 +344,19 @@ Or: presentation_mode=json → use start_line/end_line + path in ```start:end:pa
 | **Fallback** | Shell not a patch for unexplained zeros; check repo/index first |
 | **Proof** | After adoption/health, resume the real scenario tool |
 | **Done** | Workspace used when trust changes, not before every search |
-| **Product support** | `recommended_action`, optional `gate_hint`, `runtime.tools_exposed` + `tool_surface_profile`, dirty/changed paths |
+| **Product support** | `recommended_action`, `gate_hint`, `runtime.watch_status`, `runtime.tools_exposed`, optional `lexical_ready`/`semantic_ready`, dirty/changed paths |
 
 ```text
 Call workspace(path=...) IF:
   - wrong-repo paths, unexplained zeros, index errors, multi-repo ambiguity, post-edit freshness
 Skip workspace IF:
   - first search hits expected paths and index is ready
+
+Agent health decision tree (branch here only — not full scorecards):
+  1. recommended_action (primary)
+  2. zero-hit recovery / ZeroHitIndex when a search returned empty
+  3. optional lexical_ready / semantic_ready — never promote SCIP generator install mid-task
+  4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / refreshing / active)
 
 recommended_action=reindex means index substrate not Ready:
   - NOT a public MCP tool (tools/list has no reindex / workspace_reindex)
@@ -361,6 +367,11 @@ Tool surface honesty:
   - Trust runtime.tools_exposed (or live tools/list) for this process
   - Do not call names only in host schema caches, skill memory, or source #[tool] attributes
   - tool_surface_profile is core|extended; explore/playbook may be absent on core
+
+Policy progressive disclosure:
+  - Skill scenario cards are SSOT for agent routing
+  - MCP frigg://policy/* resources are secondary/machine (hosts, support matrix, tool-surface)
+  - Do not treat resources as a second full skill
 ```
 
 Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or extended-only tools.
@@ -387,16 +398,18 @@ Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or
 | **Fallback** | Live-disk for **touched paths only** (`changed_paths_since_snapshot` / known edit paths) — **never** a license for repo-wide shell grep |
 | **Proof** | Frigg after watch; else direct read of edited paths |
 | **Done** | Freshness visible; no default repo-wide shell verification |
-| **Product support** | `working_tree_dirty`, `changed_paths_since_snapshot`, hot-path watch refresh, `recommended_action` + `gate_hint` (path-scoped live-disk when dirty+Ready) |
+| **Product support** | `working_tree_dirty`, `changed_paths_since_snapshot`, `runtime.watch_status`, `recommended_action` + `gate_hint` (path-scoped live-disk when dirty+Ready) |
 
 ```text
 1. workspace() after edits
 2. If recommended_action=ready (or fresh_enough_for includes search_*) → Frigg search
 3. If use_live_disk_for_touched_files → read_file / host Read on **those paths only**
-4. If wait_watch → wait for watch / hot-path refresh; do not "verify" with whole-repo rg
+4. If wait_watch → read runtime.watch_status.reason (mode_off / no_lease / refreshing / active);
+     wait or path-scoped live reads — do not "verify" with whole-repo rg or micro-manage retries
 5. If reindex → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
 BAD: workspace dirty → rg -n across the repo
 BAD: recommended_action=reindex → call invented MCP workspace_reindex
+BAD: wait_watch → invent a retry loop without reading watch_status
 GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path watch refresh
 GOOD: recommended_action=reindex → frigg index (CLI) or wait for operator; read gate_hint
 ```

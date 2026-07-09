@@ -391,6 +391,12 @@ pub struct WorkspaceResponse {
     /// Tool classes that are fresh enough to trust without live-disk fallback.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fresh_enough_for: Option<Vec<String>>,
+    /// Lexical index substrate ready for search (optional health vocab; gate action still primary).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_ready: Option<bool>,
+    /// Semantic index substrate ready or intentionally disabled (not a full health scorecard).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_ready: Option<bool>,
     /// Opt-in local routing stats when `FRIGG_ROUTING_STATS=1`.
     /// Process-local only; never cloud telemetry.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -623,12 +629,54 @@ pub struct RuntimeTaskSummary {
     pub detail: Option<String>,
 }
 
+/// Closed reason set for compact agent-facing watch status.
+///
+/// Explains `wait_watch` / freshness waits. Gate `recommended_action` remains the decision;
+/// do not micro-manage retries from these reasons alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchStatusReason {
+    /// Watch mode disabled for this transport/profile.
+    ModeOff,
+    /// Watch runtime enabled but no active lease on the session default repository.
+    NoLease,
+    /// Incremental refresh task is running (changed-index / semantic refresh).
+    Refreshing,
+    /// Lease held and no refresh task currently running.
+    Active,
+    /// Reserved for future debounce observability (not yet projected from supervisor events).
+    Debouncing,
+    /// Reserved for future retry-backoff observability.
+    RetryBackoff,
+    /// Reserved for future blocked-refresh observability.
+    Blocked,
+    /// Reserved for future notify-degraded observability.
+    NotifyDegraded,
+}
+
+/// Compact watch lease / refresh projection for agents (not a raw event log).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WatchStatusSummary {
+    pub reason: WatchStatusReason,
+    /// Active lease holders for the scoped repository (0 when mode off / no runtime).
+    pub lease_count: usize,
+    /// Optional repository scope for the lease snapshot (session default when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
+    /// Optional human-readable detail (stable short strings only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// Process-level runtime summary returned by `workspace` / `workspace_current`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeStatusSummary {
     pub profile: RuntimeProfile,
     pub persistent_state_available: bool,
     pub watch_active: bool,
+    /// Compact watch lease/refresh status for agents (explains wait_watch; gate action decides).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_status: Option<WatchStatusSummary>,
     /// Active tool-surface profile (`core` or `extended`).
     pub tool_surface_profile: String,
     /// Tool names registered on **this process** after profile filtering.
@@ -819,6 +867,8 @@ mod tests {
             changed_paths_since_snapshot: Vec::new(),
             watch_active: None,
             fresh_enough_for: None,
+            lexical_ready: None,
+            semantic_ready: None,
             routing_stats: None,
         };
         let value = serde_json::to_value(&response).expect("workspace response should serialize");
@@ -839,15 +889,39 @@ mod tests {
             changed_paths_since_snapshot: Vec::new(),
             watch_active: Some(false),
             fresh_enough_for: None,
+            lexical_ready: Some(true),
+            semantic_ready: Some(false),
             routing_stats: None,
         };
         let value = serde_json::to_value(&response).expect("serialize workspace response");
         assert_eq!(value["recommended_action"], "adopt_repo");
         assert_eq!(value["working_tree_dirty"], false);
         assert_eq!(value["watch_active"], false);
+        assert_eq!(value["lexical_ready"], true);
+        assert_eq!(value["semantic_ready"], false);
         assert!(value.get("changed_paths_since_snapshot").is_none());
         assert!(value.get("fresh_enough_for").is_none());
         assert!(value.get("routing_stats").is_none());
         assert!(value.get("gate_hint").is_none());
+    }
+
+    #[test]
+    fn watch_status_reason_serde_snake_case_is_stable() {
+        assert_eq!(
+            serde_json::to_value(WatchStatusReason::ModeOff).expect("serialize"),
+            json!("mode_off")
+        );
+        assert_eq!(
+            serde_json::to_value(WatchStatusReason::NoLease).expect("serialize"),
+            json!("no_lease")
+        );
+        assert_eq!(
+            serde_json::to_value(WatchStatusReason::Refreshing).expect("serialize"),
+            json!("refreshing")
+        );
+        assert_eq!(
+            serde_json::to_value(WatchStatusReason::Active).expect("serialize"),
+            json!("active")
+        );
     }
 }
