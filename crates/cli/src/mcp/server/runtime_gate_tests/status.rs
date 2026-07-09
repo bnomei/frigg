@@ -28,6 +28,48 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
 }
 
 #[test]
+fn runtime_status_tools_exposed_matches_filtered_router() {
+    let core = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
+    let extended = FriggMcpServer::new_with_runtime_options(fixture_config(), true);
+
+    let core_status = core.runtime_status_summary();
+    let extended_status = extended.runtime_status_summary();
+
+    let mut core_registered = core.runtime_registered_tool_names();
+    core_registered.sort();
+    core_registered.dedup();
+    assert_eq!(
+        core_status.tools_exposed, core_registered,
+        "tools_exposed must mirror the live filtered router (core)"
+    );
+    assert_eq!(core_status.tool_surface_profile, "core");
+    assert!(
+        core_status.tools_exposed.contains(&"workspace".to_owned()),
+        "core tools_exposed should include workspace"
+    );
+    assert!(
+        !core_status.tools_exposed.contains(&"explore".to_owned()),
+        "core tools_exposed must omit extended-only tools"
+    );
+    for phantom in ["workspace_index", "workspace_attach", "workspace_reindex", "deep_search"] {
+        assert!(
+            !core_status.tools_exposed.iter().any(|name| name == phantom),
+            "tools_exposed must not list non-public/phantom tool {phantom}"
+        );
+    }
+
+    let mut extended_registered = extended.runtime_registered_tool_names();
+    extended_registered.sort();
+    extended_registered.dedup();
+    assert_eq!(extended_status.tools_exposed, extended_registered);
+    assert_eq!(extended_status.tool_surface_profile, "extended");
+    assert!(
+        extended_status.tools_exposed.contains(&"explore".to_owned()),
+        "extended tools_exposed should include explore"
+    );
+}
+
+#[test]
 fn extended_only_tools_are_registered_when_runtime_option_enabled() {
     let server = FriggMcpServer::new_with_runtime_options(fixture_config(), true);
     let names = to_set(server.runtime_registered_tool_names());

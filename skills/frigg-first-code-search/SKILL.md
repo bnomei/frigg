@@ -97,6 +97,7 @@ BAD: read_match with a match_id from another result_handle
 BAD: repo-wide shell rg to "confirm" an explainable Frigg zero
 BAD: throwaway shell rg on indexed src when Frigg is attached
 BAD: calling tools only in a stale schema cache, not in live tools/list
+BAD: invent workspace_index / workspace_reindex / deep_search from source or host descriptors
 BAD: treat search_batch as one cheap multi-pattern scan / expect early-exit across probes
 ```
 
@@ -343,7 +344,7 @@ Or: presentation_mode=json → use start_line/end_line + path in ```start:end:pa
 | **Fallback** | Shell not a patch for unexplained zeros; check repo/index first |
 | **Proof** | After adoption/health, resume the real scenario tool |
 | **Done** | Workspace used when trust changes, not before every search |
-| **Product support** | `recommended_action`, optional `gate_hint`, dirty/changed paths, index age |
+| **Product support** | `recommended_action`, optional `gate_hint`, `runtime.tools_exposed` + `tool_surface_profile`, dirty/changed paths |
 
 ```text
 Call workspace(path=...) IF:
@@ -355,9 +356,14 @@ recommended_action=reindex means index substrate not Ready:
   - NOT a public MCP tool (tools/list has no reindex / workspace_reindex)
   - operator/CLI: `frigg index` (or attach-side ensure / operator lifecycle)
   - read gate_hint when present; do not invent a write tool or shell-grep the repo "to fix" it
+
+Tool surface honesty:
+  - Trust runtime.tools_exposed (or live tools/list) for this process
+  - Do not call names only in host schema caches, skill memory, or source #[tool] attributes
+  - tool_surface_profile is core|extended; explore/playbook may be absent on core
 ```
 
-Verify live `tools/list` before calling schema-only or extended-only tools.
+Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or extended-only tools.
 
 ### Multi-repo
 

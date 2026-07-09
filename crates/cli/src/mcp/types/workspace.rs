@@ -623,13 +623,21 @@ pub struct RuntimeTaskSummary {
     pub detail: Option<String>,
 }
 
-/// Process-level runtime summary returned by `workspace_current`.
+/// Process-level runtime summary returned by `workspace` / `workspace_current`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeStatusSummary {
     pub profile: RuntimeProfile,
     pub persistent_state_available: bool,
     pub watch_active: bool,
+    /// Active tool-surface profile (`core` or `extended`).
     pub tool_surface_profile: String,
+    /// Tool names registered on **this process** after profile filtering.
+    ///
+    /// Authoritative for agent routing: prefer this list (or live `tools/list`) over host
+    /// schema caches, source `#[tool]` attributes, or inventory freezes. Non-public lifecycle
+    /// handlers (e.g. `workspace_index`) are never listed here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_exposed: Vec<String>,
     pub status_tool: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_tasks: Vec<RuntimeTaskSummary>,

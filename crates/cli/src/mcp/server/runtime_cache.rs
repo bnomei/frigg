@@ -246,6 +246,10 @@ impl FriggMcpServer {
             (registry.active_tasks(), registry.recent_tasks())
         };
 
+        let mut tools_exposed = self.runtime_registered_tool_names();
+        tools_exposed.sort();
+        tools_exposed.dedup();
+
         RuntimeStatusSummary {
             profile: self.runtime_state.runtime_profile,
             persistent_state_available: self
@@ -254,6 +258,7 @@ impl FriggMcpServer {
                 .persistent_state_available(),
             watch_active: self.runtime_state.runtime_watch_active,
             tool_surface_profile: self.tool_surface_profile.as_str().to_owned(),
+            tools_exposed,
             status_tool: "workspace".to_owned(),
             active_tasks,
             recent_tasks,
