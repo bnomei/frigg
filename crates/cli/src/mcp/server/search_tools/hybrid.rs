@@ -942,16 +942,9 @@ impl FriggMcpServer {
         crate::mcp::types::hybrid_exact_pivot_assist_probe(query, code_shaped, &pivot_sources)
     }
 
-    fn search_hybrid_should_run_exact_pivot_assistance(
-        matches: &[SearchHybridMatch],
-        _lexical_only_mode: bool,
-        query_shape: SearchHybridQueryShape,
-        query: &str,
+    pub(in crate::mcp::server) fn search_hybrid_match_has_strong_lexical_anchor(
+        matched: &SearchHybridMatch,
     ) -> bool {
-        Self::search_hybrid_exact_pivot_probe(query, query_shape, matches).is_some()
-    }
-
-    fn search_hybrid_match_has_strong_lexical_anchor(matched: &SearchHybridMatch) -> bool {
         matched.lexical_score > 0.0
             && !matched.lexical_sources.is_empty()
             && matched
@@ -1588,45 +1581,39 @@ mod tests {
     #[test]
     fn search_hybrid_exact_pivot_assistance_runs_for_code_shaped_queries_with_semantic_enabled() {
         assert!(
-            FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
-                &[],
-                false,
-                SearchHybridQueryShape::CodeShaped,
+            FriggMcpServer::search_hybrid_exact_pivot_probe(
                 "setNavigationContext",
+                SearchHybridQueryShape::CodeShaped,
+                &[],
             )
+            .is_some()
         );
         assert!(
-            !FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
-                &[],
-                false,
-                SearchHybridQueryShape::BroadNaturalLanguage,
+            FriggMcpServer::search_hybrid_exact_pivot_probe(
                 "where is capture request flow handled after tool layer",
+                SearchHybridQueryShape::BroadNaturalLanguage,
+                &[],
             )
+            .is_none()
         );
     }
 
     #[test]
     fn search_hybrid_exact_pivot_probe_uses_shaped_token_for_broad_nl_with_match_excerpt() {
-        let mut matched = hybrid_match_fixture(
+        // Production probe runs before guardrails fill rank_reasons; rely on lexical sources
+        // for prefers_exact (strong non-witness lexical), not pre-seeded rank_reasons.
+        let matches = [hybrid_match_fixture(
             "crates/cli/src/mcp/server/content.rs",
             10,
             &["lexical"],
             "pub async fn read_match_impl(",
-        );
-        matched.rank_reasons = vec![SearchHybridRankReason::StrongLexicalAnchor];
-        let matches = [matched];
+        )];
         let probe = FriggMcpServer::search_hybrid_exact_pivot_probe(
             "where can I open nearby code for an earlier hit without retyping the path",
             SearchHybridQueryShape::BroadNaturalLanguage,
             &matches,
         );
         assert_eq!(probe.as_deref(), Some("read_match_impl"));
-        assert!(FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
-            &matches,
-            false,
-            SearchHybridQueryShape::BroadNaturalLanguage,
-            "where can I open nearby code for an earlier hit without retyping the path",
-        ));
     }
 
     #[test]
@@ -1644,14 +1631,6 @@ mod tests {
                 &matches,
             )
             .is_none()
-        );
-        assert!(
-            !FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
-                &matches,
-                false,
-                SearchHybridQueryShape::BroadNaturalLanguage,
-                "how does the overview describe things in practice",
-            )
         );
     }
 

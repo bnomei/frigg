@@ -40,6 +40,9 @@ impl FriggMcpServer {
             .map(|matched| HybridPivotMatchSource {
                 path: matched.path.as_str(),
                 excerpt: matched.excerpt.as_str(),
+                // Prefer post-guardrail exact/strong rank_reasons when present; otherwise use
+                // live lexical sources so pre-guardrail exact-pivot probe selection still
+                // boosts strong-lexical rows (rank_reasons are empty until after assist).
                 prefers_exact: matched.rank_reasons.iter().any(|reason| {
                     matches!(
                         reason,
@@ -47,7 +50,7 @@ impl FriggMcpServer {
                             | SearchHybridRankReason::ExactTextMatch
                             | SearchHybridRankReason::StrongLexicalAnchor
                     )
-                }),
+                }) || Self::search_hybrid_match_has_strong_lexical_anchor(matched),
             })
             .collect()
     }
