@@ -1344,67 +1344,43 @@ impl FriggMcpServer {
             if !has_symbol && has_location {
                 // Machine-obvious path+line trap signal (EXP-nav-path-line-trap A+E).
                 // Soft warning stays; agents must also branch on ambiguous_location=true.
+                // Do not rewrite target_selection: leave real DisambiguationRequired / Resolved
+                // summaries intact for presentation + multi-candidate recovery.
                 let dense = self.dense_location_warning_for_params(&params);
                 if response.location_warning.is_none() {
-                    response.location_warning = dense.clone().or_else(|| {
+                    response.location_warning = dense.or_else(|| {
                         Some(
-                            "path+line without symbol can be ambiguous on dense lines; prefer symbol=<name> or pass column."
+                            "path+line without symbol can be ambiguous on dense lines; prefer symbol=<name> or pass column when known."
                                 .to_owned(),
                         )
                     });
                 }
                 response.ambiguous_location = Some(true);
-                // Recovery-like replan even when matches are non-empty (do not rely on skill alone).
-                if response.recovery.correction_hint.is_none() {
-                    response.recovery.correction_hint = Some(
-                        "Path+line without symbol is ambiguous. Retry go_to_definition with symbol=<name> from search_symbol (include column when known)."
-                            .to_owned(),
-                    );
-                }
-                if response.recovery.related_tools.is_empty() {
-                    response.recovery.related_tools =
-                        vec!["search_symbol".to_owned(), "go_to_definition".to_owned()];
-                }
-                if response.recovery.suggested_next.is_empty() {
-                    response.recovery.suggested_next = vec![
-                        SuggestedNext::tool("search_symbol")
-                            .with_path_class("runtime")
-                            .with_reason(
-                                "resolve a unique symbol name, then go_to_definition(symbol=…)",
+                // Soft recovery replan only when matches are non-empty so empty-result
+                // presentation can still install DISAMBIGUATION_REQUIRED / zero-hit recovery.
+                if !response.matches.is_empty() {
+                    if response.recovery.correction_hint.is_none() {
+                        response.recovery.correction_hint = Some(
+                            "Path+line without symbol is ambiguous. Retry go_to_definition with symbol=<name> from search_symbol (pass column when the hit includes one)."
+                                .to_owned(),
+                        );
+                    }
+                    if response.recovery.related_tools.is_empty() {
+                        response.recovery.related_tools =
+                            vec!["search_symbol".to_owned(), "go_to_definition".to_owned()];
+                    }
+                    if response.recovery.suggested_next.is_empty() {
+                        response.recovery.suggested_next = vec![
+                            SuggestedNext::tool("search_symbol")
+                                .with_path_class("runtime")
+                                .with_reason(
+                                    "resolve a unique symbol name, then go_to_definition(symbol=…)",
+                                ),
+                            SuggestedNext::tool("go_to_definition").with_reason(
+                                "retry with symbol=<name> (and column when known) instead of path+line alone",
                             ),
-                        SuggestedNext::tool("go_to_definition").with_reason(
-                            "retry with symbol=<name> (and column) instead of path+line alone",
-                        ),
-                    ];
-                }
-                // Dense lines: elevate target_selection to DisambiguationRequired when still Resolved/missing.
-                if dense.is_some() {
-                    let query = response
-                        .matches
-                        .first()
-                        .map(|m| m.symbol.clone())
-                        .unwrap_or_else(|| {
-                            params
-                                .path
-                                .clone()
-                                .unwrap_or_else(|| "path+line".to_owned())
-                        });
-                    let candidate_count = response.matches.len().max(1);
-                    let existing = response.target_selection.take();
-                    let (selected_id, candidates) = match existing {
-                        Some(sel) => (sel.selected_stable_symbol_id, sel.candidates),
-                        None => (None, Vec::new()),
-                    };
-                    let count = candidate_count.max(candidates.len()).max(1);
-                    response.target_selection = Some(NavigationTargetSelectionSummary {
-                        status: NavigationTargetSelectionStatus::DisambiguationRequired,
-                        symbol_query: query,
-                        selected_stable_symbol_id: selected_id,
-                        candidate_count: count,
-                        same_rank_candidate_count: count,
-                        ambiguous_query: true,
-                        candidates,
-                    });
+                        ];
+                    }
                 }
             }
             Json(self.present_go_to_definition_response(response, params.response_mode))

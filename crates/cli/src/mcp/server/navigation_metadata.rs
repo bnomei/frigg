@@ -213,12 +213,9 @@ impl FriggMcpServer {
             .unwrap_or((None, None));
         let path = Self::relative_display_path(&candidate.root, &candidate.symbol.path);
         let path_class = Self::navigation_path_class(&path);
-        // Always ship a 1-based column for navigation handoff (EXP-nav-path-line-trap).
-        let column = Some(if candidate.symbol.span.start_column > 0 {
-            candidate.symbol.span.start_column
-        } else {
-            1
-        });
+        // Ship column when the index has a real 1-based span (EXP-nav-path-line-trap handoff).
+        let column =
+            (candidate.symbol.span.start_column > 0).then_some(candidate.symbol.span.start_column);
         let excerpt = signature.clone().or_else(|| {
             Some(format!(
                 "{} {}",

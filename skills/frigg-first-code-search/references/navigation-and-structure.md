@@ -69,7 +69,7 @@ Common outputs:
 - `ambiguous_location` / `location_warning` when path+line was used **without** `symbol` (do not edit from those defs until re-resolved with `symbol=`)
 - `metadata` and `note` only when `response_mode=full`
 
-**Path+line trap:** Prefer `search_symbol` → `go_to_definition(symbol=…)`. On dense lines, path+line alone can jump to the wrong identity. When `ambiguous_location=true` (or `location_warning` is set), retry with `symbol` (and `column` from the symbol hit when present). `column: 1` means unknown — not a safe dense-line disambiguator.
+**Path+line trap:** Prefer `search_symbol` → `go_to_definition(symbol=…)`. On dense lines, path+line alone can jump to the wrong identity. When `ambiguous_location=true` (or `location_warning` is set), retry with `symbol` (and pass `column` only when the symbol hit includes one). Do not invent `column: 1` to “fix” dense lines — prefer `symbol=` always.
 
 Inspect per-match precision hints when present:
 - `precision`

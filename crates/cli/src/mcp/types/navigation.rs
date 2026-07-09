@@ -142,13 +142,13 @@ pub struct GoToDefinitionResponse {
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Soft warning when path+line without `symbol` looks dense/ambiguous.
+    /// Soft warning when path+line was used without `symbol` (generic or density-specific copy).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location_warning: Option<String>,
     /// Machine-obvious flag: path+line without `symbol` may have resolved the wrong target.
     ///
     /// Always check this (or `location_warning`) before trusting definition matches for edits.
-    /// Prefer retrying with `symbol=<name>` from `search_symbol` (and `column` when known).
+    /// Prefer retrying with `symbol=<name>` from `search_symbol` (pass `column` when the hit includes one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambiguous_location: Option<bool>,
     /// Flattened recovery fields on empty definition results (and soft re-plan on ambiguous hits).

@@ -3124,11 +3124,25 @@ async fn navigation_go_to_definition_path_line_without_symbol_sets_location_warn
         Some(true),
         "path+line without symbol must set ambiguous_location for agent branching: {response:?}"
     );
-    assert!(
-        response.recovery.correction_hint.is_some()
-            || !response.recovery.suggested_next.is_empty(),
-        "path+line trap should surface recovery replan even with matches: {response:?}"
-    );
+    if !response.matches.is_empty() {
+        assert!(
+            response.recovery.correction_hint.is_some(),
+            "non-empty path+line defs should include correction_hint: {response:?}"
+        );
+        assert!(
+            !response.recovery.suggested_next.is_empty(),
+            "non-empty path+line defs should include suggested_next replan: {response:?}"
+        );
+    }
+    // Do not invent DisambiguationRequired solely for density; leave real multi-candidate shape alone.
+    if let Some(selection) = response.target_selection.as_ref() {
+        if selection.status == NavigationTargetSelectionStatus::DisambiguationRequired {
+            assert!(
+                selection.selected_stable_symbol_id.is_none() || !selection.candidates.is_empty(),
+                "true disambiguation should clear selection or list candidates: {selection:?}"
+            );
+        }
+    }
     cleanup_workspace_root(&workspace_root);
 }
 
