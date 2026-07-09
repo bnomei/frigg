@@ -224,24 +224,24 @@ impl FriggMcpServer {
                             found.repository_id = actual_repository_id.clone();
                         }
                     }
-                    let exact_pivot_assist =
-                        if Self::search_hybrid_should_run_exact_pivot_assistance(
+                    let exact_pivot_probe = Self::search_hybrid_exact_pivot_probe(
+                        &query,
+                        detected_query_shape,
+                        &matches,
+                    );
+                    let exact_pivot_assist = if let Some(probe) = exact_pivot_probe.as_deref() {
+                        Self::search_hybrid_exact_pivot_assistance(
+                            &server,
+                            probe,
+                            params_for_blocking.repository_id.as_deref(),
+                            params_for_blocking.language.as_deref(),
+                            &searcher,
                             &matches,
-                            search_output.note.lexical_only_mode,
-                            detected_query_shape,
-                        ) {
-                            Self::search_hybrid_exact_pivot_assistance(
-                                &server,
-                                &query,
-                                params_for_blocking.repository_id.as_deref(),
-                                params_for_blocking.language.as_deref(),
-                                &searcher,
-                                &matches,
-                                &repository_id_map,
-                            )?
-                        } else {
-                            None
-                        };
+                            &repository_id_map,
+                        )?
+                    } else {
+                        None
+                    };
                     let (boosted_match_count, witness_demotion_was_applied) =
                         Self::search_hybrid_apply_guardrails(
                             &mut matches,
@@ -927,12 +927,28 @@ impl FriggMcpServer {
             || source.starts_with("witness:")
     }
 
+    /// Select the exact-pivot probe string when assist should run.
+    ///
+    /// - Code-shaped full query → probe is the full query (legacy path).
+    /// - Otherwise → first shaped identifier from the shared pivot extract (query + top matches).
+    /// - No shaped probe → `None` (skip assist).
+    fn search_hybrid_exact_pivot_probe(
+        query: &str,
+        query_shape: SearchHybridQueryShape,
+        matches: &[SearchHybridMatch],
+    ) -> Option<String> {
+        let pivot_sources = Self::hybrid_pivot_match_sources(matches);
+        let code_shaped = query_shape == SearchHybridQueryShape::CodeShaped;
+        crate::mcp::types::hybrid_exact_pivot_assist_probe(query, code_shaped, &pivot_sources)
+    }
+
     fn search_hybrid_should_run_exact_pivot_assistance(
-        _matches: &[SearchHybridMatch],
+        matches: &[SearchHybridMatch],
         _lexical_only_mode: bool,
         query_shape: SearchHybridQueryShape,
+        query: &str,
     ) -> bool {
-        query_shape == SearchHybridQueryShape::CodeShaped
+        Self::search_hybrid_exact_pivot_probe(query, query_shape, matches).is_some()
     }
 
     fn search_hybrid_match_has_strong_lexical_anchor(matched: &SearchHybridMatch) -> bool {
@@ -1575,15 +1591,86 @@ mod tests {
             FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
                 &[],
                 false,
-                SearchHybridQueryShape::CodeShaped
+                SearchHybridQueryShape::CodeShaped,
+                "setNavigationContext",
             )
         );
         assert!(
             !FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
                 &[],
                 false,
-                SearchHybridQueryShape::BroadNaturalLanguage
+                SearchHybridQueryShape::BroadNaturalLanguage,
+                "where is capture request flow handled after tool layer",
             )
+        );
+    }
+
+    #[test]
+    fn search_hybrid_exact_pivot_probe_uses_shaped_token_for_broad_nl_with_match_excerpt() {
+        let mut matched = hybrid_match_fixture(
+            "crates/cli/src/mcp/server/content.rs",
+            10,
+            &["lexical"],
+            "pub async fn read_match_impl(",
+        );
+        matched.rank_reasons = vec![SearchHybridRankReason::StrongLexicalAnchor];
+        let matches = [matched];
+        let probe = FriggMcpServer::search_hybrid_exact_pivot_probe(
+            "where can I open nearby code for an earlier hit without retyping the path",
+            SearchHybridQueryShape::BroadNaturalLanguage,
+            &matches,
+        );
+        assert_eq!(probe.as_deref(), Some("read_match_impl"));
+        assert!(FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
+            &matches,
+            false,
+            SearchHybridQueryShape::BroadNaturalLanguage,
+            "where can I open nearby code for an earlier hit without retyping the path",
+        ));
+    }
+
+    #[test]
+    fn search_hybrid_exact_pivot_probe_skips_broad_nl_without_shaped_tokens() {
+        let matches = [hybrid_match_fixture(
+            "docs/readme.md",
+            1,
+            &["lexical"],
+            "see the overview of how things work in practice",
+        )];
+        assert!(
+            FriggMcpServer::search_hybrid_exact_pivot_probe(
+                "how does the overview describe things in practice",
+                SearchHybridQueryShape::BroadNaturalLanguage,
+                &matches,
+            )
+            .is_none()
+        );
+        assert!(
+            !FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
+                &matches,
+                false,
+                SearchHybridQueryShape::BroadNaturalLanguage,
+                "how does the overview describe things in practice",
+            )
+        );
+    }
+
+    #[test]
+    fn search_hybrid_exact_pivot_probe_prefers_full_query_when_code_shaped() {
+        let matches = [hybrid_match_fixture(
+            "src/lib.rs",
+            1,
+            &["lexical"],
+            "fn other_helper() {}",
+        )];
+        assert_eq!(
+            FriggMcpServer::search_hybrid_exact_pivot_probe(
+                "setNavigationContext",
+                SearchHybridQueryShape::CodeShaped,
+                &matches,
+            )
+            .as_deref(),
+            Some("setNavigationContext")
         );
     }
 

@@ -952,10 +952,7 @@ impl RecoveryFields {
 
         // Symbol pivots require shaped identifiers (snake/camel/Pascal). Text may use a
         // weaker secondary token only when shaped tokens exist.
-        let symbol_tokens: Vec<&String> = tokens
-            .iter()
-            .filter(|token| is_shaped_code_identifier(token))
-            .collect();
+        let symbol_tokens: Vec<&String> = shaped_pivot_tokens(&tokens);
         if let Some(primary) = symbol_tokens.first() {
             suggested_next.push(
                 SuggestedNext::tool("search_symbol")
@@ -1300,7 +1297,8 @@ const HYBRID_PIVOT_TOP_MATCHES: usize = 3;
 ///
 /// Scans the first ranked matches in original order (exact rows get a score boost, but do
 /// not replace the window). Dedupes by max score across sources.
-fn hybrid_pivot_candidate_tokens(
+/// Shared by `suggested_next` recovery and hybrid exact-pivot assistance.
+pub(crate) fn hybrid_pivot_candidate_tokens(
     query: &str,
     matches: &[HybridPivotMatchSource<'_>],
 ) -> Vec<String> {
@@ -1465,8 +1463,8 @@ fn pivot_token_quality(token: &str) -> i32 {
 }
 
 /// Snake_case, camelCase/PascalCase, or leading-underscore identifiers suitable for
-/// `search_symbol` pivots.
-fn is_shaped_code_identifier(raw: &str) -> bool {
+/// `search_symbol` pivots and exact-pivot assist probes.
+pub(crate) fn is_shaped_code_identifier(raw: &str) -> bool {
     let trimmed = raw.trim();
     if !is_ascii_identifier(trimmed) {
         return false;
@@ -1477,6 +1475,30 @@ fn is_shaped_code_identifier(raw: &str) -> bool {
     let has_lower = trimmed.chars().any(|c| c.is_ascii_lowercase());
     let has_upper = trimmed.chars().any(|c| c.is_ascii_uppercase());
     has_lower && has_upper
+}
+
+/// Filter candidate tokens to shaped identifiers only (shared by recovery + hybrid assist).
+pub(crate) fn shaped_pivot_tokens(tokens: &[String]) -> Vec<&String> {
+    tokens
+        .iter()
+        .filter(|token| is_shaped_code_identifier(token))
+        .collect()
+}
+
+/// Primary exact-pivot assist probe: full query when CodeShaped; otherwise first shaped token.
+pub(crate) fn hybrid_exact_pivot_assist_probe(
+    query: &str,
+    query_is_code_shaped: bool,
+    matches: &[HybridPivotMatchSource<'_>],
+) -> Option<String> {
+    let query = query.trim();
+    if query_is_code_shaped && !query.is_empty() {
+        return Some(query.to_owned());
+    }
+    let tokens = hybrid_pivot_candidate_tokens(query, matches);
+    shaped_pivot_tokens(&tokens)
+        .first()
+        .map(|token| (*token).clone())
 }
 
 /// Weaker bare lowercase tokens (path stems, long prose words) for optional text pivots only.
