@@ -261,6 +261,13 @@ pub(crate) enum Command {
         /// policy (picker + shell→Frigg one-liners) without dumping the full skill.
         #[arg(long = "policy", value_enum, default_value_t = AdoptAgentsPolicy::Lightweight)]
         policy: AdoptAgentsPolicy,
+        /// Best-effort copy of `frigg-first-code-search` into a host skill directory.
+        ///
+        /// Only writes when the provider's parent skills directory already exists;
+        /// never creates `…/skills` itself. Repeatable. Source is the workspace
+        /// `skills/frigg-first-code-search` tree (or `FRIGG_SKILL_SOURCE`).
+        #[arg(long = "skill-provider", value_enum)]
+        skill_provider: Vec<SkillProvider>,
         /// Remove Frigg-managed entries instead.
         #[arg(long, default_value_t = false)]
         uninstall: bool,
@@ -356,7 +363,6 @@ impl From<AdoptAgentsPolicy> for frigg::agent_directive::AgentsPolicy {
 pub(crate) enum AdoptTarget {
     ClaudeMd,
     AgentsMd,
-    GeminiMd,
     Copilot,
     Cursor,
     McpProject,
@@ -369,7 +375,6 @@ impl AdoptTarget {
         match self {
             Self::ClaudeMd => "CLAUDE.md",
             Self::AgentsMd => "AGENTS.md",
-            Self::GeminiMd => "GEMINI.md",
             Self::Copilot => ".github/copilot-instructions.md",
             Self::Cursor => ".cursor/rules/frigg.mdc",
             Self::McpProject => ".mcp.json",
@@ -377,6 +382,22 @@ impl AdoptTarget {
             Self::Hook => ".claude/settings.json",
         }
     }
+}
+
+/// Host skill directories that `frigg adopt --skill-provider` may target (best-effort).
+///
+/// Paths are researched defaults (macOS/`~` style). Install only proceeds when the
+/// parent skills directory already exists — Frigg never creates that parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SkillProvider {
+    /// Personal `~/.claude/skills`, else project `.claude/skills`.
+    Claude,
+    /// Personal `~/.codex/skills`.
+    Codex,
+    /// Project `.cursor/skills`, else personal `~/.cursor/skills`.
+    Cursor,
+    /// Project `.github/skills` (CI-friendly), else personal `~/.copilot/skills`.
+    Copilot,
 }
 
 #[cfg(test)]
@@ -387,6 +408,7 @@ mod tests {
 
     use super::{
         AdoptAgentsPolicy, AdoptTarget, Cli, Command, HiddenHookCli, HiddenHookCommand, HookEvent,
+        SkillProvider,
     };
 
     #[test]
@@ -418,6 +440,7 @@ mod tests {
                 target,
                 all,
                 policy,
+                skill_provider,
                 uninstall,
                 check,
                 dry_run,
@@ -433,10 +456,34 @@ mod tests {
                 );
                 assert!(!all);
                 assert_eq!(policy, AdoptAgentsPolicy::Lightweight);
+                assert!(skill_provider.is_empty());
                 assert!(uninstall);
                 assert!(check);
                 assert!(dry_run);
                 assert!(force);
+            }
+            other => panic!("expected adopt command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn adopt_command_parses_skill_providers() {
+        let cli = Cli::try_parse_from([
+            "frigg",
+            "adopt",
+            "--skill-provider",
+            "claude",
+            "--skill-provider",
+            "copilot",
+        ])
+        .expect("adopt skill-provider should parse");
+
+        match cli.command {
+            Some(Command::Adopt { skill_provider, .. }) => {
+                assert_eq!(
+                    skill_provider,
+                    vec![SkillProvider::Claude, SkillProvider::Copilot]
+                );
             }
             other => panic!("expected adopt command, got {other:?}"),
         }

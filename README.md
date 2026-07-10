@@ -161,11 +161,16 @@ Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a 
 frigg adopt --target agents-md --target mcp-project --dry-run
 frigg adopt --target agents-md --target mcp-project
 frigg adopt --target agents-md --policy expanded
+# Best-effort skill copy into an existing host skills dir (never creates …/skills):
+frigg adopt --skill-provider claude
+frigg adopt --skill-provider copilot   # prefers .github/skills when present (CI)
 ```
 
-Useful targets include `agents-md`, `claude-md`, `gemini-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
+Useful targets include `agents-md`, `claude-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and opt-in `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
 
 Managed markdown defaults to a **lightweight** Frigg-first pointer to the `frigg-first-code-search` skill. Pass `--policy expanded` for a compact routing policy (scenario picker + shell→Frigg one-liners) when you want more detail in-repo without loading the skill.
+
+Skill install (`--skill-provider`) is separate best-effort plumbing: it copies the workspace skill tree only when the provider’s parent skills directory already exists (`~/.claude/skills`, `~/.codex/skills`, `.cursor/skills` / `~/.cursor/skills`, `.github/skills` / `~/.copilot/skills`). It does **not** create those parents.
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 
@@ -174,9 +179,10 @@ The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running wh
 | Surface | Role |
 | --- | --- |
 | Production skill (`frigg-first-code-search`) | **SSOT** for scenario routing |
-| Repo `AGENTS.md` / managed directive | Lightweight pointer (do not paste the full skill by default) |
-| Host global skill path | Host-owned; monorepo re-adopt does not update every laptop |
-| Research `docs/ideas/` flows | Not production routing |
+| Live MCP `tools/list` | **SSOT** for tool existence this process |
+| Repo `AGENTS.md` / managed directive | Lightweight pointer via adopt (not a second skill) |
+| Host skill path (`--skill-provider`) | Best-effort copy into existing host skills dirs |
+| Research `docs/ideas/` / policy-pack hosts | Not production routing; optional paste |
 
 Checklist: skill version / managed marker version → `frigg adopt --check` in CI for managed blocks → confirm host reloaded skill → `tools/list`. Do **not** default adopt to expanded policy (context bloat).
 

@@ -12,7 +12,7 @@ use frigg::agent_directive::AgentsPolicy;
 use frigg::settings::FriggConfig;
 use frigg::storage::resolve_workspace_relative_write_path;
 
-use crate::cli_args::AdoptTarget;
+use crate::cli_args::{AdoptTarget, SkillProvider};
 use crate::cli_runtime::{
     CliOutput, OutputField, OutputLevel, field, format_output_event_line, reported_error,
 };
@@ -20,9 +20,14 @@ use crate::cli_runtime::{
 mod json_merge;
 mod managed_block;
 mod plan;
+mod skill_install;
 mod targets;
 
 use plan::{AdoptPlan, AdoptPlanAction, AdoptPlanEntry};
+use skill_install::{
+    SkillInstallAction, SkillInstallPlan, apply_skill_install, plan_skill_install,
+    resolve_home_dir, resolve_skill_source,
+};
 use targets::select_targets;
 
 /// Plans adopt work for every configured repository, then applies or reports changes through `CliOutput`.
@@ -32,6 +37,7 @@ pub(crate) fn run_adopt_command_with_output(
     requested_targets: Vec<AdoptTarget>,
     all: bool,
     policy: AgentsPolicy,
+    skill_providers: Vec<SkillProvider>,
     uninstall: bool,
     check: bool,
     dry_run: bool,
@@ -48,6 +54,7 @@ pub(crate) fn run_adopt_command_with_output(
             field("status", "starting"),
             field("repos", config.repositories().len()),
             field("requested_targets", requested_targets.len()),
+            field("skill_providers", skill_providers.len()),
             field("all", all),
             field("policy", policy_label),
             field("dry_run", dry_run),
@@ -67,8 +74,13 @@ pub(crate) fn run_adopt_command_with_output(
         force,
         mcp_server_url,
     )?;
-    let pending_changes = plan.pending_changes();
-    let status = if plan.is_empty() {
+    let skill_plans = build_skill_plans(config, &skill_providers, uninstall);
+    let pending_changes = plan.pending_changes()
+        + skill_plans
+            .iter()
+            .filter(|p| p.action.is_pending_change())
+            .count();
+    let status = if plan.is_empty() && skill_plans.is_empty() {
         "noop"
     } else if check && pending_changes > 0 {
         "pending"
@@ -104,6 +116,9 @@ pub(crate) fn run_adopt_command_with_output(
                 Some(&entry.path.display().to_string()),
             )?;
         }
+        for skill_plan in &skill_plans {
+            emit_skill_plan_event(output, skill_plan)?;
+        }
     }
 
     if check && pending_changes > 0 {
@@ -122,7 +137,11 @@ pub(crate) fn run_adopt_command_with_output(
         return Err(reported_error(message));
     }
 
-    if plan.action_count(AdoptPlanAction::Error) > 0 {
+    if plan.action_count(AdoptPlanAction::Error) > 0
+        || skill_plans
+            .iter()
+            .any(|p| p.action == SkillInstallAction::Error)
+    {
         let message = "adopt failed: plan contains target error(s)";
         output.error_event(
             "adopt",
@@ -150,8 +169,12 @@ pub(crate) fn run_adopt_command_with_output(
             Some(&entry.path.display().to_string()),
         )?;
     }
+    for skill_plan in &skill_plans {
+        emit_skill_plan_event(output, skill_plan)?;
+    }
 
     let writes = apply_plan_entries(&plan, policy, uninstall, force, mcp_server_url)?;
+    let skill_writes = apply_skill_plans(config, &skill_plans, uninstall)?;
     output.summary_event(
         adopt_level_for_status(status),
         "adopt",
@@ -166,12 +189,131 @@ pub(crate) fn run_adopt_command_with_output(
             check,
             uninstall,
             force,
-            writes,
+            writes + skill_writes,
         ),
         None,
     )?;
 
     Ok(())
+}
+
+fn emit_skill_plan_event(
+    output: &CliOutput,
+    skill_plan: &SkillInstallPlan,
+) -> Result<(), Box<dyn Error>> {
+    let level = match skill_plan.action {
+        SkillInstallAction::Create | SkillInstallAction::Update | SkillInstallAction::Remove => {
+            OutputLevel::Info
+        }
+        SkillInstallAction::Unchanged | SkillInstallAction::Skipped => OutputLevel::Skip,
+        SkillInstallAction::Error => OutputLevel::Error,
+    };
+    let path = skill_plan
+        .dest
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    output.result_event(
+        level,
+        "adopt",
+        "skill",
+        &[
+            field("provider", skill_plan.provider.as_str()),
+            field("action", skill_plan.action.as_str()),
+            field("reason", &skill_plan.reason),
+            field(
+                "skills_parent",
+                skill_plan
+                    .skills_parent
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+            ),
+        ],
+        Some(&path),
+    )?;
+    Ok(())
+}
+
+fn build_skill_plans(
+    config: &FriggConfig,
+    skill_providers: &[SkillProvider],
+    uninstall: bool,
+) -> Vec<SkillInstallPlan> {
+    if skill_providers.is_empty() {
+        return Vec::new();
+    }
+
+    let home = resolve_home_dir();
+    let mut plans = Vec::new();
+    let mut seen_dests = std::collections::BTreeSet::new();
+
+    for repo in config.repositories() {
+        let Some(root) = config.root_by_repository_id(&repo.repository_id.0) else {
+            continue;
+        };
+        let source = if uninstall {
+            None
+        } else {
+            resolve_skill_source(root).ok()
+        };
+        for provider in skill_providers {
+            let plan = plan_skill_install(
+                *provider,
+                root,
+                home.as_deref(),
+                source.as_deref(),
+                uninstall,
+            );
+            // Deduplicate personal-home installs across multi-repo workspaces.
+            let dedupe_key = plan
+                .dest
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| format!("{}:{}", provider.as_str(), root.display()));
+            if seen_dests.insert(dedupe_key) {
+                plans.push(plan);
+            }
+        }
+    }
+
+    plans
+}
+
+fn apply_skill_plans(
+    config: &FriggConfig,
+    skill_plans: &[SkillInstallPlan],
+    uninstall: bool,
+) -> Result<usize, Box<dyn Error>> {
+    let mut writes = 0;
+    for plan in skill_plans {
+        if !matches!(
+            plan.action,
+            SkillInstallAction::Create | SkillInstallAction::Update | SkillInstallAction::Remove
+        ) {
+            continue;
+        }
+        // Re-resolve source per dest: prefer any workspace root that has the skill tree.
+        let source = if uninstall {
+            None
+        } else {
+            resolve_source_for_skill_apply(config)
+        };
+        apply_skill_install(plan, source.as_deref())?;
+        writes += 1;
+    }
+    Ok(writes)
+}
+
+fn resolve_source_for_skill_apply(config: &FriggConfig) -> Option<PathBuf> {
+    for repo in config.repositories() {
+        if let Some(root) = config.root_by_repository_id(&repo.repository_id.0)
+            && let Ok(source) = resolve_skill_source(root)
+        {
+            return Some(source);
+        }
+    }
+    None
 }
 
 fn agents_policy_label(policy: AgentsPolicy) -> &'static str {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Adopt: best-effort `--skill-provider {claude,codex,cursor,copilot}` copies `frigg-first-code-search` only when the host parent skills directory already exists (never creates `…/skills`).
+- Adopt: dropped `gemini-md` target; kept `copilot` for CI and expanded host notes (install triangle + Cursor MCP/hooks guidance).
+
 ## 0.8.0 - 2026-07-09
 
 - Promoted a scenario-first `frigg-first-code-search` skill and lightweight default AGENTS adopt; use `frigg adopt --target agents-md --policy expanded` for a compact in-repo routing policy.

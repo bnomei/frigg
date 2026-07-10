@@ -7,10 +7,9 @@ use std::path::Path;
 
 use crate::cli_args::AdoptTarget;
 
-pub(crate) const NON_HOOK_V1_TARGETS: [AdoptTarget; 7] = [
+pub(crate) const NON_HOOK_V1_TARGETS: [AdoptTarget; 6] = [
     AdoptTarget::ClaudeMd,
     AdoptTarget::AgentsMd,
-    AdoptTarget::GeminiMd,
     AdoptTarget::Copilot,
     AdoptTarget::Cursor,
     AdoptTarget::McpProject,
@@ -97,12 +96,17 @@ mod tests {
     fn adopt_detects_existing_project_markers() {
         let root = temp_dir("adopt-detect-targets");
         fs::create_dir_all(root.join(".cursor/rules")).expect("create cursor rules dir");
-        fs::write(root.join("GEMINI.md"), "").expect("write gemini marker");
+        fs::create_dir_all(root.join(".github")).expect("create .github dir");
+        fs::write(
+            root.join(".github/copilot-instructions.md"),
+            "",
+        )
+        .expect("write copilot marker");
         fs::write(root.join(".cursor/rules/frigg.mdc"), "").expect("write cursor marker");
 
         let targets = detect_known_project_client_markers(&root);
 
-        assert_eq!(targets, vec![AdoptTarget::GeminiMd, AdoptTarget::Cursor]);
+        assert_eq!(targets, vec![AdoptTarget::Copilot, AdoptTarget::Cursor]);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 
