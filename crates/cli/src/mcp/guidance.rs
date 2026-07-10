@@ -32,10 +32,11 @@ pub(crate) const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 /// Native output width of the default local MiniLM alias (parity with
 /// `embeddings::local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions` when local-embeddings is on).
 const LOCAL_DEFAULT_NATIVE_DIMENSIONS: usize = 384;
-/// OpenAI `text-embedding-3-small` native width used by Frigg storage requests.
-const OPENAI_DEFAULT_NATIVE_DIMENSIONS: usize = 1_536;
-/// Google `gemini-embedding-001` default width Frigg requests when padding to projection.
-const GOOGLE_DEFAULT_NATIVE_DIMENSIONS: usize = 768;
+/// Dimensions Frigg requests/stores for OpenAI default model (matches projection; no pad).
+const OPENAI_DEFAULT_NATIVE_DIMENSIONS: usize = DEFAULT_VECTOR_DIMENSIONS;
+/// Dimensions Frigg requests for Google default model via `output_dimensionality`
+/// (index/query paths pass `Some(DEFAULT_VECTOR_DIMENSIONS)` — not API catalog default 3072 / MRL 768).
+const GOOGLE_DEFAULT_NATIVE_DIMENSIONS: usize = DEFAULT_VECTOR_DIMENSIONS;
 
 #[derive(Debug, Clone, Serialize)]
 struct LanguageSupportEntry {
@@ -164,7 +165,8 @@ fn semantic_models_json() -> String {
                 "quality": "unbenchmarked",
                 "known_limits": [
                     "Requires GEMINI_API_KEY and network",
-                    "API may accept other output dimensionalities; Frigg stores the projection width"
+                    "Frigg requests output_dimensionality = projection_dimensions (not the API catalog default 3072 or MRL 768)",
+                    "Vectors are stored at projection width; changing model still requires semantic reindex"
                 ]
             }
         ],
@@ -496,10 +498,10 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
         .with_mime_type("application/json"),
         Resource::new(
             SEMANTIC_MODELS_RESOURCE_URI,
-            "FRIGG Semantic Models Scoreboard",
+            "FRIGG Semantic Models Catalog",
         )
         .with_description(
-            "Curated embedding-model defaults and contract facts (dims, pad, offline, credentials). Quality scores unbenchmarked; peer to support-matrix.",
+            "Curated embedding-model defaults and contract facts (dims, pad, offline, credentials). Quality scores unbenchmarked — not a live leaderboard; peer to support-matrix.",
         )
         .with_mime_type("application/json"),
         Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
@@ -599,7 +601,7 @@ pub(crate) fn read_guidance_prompt(
                 Role::Assistant,
                 Resource::new(
                     SEMANTIC_MODELS_RESOURCE_URI,
-                    "FRIGG Semantic Models Scoreboard",
+                    "FRIGG Semantic Models Catalog",
                 ),
             ),
             PromptMessage::new_resource_link(
@@ -625,8 +627,7 @@ pub(crate) fn read_guidance_prompt(
 #[cfg(test)]
 mod tests {
     use super::{
-        EVIDENCE_PACKET_RESOURCE_URI, GOOGLE_DEFAULT_NATIVE_DIMENSIONS,
-        LOCAL_DEFAULT_NATIVE_DIMENSIONS, OPENAI_DEFAULT_NATIVE_DIMENSIONS, ROUTING_GUIDE_PROMPT_NAME,
+        EVIDENCE_PACKET_RESOURCE_URI, LOCAL_DEFAULT_NATIVE_DIMENSIONS, ROUTING_GUIDE_PROMPT_NAME,
         SEMANTIC_MODELS_RESOURCE_URI, SHELL_GUIDANCE_RESOURCE_URI,
         SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI,
         policy_resources, read_guidance_prompt, read_policy_resource,
@@ -710,7 +711,12 @@ mod tests {
         assert_eq!(openai["credential_env"], json!(OPENAI_API_KEY_ENV_VAR));
         assert_eq!(
             openai["native_dimensions"],
-            json!(OPENAI_DEFAULT_NATIVE_DIMENSIONS)
+            json!(DEFAULT_VECTOR_DIMENSIONS)
+        );
+        assert_eq!(
+            openai["pad_to_projection"],
+            json!(false),
+            "OpenAI default matches projection; no pad"
         );
         assert_eq!(openai["offline"], json!(false));
         assert_eq!(openai["quality"], json!("unbenchmarked"));
@@ -723,9 +729,14 @@ mod tests {
         assert_eq!(google["credential_env"], json!(GEMINI_API_KEY_ENV_VAR));
         assert_eq!(
             google["native_dimensions"],
-            json!(GOOGLE_DEFAULT_NATIVE_DIMENSIONS)
+            json!(DEFAULT_VECTOR_DIMENSIONS),
+            "Frigg requests Google output_dimensionality = projection width"
         );
-        assert_eq!(google["pad_to_projection"], json!(true));
+        assert_eq!(
+            google["pad_to_projection"],
+            json!(false),
+            "Google path requests full projection width; storage pad unused on happy path"
+        );
         assert_eq!(google["quality"], json!("unbenchmarked"));
 
         // No fake leaderboard fields that imply measured ranking quality.
