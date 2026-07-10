@@ -358,7 +358,19 @@ impl FriggMcpServer {
             .iter()
             .take_while(|resolved| resolved.rank == candidate.rank)
             .count();
-        if require_disambiguation && selected_rank_candidate_count > 1 {
+        // Multi-repo HTTP: same-rank hits in different attached repositories must not
+        // silently pick the first repo (EXP-nav-cross-repo B).
+        let multi_repo_same_rank = repository_id_hint.is_none()
+            && selected_rank_candidate_count > 1
+            && {
+                let mut repos = candidates
+                    .iter()
+                    .take(selected_rank_candidate_count)
+                    .map(|c| c.repository_id.as_str());
+                let first = repos.next();
+                first.is_some_and(|first_repo| repos.any(|repo| repo != first_repo))
+            };
+        if (require_disambiguation && selected_rank_candidate_count > 1) || multi_repo_same_rank {
             let same_rank_candidates = candidates
                 .into_iter()
                 .take(selected_rank_candidate_count)

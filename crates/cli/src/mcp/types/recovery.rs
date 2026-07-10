@@ -1158,29 +1158,32 @@ impl RecoveryFields {
             SuggestedNext::tool("search_symbol")
                 .with_path_class("runtime")
                 .with_reason("list candidate symbols before re-calling go_to_definition"),
+            SuggestedNext::tool("workspace")
+                .with_reason("if candidates span repos, adopt path or pass repository_id"),
         ];
         if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
             suggested_next.insert(
                 0,
                 SuggestedNext::tool("go_to_definition")
                     .with_symbol(query)
-                    .with_reason("disambiguate by re-calling with path+line for this symbol"),
+                    .with_reason("disambiguate by re-calling with path+line or repository_id for this symbol"),
             );
         }
         Self {
             error_code: Some("DISAMBIGUATION_REQUIRED".to_owned()),
             message: Some(
-                "go_to_definition found multiple same-rank candidates; pass path+line or a stable_symbol_id."
+                "multiple same-rank candidates (possibly across attached repositories); pass path+line, stable_symbol_id, or repository_id."
                     .to_owned(),
             ),
             correction_hint: Some(
-                "Inspect target_selection.candidates and retry go_to_definition with path+line or stable_symbol_id. This is not a missing SCIP/precise-graph failure."
+                "Inspect target_selection.candidates (including repository_id). Retry with path+line, stable_symbol_id, or repository_id. This is not a missing SCIP/precise-graph failure."
                     .to_owned(),
             ),
             related_tools: vec![
                 "go_to_definition".to_owned(),
                 "search_symbol".to_owned(),
                 "document_symbols".to_owned(),
+                "workspace".to_owned(),
             ],
             suggested_next,
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),

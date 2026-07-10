@@ -443,7 +443,15 @@ Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or
 | **Fallback** | Wrong-repo zero → adopt or explicit id, not shell grep |
 | **Proof** | Continue with exact/symbol/nav after correct repo |
 | **Done** | Wrong-default searches are recoverable via workspace diagnostics |
-| **Product support** | Zero-hit names repository; recovery suggests `workspace(path=...)` |
+| **Product support** | Zero-hit names repository; multi-repo disambiguation on same-rank symbols; recovery suggests `workspace` / `repository_id` |
+
+```text
+Multi-attach (common on HTTP):
+  - Prefer repository_id on impact_bundle / nav when the symbol name is common across repos
+  - DISAMBIGUATION_REQUIRED + target_selection.candidates → pick repo via repository_id or path+line
+  - Do not invent federated cross-repo call graphs; one repo graph at a time
+  - Wrong-repo zero → workspace(path=...) recovery, not shell grep
+```
 
 ### Post-edit
 
