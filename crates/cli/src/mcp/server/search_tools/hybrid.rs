@@ -347,7 +347,9 @@ impl FriggMcpServer {
                         result_handle: None,
                         handle_scope: None,
                         handle_expires: None,
-                        ranking_note: Some("discovery_only; confirm with exact search".to_owned()),
+                        // ranking_note is set in present_search_hybrid_response from
+                        // lexical_only_mode (semantic-default honesty) before compact strip.
+                        ranking_note: None,
                         best_pivot_path,
                         latency_class: None,
                         metadata,
