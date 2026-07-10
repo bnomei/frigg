@@ -115,6 +115,7 @@ BAD: treat search_batch as one cheap multi-pattern scan / expect early-exit acro
 BAD: blame ranking/hybrid for staleness when watch is mode_off (often default stdio WatchMode::Off) without checking watch_status/profile
 BAD: spawn multiple stdio Frigg processes against one repo and expect shared HTTP-style freshness
 BAD: invent compose_evidence_packet / sealed evidence MCP tools — packets are skill-assembled
+BAD: invent review_bundle / bug_trace_bundle / citation-service tools — impact_bundle is the composition template
 ```
 
 ---
@@ -288,7 +289,7 @@ GOOD: go_to_definition(symbol=…) for body anchors; declarations only when decl
 | **Fallback** | Scoped `search_text` may supplement tests; shell `rg` is not the main reference pass |
 | **Proof** | Read clusters; confirm `outgoing_calls` with body reads |
 | **Done** | Navigation evidence before edit or impact claim |
-| **Product support** | `summary` counts/top_paths, mode flags, `impact_bundle` composition |
+| **Product support** | `summary` counts/top_paths, mode flags; **`impact_bundle` is the only public composition orchestrator** |
 
 ```text
 PREFERRED: impact_bundle(symbol, path_class=runtime)
@@ -304,6 +305,12 @@ incoming_calls(symbol)              # who calls — reliable
 outgoing_calls(symbol)              # trust=provisional (+ trust_note); confirm with read_file
 find_implementations(symbol)        # traits/interfaces only
 ```
+
+**Composition bar:** a new public “bundle/service” tool is justified only when it is a thin
+orchestrator over existing tools with shared recovery/handles and a clear scenario latency win
+(same class as `impact_bundle`). Do **not** invent `review_bundle`, `bug_trace_bundle`,
+citation services, or other scenario composers. Multi-claim review packets stay **skill-assembled**
+(see Technical review + `frigg://policy/evidence-packet.json`).
 
 ### Files & outline
 

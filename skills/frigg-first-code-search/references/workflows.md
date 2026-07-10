@@ -26,13 +26,14 @@ Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is at
 6. Optional `search_text` with `path_regex='^tests/'` for an explicit test pass
 7. Prefer `impact_bundle` when available; individual tools remain source of truth
 8. Never shell `rg` for throwaway indexed-source checks — use scoped `search_text`
+9. Do not expect other scenario “bundle” tools — composition beyond impact is skill-side
 
 ## Technical Review
 
 1. `search_text` for the contract phrase, API name, or narrative anchor
 2. `search_symbol` → `go_to_definition(symbol=…)` for the implementation anchor (`find_declarations` only when decl≠def matters)
 3. `find_references` and `incoming_calls` for propagation and entry paths
-4. `read_match` or `read_file` for final source proof; attach path/line witnesses (evidence packet when multi-claim)
+4. `read_match` or `read_file` for final source proof; attach path/line witnesses (skill-assembled evidence packet when multi-claim — not an MCP tool)
 5. `search_structural` only for cross-cutting AST proof that is too awkward in plain text (tier-3)
 6. Treat `outgoing_calls` as provisional until another tool confirms the edge
 7. Git diff and build/test output stay shell-owned; return to Frigg for source impact
@@ -66,4 +67,4 @@ Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is at
 3. Scope runtime with `path_regex` / `path_class`; upgrade to safe regex only when literal underfills
 4. `read_match` or `read_file` to validate true positives on indexed source
 5. `find_references` or call hierarchy to measure blast radius of confirmed sinks
-6. Package multi-finding reports as evidence packets with path/line witnesses
+6. Package multi-finding reports as skill-assembled evidence packets with path/line witnesses (schema: `frigg://policy/evidence-packet.json`)
