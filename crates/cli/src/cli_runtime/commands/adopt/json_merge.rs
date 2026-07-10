@@ -445,7 +445,7 @@ fn serialize_value(value: Value) -> Result<String, McpJsonError> {
 mod tests {
     #![allow(clippy::panic, clippy::unwrap_used)]
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_claude_hook,
@@ -458,6 +458,17 @@ mod tests {
     fn adopt_json_merge_defaults_to_loopback_http() {
         assert_eq!(MCP_SERVER_KEY, "frigg");
         assert_eq!(DEFAULT_MCP_SERVER_URL, "http://127.0.0.1:37444/mcp");
+        // EXP-http-stdio B: managed adopt always emits HTTP, never stdio command shape.
+        let desired = desired_mcp_server(DEFAULT_MCP_SERVER_URL);
+        assert_eq!(desired.get("type").and_then(Value::as_str), Some("http"));
+        assert_eq!(
+            desired.get("url").and_then(Value::as_str),
+            Some(DEFAULT_MCP_SERVER_URL)
+        );
+        assert!(
+            desired.get("command").is_none(),
+            "managed MCP entry must not be stdio command-spawn shape"
+        );
     }
 
     #[test]

@@ -62,7 +62,7 @@ Precise lifecycle phases describe generation timing separately from the compact 
 
 ## Watch retries
 
-Built-in watch mode runs behind `frigg serve` and keeps adopted repositories fresh while sessions hold watcher leases. A file event queues a changed-only manifest refresh after the debounce delay. When semantic runtime is enabled, a successful manifest refresh may queue a semantic follow-up refresh.
+Built-in watch mode runs behind **`frigg serve` (HTTP)** and keeps adopted repositories fresh while sessions hold watcher leases. Full post-edit freshness is an **HTTP + watch lease** contract. **Stdio** sessions are a valid single-client mode; with default Auto watch they often report `watch_status.reason=mode_off` — that is expected, not a ranking defect. Prefer path-scoped live-disk after edits on stdio, or run shared work over loopback HTTP. A file event queues a changed-only manifest refresh after the debounce delay. When semantic runtime is enabled, a successful manifest refresh may queue a semantic follow-up refresh.
 
 If a watch refresh fails, Frigg logs `built-in watch mode refresh failed; retry scheduled`, marks the refresh pending again, and waits `watch.retry_ms` before retrying. The default retry delay is controlled by `--watch-retry-ms` or `FRIGG_WATCH_RETRY_MS`.
 

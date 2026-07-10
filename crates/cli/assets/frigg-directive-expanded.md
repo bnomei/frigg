@@ -38,4 +38,6 @@ Git/build/generated/unindexed/Frigg missing -> shell fallback
 
 **Never shell as a trust patch:** indexed runtime source search while Frigg is registered; “confirming” a scoped Frigg zero without stale/unindexed reason; refs/call analysis when a symbol anchor exists.
 
-Do not run parallel shell grep on indexed source in the same turn as Frigg search. Prefer loopback **HTTP** (`frigg serve`) for shared/long-running clients; stdio is one local process owner.
+Do not run parallel shell grep on indexed source in the same turn as Frigg search.
+
+**Transport:** managed adopt uses loopback **HTTP** (`frigg serve`, `http://127.0.0.1:37444/mcp`). Full watch/post-edit freshness assumes HTTP + watch leases. **Stdio** is valid for one local client that owns the process — a different contract, not broken Frigg; do not blame ranking when watch is `mode_off` on stdio.

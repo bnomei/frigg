@@ -129,7 +129,7 @@ HTTP gives Frigg a shared runtime:
 - Lower local contention. One service coordinates access to `.frigg/storage.sqlite3`; several stdio processes can duplicate work and make SQLite lock contention harder to understand.
 - Clearer operations. A single HTTP service has one lifecycle, one log stream, one endpoint, loopback-by-default binding, and optional bearer auth for non-loopback use.
 
-Use stdio only when one local MCP client should launch Frigg directly and no subagent or second client will share the same repository. Use HTTP for normal Frigg use.
+Use stdio only when one local MCP client should launch Frigg directly and no subagent or second client will share the same repository. Use HTTP for normal Frigg use. Stdio is a **valid different contract**, not broken product: when watch is off, treat post-edit freshness via path-scoped live reads — do not blame ranking or hybrid for stdio-without-watch staleness. Managed `frigg adopt` MCP entries are **HTTP only** (never stdio `command` spawn).
 
 For HTTP shared-service mode, run:
 

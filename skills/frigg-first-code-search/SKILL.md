@@ -16,7 +16,17 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
 
 Harness-specific MCP registration or tool-order flukes (for example one-off Grok schema/cache issues) are **outside Frigg's product contract**. Route indexed source through Frigg when the live tool list exposes Frigg tools; do not invent product workarounds for host quirks.
 
-**HTTP-first runtime:** prefer loopback HTTP for shared and long-running work. Stdio is for one local client that owns the process. Adoption, watch freshness, and cache reuse are HTTP-first behaviors.
+**Transport contract (dual mode — hosts choose; Frigg does not force one):**
+
+| Mode | When | Freshness contract |
+| --- | --- | --- |
+| **Loopback HTTP** (`frigg serve`, default adopt MCP URL) | Shared / long-running / multi-client / subagents | **Full freshness** assumes HTTP + watch leases: adoption, hot-path refresh, shared caches |
+| **Stdio** (client spawns `frigg`) | One local client that owns the process | **Valid, different contract** — often watch off / no multi-session; not “broken Frigg” |
+
+- Managed adopt configs emit **HTTP** (`type: http`, `http://127.0.0.1:37444/mcp`). Keep `frigg serve` running for those clients.
+- Do **not** claim full post-edit watch freshness on stdio when `runtime.watch_status.reason=mode_off` / `no_lease`. Use path-scoped live-disk or wait only if watch is actually on.
+- Do **not** blame ranking, hybrid, or search quality for staleness that is really stdio-without-watch / multi-process stdio races.
+- Stdio is not second-class or deprecated; it is the right shape for a single ephemeral client. Prefer HTTP as soon as a second client or subagent shares the repo.
 
 Deep parameter encyclopedias live under [references/](references/) — use them after you pick a scenario. **This top screen is enough to route.**
 
@@ -102,6 +112,8 @@ BAD: throwaway shell rg on indexed src when Frigg is attached
 BAD: calling tools only in a stale schema cache, not in live tools/list
 BAD: invent workspace_index / workspace_reindex / deep_search from source or host descriptors
 BAD: treat search_batch as one cheap multi-pattern scan / expect early-exit across probes
+BAD: blame ranking/hybrid for staleness when watch is mode_off (often stdio Auto) without checking transport/watch
+BAD: spawn multiple stdio Frigg processes against one repo and expect shared HTTP-style freshness
 ```
 
 ---
@@ -387,6 +399,8 @@ Agent health decision tree (branch here only — not full scorecards):
   3. optional lexical_ready / semantic_ready — never promote SCIP generator install mid-task
   4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / debouncing / refreshing / active);
      optional refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms (dual-class only — no third queue)
+  5. Transport: mode_off / no_lease on stdio is a **different contract**, not a ranking bug —
+     path-scoped live-disk or switch to HTTP+serve for shared freshness; do not invent reindex tools
 
 recommended_action=reindex means index substrate not Ready:
   - NOT a public MCP tool (tools/list has no reindex / workspace_reindex)
@@ -438,6 +452,8 @@ Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or
      - reason: mode_off / no_lease / debouncing / refreshing / active
      - refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms when present
        (dual-class manifest_fast + semantic_followup only — there is no agent_hot third queue)
+     - mode_off / no_lease: **not** full HTTP+watch freshness — use path-scoped live reads for
+       touched paths; prefer loopback HTTP + `frigg serve` if multi-client post-edit freshness matters
      - high dirty count or rising age_ms → prefer path-scoped live reads on **touched** paths
        over busy-wait; low depth + debouncing/refreshing → brief wait then re-check workspace
      - do not "verify" with whole-repo rg or invent micro-retry loops
