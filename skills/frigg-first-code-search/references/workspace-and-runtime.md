@@ -90,5 +90,5 @@ For explicit semantic troubleshooting only, inspect `workspace.runtime`.
   - **HTTP** (`frigg serve`, adopt-managed `type: http` → `http://127.0.0.1:37444/mcp`): full freshness contract — watch leases, shared caches, multi-client attach.
   - **Stdio** (client spawns `frigg`): valid single-client/ephemeral contract; transport default is **`WatchMode::Off`** (often `watch_status.reason=mode_off`). Explicit Auto/On can enable watch on stdio. Not broken product — do not claim HTTP-style post-edit freshness or blame ranking for stdio-without-watch staleness. Use `runtime.profile` + `watch_status` together.
   - Prefer HTTP as soon as a second client or subagent shares the repo. Managed adopt **writes** HTTP MCP server entries (`type: http`); hand-written stdio `command` entries stay diverged unless `--force`.
-- Harness-specific MCP registration/schema flukes are outside Frigg's product contract; trust `runtime.tools_exposed` / live `tools/list` over stale host schema caches.
+- Harness-specific MCP registration/schema flukes and tool-order preferences are outside Frigg's product contract; trust `runtime.tools_exposed` / live `tools/list` over stale host schema caches. Subagent bridge failures are harness reliability, not search bugs.
 - Use CLI `frigg index` only intentionally, usually when you explicitly want to refresh repository-derived data.

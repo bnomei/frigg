@@ -14,7 +14,13 @@ Shell tools are fallback only for git state and diffs, non-code files, build/tes
 
 Do not run parallel shell grep in the same turn as Frigg search on indexed source.
 
-Harness-specific MCP registration or tool-order flukes (for example one-off Grok schema/cache issues) are **outside Frigg's product contract**. Route indexed source through Frigg when the live tool list exposes Frigg tools; do not invent product workarounds for host quirks.
+**Harness boundary (Frigg is an evidence layer, not an agent OS):**
+
+- Host tool order, Grep-first defaults, and intermittent MCP bridges are **outside** Frigg product code.
+- When the bridge is down or tools are unregistered, that is **harness reliability**, not ranking quality.
+- Soft PreToolUse / adopt hooks are **opt-in** (not guaranteed Frigg-first).
+- Do **not** invent product hacks (fake Grep, hide host tools, force MCP tool order).
+- Route indexed source through Frigg when the live tool list exposes Frigg tools; progressive disclosure on this top screen is intentional (30-second rule).
 
 **Transport contract (dual mode — hosts choose; Frigg does not force one):**
 
@@ -116,6 +122,7 @@ BAD: blame ranking/hybrid for staleness when watch is mode_off (often default st
 BAD: spawn multiple stdio Frigg processes against one repo and expect shared HTTP-style freshness
 BAD: invent compose_evidence_packet / sealed evidence MCP tools — packets are skill-assembled
 BAD: invent review_bundle / bug_trace_bundle / citation-service tools — impact_bundle is the composition template
+BAD: invent product tool-order hacks or blame Frigg ranking when host Grep wins / MCP bridge is flaky
 ```
 
 ---
