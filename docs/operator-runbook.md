@@ -70,24 +70,23 @@ Curated embedding-model defaults and storage contract facts live on the MCP poli
 
 | Preset id | Expands to | Notes |
 | --- | --- | --- |
-| `offline-small` | `local` + `all-MiniLM-L6-v2` | Zero-cloud **offline_smoke** MiniLM (not code SOTA); still need `FRIGG_SEMANTIC_RUNTIME_ENABLED=true` |
+| `offline-small` | `local` + `all-MiniLM-L6-v2` | Zero-cloud **offline_smoke** MiniLM; still need `FRIGG_SEMANTIC_RUNTIME_ENABLED=true` |
 | `cloud-openai` | `openai` + `text-embedding-3-small` | Requires `OPENAI_API_KEY` |
-| `cloud-google` | `google` + `gemini-embedding-001` | **Credential peer** when `GEMINI_API_KEY` already present (not preferred-quality default) |
+| `cloud-google` | `google` + `gemini-embedding-001` | **Credential peer** when `GEMINI_API_KEY` already present (not preferred cloud default) |
 | `openai-compat-selfhost` | `openai_compat` + endpoint + model | Requires full embeddings URL + `FRIGG_OPENAI_COMPAT_API_KEY` |
 
 - Preset `id` is **documentation** (`cli_alias: false`). Set provider+model env/config from `expands_to`. Storage partition identity remains **provider + model strings**, never the preset id alone.
 - **Not** CLI flags (B deferred). **Not** brand embedding vendors like Voyage/Cohere (deferred). **Not** auto local-vs-cloud by key presence (E rejected).
-- **`quality_scores: unbenchmarked`** — not a CI leaderboard
+- **`quality_scores: curated`** — defaults and contract facts. Early multi-repo playbook validation informed defaults; Frigg does not ship a retained public embedding scoreboard.
 - Semantic runtime stays **off by default**; when enabled without a cloud provider, Frigg uses local MiniLM
 
-### Local MiniLM quality (`offline_smoke`)
+### Local MiniLM role (`offline_smoke`)
 
 | Fact | Guidance |
 | --- | --- |
-| Role | Default **offline smoke** accelerator when semantic is enabled without keys |
-| Not SOTA | Do **not** treat MiniLM as code-retrieval quality equivalent to cloud or code-specialized models |
+| Role | Default **offline smoke** / zero-key accelerator when semantic is enabled without keys |
+| Model class | General-purpose MiniLM — not a code-specialized embedder; still useful for offline semantic |
 | Agent loop | Hybrid with MiniLM still requires exact `search_text` / `search_symbol` pivots before proof |
-| Ranking first | Prefer ranking/chunk improvements over larger local models until eval shows candidate-set misses |
 | Embed envelope | Index-time documents get `path:` + `language:` headers; pure source stays in stored `content_text` for excerpts. Template bumps re-hash chunks → run a **full** `frigg index` (not changed-only) so partitions do not mix old/new envelopes |
 
 Catalog: `quality_tier: offline_smoke` on `local-minilm-l6-v2` / preset `offline-small` in `frigg://policy/semantic-models.json`.
@@ -97,11 +96,11 @@ Catalog: `quality_tier: offline_smoke` on `local-minilm-l6-v2` / preset `offline
 | Fact | Guidance |
 | --- | --- |
 | Role | Supported **credential-ecosystem peer** when `GEMINI_API_KEY` is already available |
-| Not preferred quality | Do **not** promote Gemini embeddings as the default cloud quality leader without hybrid-next scoreboard anchors |
-| When to choose | Gemini-centric shops / existing Gemini keys — “bring your key,” not “switch for better code vectors” |
+| Positioning | Bring-your-key peer — not Frigg’s preferred cloud default over OpenAI |
+| When to choose | Gemini-centric shops / existing Gemini keys |
 | When not | OpenAI-only hosts: leave `provider=openai` or `local`; multi-key is never required |
 | Client | Keep task types + batch + `output_dimensionality` (already first-class); Vertex enterprise path deferred |
-| Quality | `quality_scores: unbenchmarked` — same honesty bar as other cloud models |
+| Catalog quality | Same **curated** bar as other cloud models (no public leaderboard rows) |
 
 Catalog: `quality_tier: credential_peer` on `google-gemini-embedding-001` / preset `cloud-google`.
 

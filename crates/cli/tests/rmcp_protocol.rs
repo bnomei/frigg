@@ -154,8 +154,8 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
         "semantic models should contain the expected policy schema"
     );
     assert!(
-        text.contains("\"quality_scores\": \"unbenchmarked\""),
-        "semantic models must not pretend live quality metrics"
+        text.contains("\"quality_scores\": \"curated\""),
+        "semantic models must use curated catalog quality, not a live leaderboard"
     );
 
     let replacement_map = client

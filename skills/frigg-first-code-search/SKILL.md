@@ -266,7 +266,7 @@ GOOD: lexical_only ranking_note → still Frigg exact tools; semantic is opt-in 
 
 **Semantic default (product):** runtime semantic is **off** unless the operator enables it. Hybrid without semantic is intentional (lexical + graph), not a broken server. Compact does **not** dump `semantic_status` / long readiness warnings — the mode cliff is only the short `ranking_note` token. Full `response_mode` keeps diagnostics for operators.
 
-**Local MiniLM (`provider=local`, preset `offline-small`):** **offline smoke** only — not code-retrieval SOTA. `semantic_status: ok` with MiniLM does **not** mean product/NL phrases map well to APIs. Always pivot hybrid → exact `search_text` / `search_symbol` before proof. Prefer cloud / `openai_compat` when operators care about semantic quality; do not chase “better hybrid rank-1” under MiniLM alone.
+**Local MiniLM (`provider=local`, preset `offline-small`):** **offline smoke** / zero-key general embedder — not a code-specialized model. `semantic_status: ok` means vectors ran; still pivot hybrid → exact `search_text` / `search_symbol` before proof. Prefer cloud / `openai_compat` when you want a stronger semantic channel; do not chase “better hybrid rank-1” under MiniLM alone.
 
 **Google Gemini (`provider=google`, preset `cloud-google`):** **credential peer** — use when `GEMINI_API_KEY` is already present. Not an unmeasured “best cloud for code” default over OpenAI. OpenAI-only sessions need not configure Google.
 
@@ -776,4 +776,4 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list` / `runtime.tools_exposed`
 - Live machine surface (not inventory freezes): MCP `frigg://policy/tool-surface.json`
 - Evidence packet schema (skill composition only): MCP `frigg://policy/evidence-packet.json`
-- Embedding model defaults / pad / offline facts + soft presets (`offline-small` = MiniLM **offline_smoke**; `cloud-google` = Gemini **credential_peer**; `cloud-openai` / `openai-compat-selfhost`) — not quality leaderboard; not CLI aliases: MCP `frigg://policy/semantic-models.json`
+- Embedding model defaults / pad / offline facts + soft presets (`offline-small` = MiniLM **offline_smoke**; `cloud-google` = Gemini **credential_peer**; `cloud-openai` / `openai-compat-selfhost`) — curated catalog (no public leaderboard); not CLI aliases: MCP `frigg://policy/semantic-models.json`
