@@ -23,6 +23,8 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check release workflow checkout contract
+        run: bash scripts/test-release-workflow.sh
 
   clippy:
     name: Clippy Check

@@ -19,8 +19,48 @@ env:
   BIN_NAME: frigg
 
 jobs:
+  release_ref:
+    name: Resolve release ref
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.release_ref.outputs.sha }}
+      tag: ${{ steps.release_ref.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate release ref
+        id: release_ref
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          if [[ "$RELEASE_TAG" != v* ]]; then
+            echo "Release tag must start with v: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          tag_ref="refs/tags/${RELEASE_TAG}"
+          if ! git show-ref --verify --quiet "$tag_ref"; then
+            echo "Release tag does not exist: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          tag_sha="$(git rev-parse "${tag_ref}^{commit}")"
+          head_sha="$(git rev-parse HEAD)"
+          if [[ "$head_sha" != "$tag_sha" ]]; then
+            echo "Checked out commit $head_sha does not match $RELEASE_TAG ($tag_sha)" >&2
+            exit 1
+          fi
+
+          echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: release_ref
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -49,6 +89,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release_ref.outputs.sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -71,7 +113,7 @@ jobs:
         id: version
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.release_ref.outputs.tag }}
         run: scripts/resolve-version.sh
 
       - name: Build (unix)
@@ -110,21 +152,23 @@ jobs:
       - name: Upload GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.release_ref.outputs.tag }}
           files: dist/*
 
   container:
     name: Publish container image
-    needs: build
+    needs: [release_ref, build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release_ref.outputs.sha }}
 
       - name: Resolve version
         id: version
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.release_ref.outputs.tag }}
         run: scripts/resolve-version.sh
 
       - name: Resolve image name
@@ -194,18 +238,20 @@ jobs:
 
   npm:
     name: Publish npm wrapper
-    needs: build
+    needs: [release_ref, build]
     runs-on: ubuntu-24.04
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release_ref.outputs.sha }}
 
       - name: Resolve version
         id: version
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.release_ref.outputs.tag }}
         run: scripts/resolve-version.sh
 
       - name: Set up Node
