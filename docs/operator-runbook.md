@@ -77,6 +77,24 @@ If the failure cause is `database is locked`, another Frigg process, test, or st
 
 Turn watch mode off with `--watch-mode off` when an external watcher already maintains Frigg state, to avoid duplicate refresh work.
 
+## MCP registration vs Frigg product faults (FUT-003)
+
+Classify before filing a Frigg product bug:
+
+| Symptom | Class | Owner | Operator action |
+| --- | --- | --- | --- |
+| `Tool not found: frigg__…` / Frigg absent from live `tools/list` in a Task/subagent while parent works | **Harness MCP registration / inheritance** | Host harness (Claude Task, Cursor agent, etc.) | Re-probe live tools on the child spawn; shell/Grep fallback is correct for that spawn; fix host MCP inheritance or connect child to HTTP `frigg serve` if the host supports it. **Not** a ranking, hybrid, or index bug. |
+| Schema/descriptor files under host `mcps/frigg/tools/` exist but agent cannot call Frigg | Same — **schema on disk ≠ runtime registration** | Host | Do not treat descriptors as proof Frigg is live; re-check `tools/list`. |
+| HTTP connect refused / timeout to `127.0.0.1:37444/mcp` | Transport / process | Operator | Start `frigg serve`; verify port and adopt MCP URL. |
+| Frigg tools present; weak/wrong hits | Search / index / ranking | Frigg product | Use this runbook’s workspace, semantic, and precise sections. |
+| Grep-first while Frigg tools are registered | Host tool-order preference | Host / soft policy | Soft hooks and skill only; Frigg does not hide Grep (see harness policy pack). |
+
+**Wontfix product (FUT-003):** Guaranteeing third-party subagent MCP inheritance, controlling built-in Grep order, or failing Frigg CI because a host Task tool flaked.
+
+**When multi-client work matters:** Prefer loopback HTTP + `frigg serve` so registered clients share one runtime. Shared HTTP does **not** create registration on a child that never received Frigg tools.
+
+Agents should **probe-on-spawn** (skill language): verify Frigg on the live tool surface for *this* Task/subagent before claiming Frigg-first compliance.
+
 ## Quick diagnosis map
 
 - Search results are stale: inspect `workspace_current`, then attach with `index_mode=ensure`; if lifecycle is `refreshing`, `refresh_queued`, or `timeout`, wait or run `workspace_index`.
@@ -84,3 +102,4 @@ Turn watch mode off with `--watch-mode off` when an external watcher already mai
 - Definition/reference jumps are incomplete: inspect `workspace_current.precise` and `health.precise_ingest`. `partial` means verify hits and fill missing SCIP coverage if needed.
 - Precise tools fail outright: inspect `failure_class` and `recommended_action`, then install tools, fix environment, or rerun reindex.
 - Watch does not appear current: check whether the repository is adopted by an active session, then inspect logs for retry-scheduled messages and the configured retry/debounce intervals.
+- `Tool not found` / Frigg missing only on Task children: see **MCP registration vs Frigg product faults** above — harness inheritance, not search quality.

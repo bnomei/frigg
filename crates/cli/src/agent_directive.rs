@@ -306,10 +306,19 @@ mod tests {
             "workspace_attach",
             "workspace_reindex",
             "deep_search",
+            "bridge_health",
+            "subagent_mcp_status",
         ] {
             assert!(
                 !PUBLIC_TOOL_NAMES.contains(&phantom),
                 "phantom `{phantom}` must stay off PUBLIC_TOOL_NAMES"
+            );
+        }
+        // Registration-bridge inventions must stay named in skill BAD/harness prose.
+        for bridge_phantom in ["bridge_health", "subagent_mcp_status"] {
+            assert!(
+                skill.contains(bridge_phantom),
+                "skill should name rejected `{bridge_phantom}` so agents do not invent it"
             );
         }
     }

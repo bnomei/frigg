@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Skill + operator runbook: probe-on-spawn for Task/subagent Frigg registration; classify `Tool not found: frigg__*` as harness inheritance (FUT-003), not ranking/product P0.
 - Soft PreToolUse `HOOK_NUDGE` teaches preferred Frigg next steps (`search_text` / `search_batch` / …) while remaining soft-only (no `permissionDecision` deny; no strict mode).
 - Adopt: best-effort `--skill-provider {claude,codex,cursor,copilot}` copies `frigg-first-code-search` only when the host parent skills directory already exists (never creates `…/skills`).
 - Adopt: dropped `gemini-md` target; kept `copilot` for CI and expanded host notes (install triangle + Cursor MCP/hooks guidance).
