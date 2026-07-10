@@ -151,7 +151,10 @@ async fn search_hybrid_compact_includes_discovery_pivots() {
 
     assert_eq!(
         response.ranking_note.as_deref(),
-        Some("discovery_only; confirm with exact search")
+        Some(
+            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+        ),
+        "semantic:false → lexical_only ranking_note (mode cliff, not readiness dump)"
     );
     assert!(
         !response.recovery.suggested_next.is_empty() || response.ranking_note.is_some(),

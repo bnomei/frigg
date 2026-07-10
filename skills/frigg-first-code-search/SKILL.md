@@ -243,21 +243,27 @@ search_symbol: catalog_entries    path_class=runtime
 | **Fallback** | Skip hybrid if a likely symbol/string is already known. Never shell-grep as the precision layer after hybrid |
 | **Proof** | Exact search, then `read_match` / `read_file` |
 | **Done** | Never answer from hybrid rank-1 alone; exact Frigg evidence present |
-| **Product support** | Compact pivots, `ranking_note`, `best_pivot_path`, `suggested_next`; semantic model/pad facts on `frigg://policy/semantic-models.json` (quality unbenchmarked; optional accelerator only) |
+| **Product support** | Compact pivots, `ranking_note`, `best_pivot_path`, `suggested_next`; semantic is **opt-in** (product default off) — optional accelerator only |
 
 ```text
 1. search_hybrid("<user question>")
-2. Do NOT answer from rank #1 alone
-3. If suggested_next[] → run those; else extract nouns → search_symbol → scoped search_text
-4. read_match / read_file for proof
+2. Read ranking_note (always-on in compact):
+   - "discovery_only; confirm with exact search" → multi-channel hybrid; still never proof from rank-1
+   - "discovery_only; lexical_only (semantic not contributing); …" → product default / semantic off /
+     empty semantic channel — hybrid is still valid (lexical+graph); pivot sooner to exact tools
+3. Do NOT answer from rank #1 alone
+4. If suggested_next[] → run those; else extract nouns → search_symbol → scoped search_text
+5. read_match / read_file for proof
 ```
 
 ```text
 BAD:  search_hybrid → read_file(first hit) → answer
+BAD:  ranking_note has lexical_only → abandon Frigg for shell rg
 GOOD: search_hybrid → search_symbol/search_text → read_match
+GOOD: lexical_only ranking_note → still Frigg exact tools; semantic is opt-in upgrade
 ```
 
-If full mode shows `lexical_only_mode` or weak ranking → pivot to exact tools immediately.
+**Semantic default (product):** runtime semantic is **off** unless the operator enables it. Hybrid without semantic is intentional (lexical + graph), not a broken server. Compact does **not** dump `semantic_status` / long readiness warnings — the mode cliff is only the short `ranking_note` token. Full `response_mode` keeps diagnostics for operators.
 
 Prefer `suggested_next` identifiers after hybrid (short symbol/text queries); do not paste the original natural-language question into `search_symbol`.
 
@@ -714,7 +720,9 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 - `result_handle` + `match_id` → `read_match` (**same call only**; scoped ids like `search:m1`).
 - Text-first `read_file` / `read_match` / `explore(zoom)`: no line prefixes in text mode.
 - `presentation_mode=json` when you need `start_line`, `end_line`, bytes, or machine-readable fields.
-- Hybrid compact may omit rich scores — pivot to exact tools; do not grep.
+- Hybrid compact may omit rich scores and semantic readiness dumps — still read `ranking_note`:
+  - `lexical_only (semantic not contributing)` means mode cliff (default-off or empty semantic), not “Frigg failed”
+  - Pivot to exact tools; do not shell-grep indexed source
 - Prefer `latency_class` guidance when present (`hot` / `warm` / `cold`); do not use shell as a latency strategy on indexed source.
 
 ---

@@ -1302,14 +1302,16 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .expect("compact search_hybrid should succeed")
         .0;
 
-    // Compact must not surface semantic readiness (warning / lexical_only) to agents.
+    // Compact must not dump readiness metadata; mode cliff lives only in ranking_note.
     assert!(
         response.metadata.is_none(),
         "compact search_hybrid without context_efficiency should omit metadata when semantic is off"
     );
     assert_eq!(
         response.ranking_note.as_deref(),
-        Some("discovery_only; confirm with exact search")
+        Some(
+            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+        )
     );
     assert!(
         !response.recovery.suggested_next.is_empty(),
@@ -1364,7 +1366,9 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
     );
     assert_eq!(
         explicit_false.ranking_note.as_deref(),
-        Some("discovery_only; confirm with exact search")
+        Some(
+            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+        )
     );
 }
 
@@ -1414,11 +1418,14 @@ async fn core_search_hybrid_compact_hides_semantic_readiness_while_full_keeps_it
         .0;
     assert!(
         compact.metadata.is_none(),
-        "compact search_hybrid must omit readiness metadata so agents stay unaware of semantic warm-up/off"
+        "compact search_hybrid must omit readiness metadata dump (status/warnings/hit counts)"
     );
     assert_eq!(
         compact.ranking_note.as_deref(),
-        Some("discovery_only; confirm with exact search")
+        Some(
+            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+        ),
+        "compact must still signal lexical-only via ranking_note when semantic is off"
     );
     assert!(
         !compact.matches.is_empty() || full.matches.is_empty(),
@@ -1739,11 +1746,13 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
 
     assert!(
         compact.metadata.is_none(),
-        "compact search_hybrid must not surface lexical_only_mode or readiness warnings"
+        "compact search_hybrid must not surface lexical_only_mode field or readiness warnings in metadata"
     );
     assert_eq!(
         compact.ranking_note.as_deref(),
-        Some("discovery_only; confirm with exact search")
+        Some(
+            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+        )
     );
     assert_eq!(compact.matches[0].path, "src/lib.rs");
     assert_eq!(

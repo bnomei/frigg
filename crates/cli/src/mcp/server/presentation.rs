@@ -787,10 +787,21 @@ impl FriggMcpServer {
                 crate::mcp::types::LatencyClass::Cold
             });
         }
-        // Compact discovery pivots — always present; never treat hybrid as proof.
-        if response.ranking_note.is_none() {
-            response.ranking_note = Some("discovery_only; confirm with exact search".to_owned());
-        }
+        // Always-on discovery contract (compact + full). EXP-semantic-default A:
+        // product default is semantic-off; compact strips readiness dumps but must
+        // not hide lexical-only mode. Encode the cliff in short ranking_note only —
+        // do not re-open long metadata.warning / semantic_status in compact.
+        let lexical_only = response
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.lexical_only_mode)
+            .unwrap_or(false);
+        response.ranking_note = Some(if lexical_only {
+            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+                .to_owned()
+        } else {
+            "discovery_only; confirm with exact search".to_owned()
+        });
         if response.best_pivot_path.is_none() {
             response.best_pivot_path = response
                 .metadata
@@ -836,8 +847,9 @@ impl FriggMcpServer {
             crate::mcp::routing_stats::record_recovery_issued();
         }
         if !Self::should_return_full_response(response_mode) {
-            // Agent compact must not surface semantic readiness (disabled / unavailable /
-            // degraded / lexical-only). Full mode keeps warnings and channel health.
+            // Agent compact must not dump semantic readiness telemetry (status, hit
+            // counts, long warnings). Mode cliff is already in ranking_note above.
+            // Full mode keeps warnings and channel health for operators/debug.
             // Compact keeps metadata only when context_efficiency was explicitly requested.
             response.metadata = response.metadata.and_then(|mut metadata| {
                 let context_efficiency = metadata.context_efficiency.take();
@@ -1554,6 +1566,118 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_compact_ranking_note_signals_lexical_only_without_metadata_dump() {
+        use crate::mcp::types::{ResponseMode, SearchHybridMetadata};
+
+        let server = presentation_test_server();
+        let with_lexical_only = server.present_search_hybrid_response(
+            SearchHybridResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                ranking_note: Some("discovery_only; confirm with exact search".to_owned()),
+                best_pivot_path: None,
+                latency_class: None,
+                metadata: Some(SearchHybridMetadata {
+                    channels: BTreeMap::new(),
+                    lexical_backend: None,
+                    lexical_backend_note: None,
+                    semantic_requested: Some(false),
+                    semantic_enabled: Some(false),
+                    semantic_status: None,
+                    semantic_reason: None,
+                    semantic_candidate_count: None,
+                    semantic_hit_count: None,
+                    semantic_match_count: None,
+                    lexical_only_mode: Some(true),
+                    query_shape: None,
+                    warning: Some(
+                        "semantic retrieval is disabled; results are ranked from lexical and graph signals only"
+                            .to_owned(),
+                    ),
+                    exact_pivot_assistance: None,
+                    witness_demotion_applied: None,
+                    diagnostics_count: 0,
+                    diagnostics: crate::mcp::types::SearchHybridDiagnosticsSummary {
+                        walk: 0,
+                        read: 0,
+                        total: 0,
+                    },
+                    stage_attribution: None,
+                    semantic_capability: None,
+                    utility: None,
+                    context_efficiency: None,
+                    cache_debug: None,
+                }),
+                recovery: RecoveryFields::default(),
+            },
+            Some(ResponseMode::Compact),
+            Some("where is catalog"),
+        );
+        assert_eq!(
+            with_lexical_only.ranking_note.as_deref(),
+            Some(
+                "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+            ),
+            "compact must surface lexical-only mode via ranking_note"
+        );
+        assert!(
+            with_lexical_only.metadata.is_none(),
+            "compact must still strip readiness metadata dump: {:?}",
+            with_lexical_only.metadata
+        );
+
+        let multi_channel = server.present_search_hybrid_response(
+            SearchHybridResponse {
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                ranking_note: None,
+                best_pivot_path: None,
+                latency_class: None,
+                metadata: Some(SearchHybridMetadata {
+                    channels: BTreeMap::new(),
+                    lexical_backend: None,
+                    lexical_backend_note: None,
+                    semantic_requested: Some(true),
+                    semantic_enabled: Some(true),
+                    semantic_status: None,
+                    semantic_reason: None,
+                    semantic_candidate_count: None,
+                    semantic_hit_count: Some(3),
+                    semantic_match_count: Some(2),
+                    lexical_only_mode: Some(false),
+                    query_shape: None,
+                    warning: None,
+                    exact_pivot_assistance: None,
+                    witness_demotion_applied: None,
+                    diagnostics_count: 0,
+                    diagnostics: crate::mcp::types::SearchHybridDiagnosticsSummary {
+                        walk: 0,
+                        read: 0,
+                        total: 0,
+                    },
+                    stage_attribution: None,
+                    semantic_capability: None,
+                    utility: None,
+                    context_efficiency: None,
+                    cache_debug: None,
+                }),
+                recovery: RecoveryFields::default(),
+            },
+            Some(ResponseMode::Compact),
+            Some("where is catalog"),
+        );
+        assert_eq!(
+            multi_channel.ranking_note.as_deref(),
+            Some("discovery_only; confirm with exact search"),
+            "when semantic contributes, ranking_note stays the short discovery form"
+        );
+    }
+
+    #[test]
     fn hybrid_and_symbol_zero_hit_include_recovery() {
         let server = presentation_test_server();
         let hybrid = server.present_search_hybrid_response(
@@ -1572,6 +1696,11 @@ mod tests {
             Some("where is catalog"),
         );
         assert!(!hybrid.recovery.is_empty());
+        assert_eq!(
+            hybrid.ranking_note.as_deref(),
+            Some("discovery_only; confirm with exact search"),
+            "no metadata → no lexical_only signal"
+        );
         let hybrid_value = serde_json::to_value(&hybrid).expect("serialize hybrid");
         assert!(hybrid_value.get("zero_hit_reason").is_some());
         assert!(

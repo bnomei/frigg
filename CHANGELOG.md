@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Hybrid compact `ranking_note` signals `lexical_only (semantic not contributing)` when semantic is off or empty (product default remains semantic-off; no readiness metadata dump in compact).
 - MCP policy resource `frigg://policy/semantic-models.json`: curated embedding-model catalog (defaults, dims, pad, offline, credentials; quality unbenchmarked) plus soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`) that expand to provider+model (not CLI aliases).
 - Skill + operator runbook: probe-on-spawn for Task/subagent Frigg registration; classify `Tool not found: frigg__*` as harness inheritance (FUT-003), not ranking/product P0.
 - Soft PreToolUse `HOOK_NUDGE` teaches preferred Frigg next steps (`search_text` / `search_batch` / …) while remaining soft-only (no `permissionDecision` deny; no strict mode).

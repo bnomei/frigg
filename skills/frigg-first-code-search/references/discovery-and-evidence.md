@@ -89,7 +89,8 @@ Full-mode diagnostics, only when needed:
 
 Interpretation rules:
 - direct exact string, regex, or known symbol query: start with `search_text` or `search_symbol` instead of `search_hybrid`
-- if full-mode diagnostics show ranking notes or `lexical_only_mode = true`, treat matches as candidate pivots and move to `search_symbol`, `search_text`, `read_file`, or navigation sooner
+- compact `ranking_note` containing `lexical_only (semantic not contributing)` (product semantic default is off) → treat matches as candidate pivots and move to `search_symbol` / `search_text` / `read_file` sooner; do not abandon Frigg for shell
+- if full-mode diagnostics show `lexical_only_mode = true` or weak ranking, same pivot rule
 - `utility.best_pivot_*`: good hint for the first file to open next
 
 Typical next move:
