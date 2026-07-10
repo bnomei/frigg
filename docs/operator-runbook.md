@@ -30,14 +30,24 @@ This runbook describes the runtime states operators are most likely to see while
 
 Use `workspace_prepare` or `workspace_index` only when you intentionally want to initialize or refresh Frigg state from a client. These tools are confirm-gated because they operate on ignored `.frigg/` state.
 
-## Semantic models (scoreboard)
+## Semantic models (catalog + presets)
 
 Curated embedding-model defaults and storage contract facts live on the MCP policy resource:
 
 - URI: `frigg://policy/semantic-models.json` (`schema_id: frigg.policy.semantic_models.v1`)
 - Peer to language tiers at `frigg://policy/support-matrix.json` (do not confuse the two axes)
-- Includes: provider defaults, native dims, pad-to-projection (store width 1536), offline?, credential env, `reindex_on_change`, known limits
-- **`quality_scores: unbenchmarked`** — not a CI leaderboard; do not treat rows as measured ranking quality
+- **models[]**: provider defaults, native dims, pad-to-projection (store width 1536), offline?, credential env, `reindex_on_change`, known limits
+- **presets[]** (soft intent aliases only — EXP-code-presets C):
+
+| Preset id | Expands to | Notes |
+| --- | --- | --- |
+| `offline-small` | `local` + `all-MiniLM-L6-v2` | Zero-cloud; still need `FRIGG_SEMANTIC_RUNTIME_ENABLED=true` |
+| `cloud-openai` | `openai` + `text-embedding-3-small` | Requires `OPENAI_API_KEY` |
+| `cloud-google` | `google` + `gemini-embedding-001` | Requires `GEMINI_API_KEY` |
+
+- Preset `id` is **documentation** (`cli_alias: false`). Set provider+model env/config from `expands_to`. Storage partition identity remains **provider + model strings**, never the preset id alone.
+- **Not** CLI flags (B deferred). **Not** new embedding brands (D deferred). **Not** auto local-vs-cloud by key presence (E rejected).
+- **`quality_scores: unbenchmarked`** — not a CI leaderboard
 - Semantic runtime stays **off by default**; when enabled without a cloud provider, Frigg uses local MiniLM
 
 After changing provider or model, run `frigg index` for a semantic pass.

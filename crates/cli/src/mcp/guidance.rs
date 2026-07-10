@@ -170,13 +170,92 @@ fn semantic_models_json() -> String {
                 ]
             }
         ],
-        "presets": [],
-        "presets_note": "Optional alias table deferred (EXP-code-presets). Use provider+model env flags today.",
+        "presets": [
+            {
+                "id": "offline-small",
+                "intent": "Zero-cloud local semantic when you enable the accelerator without API keys",
+                "provider": "local",
+                "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
+                "model_id": "local-minilm-l6-v2",
+                "quality": "unbenchmarked",
+                "cli_alias": false,
+                "expands_to": {
+                    "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
+                    "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "local",
+                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_LOCAL_EMBEDDING_MODEL
+                },
+                "storage_keys": {
+                    "provider": "local",
+                    "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
+                    "note": "Partition identity is always provider+model strings — never the preset id alone"
+                },
+                "failure_modes": [
+                    "Semantic still off by product default until FRIGG_SEMANTIC_RUNTIME_ENABLED=true",
+                    "Local model prepare failure at startup (cache / HF artifacts)",
+                    "Weak product-phrase → API mapping; still pivot hybrid to search_text / search_symbol",
+                    "Changing model later requires frigg index semantic pass (reindex_on_change)"
+                ]
+            },
+            {
+                "id": "cloud-openai",
+                "intent": "Cloud OpenAI embeddings when OPENAI_API_KEY is available",
+                "provider": "openai",
+                "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
+                "model_id": "openai-text-embedding-3-small",
+                "quality": "unbenchmarked",
+                "cli_alias": false,
+                "expands_to": {
+                    "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
+                    "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "openai",
+                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_OPENAI_EMBEDDING_MODEL,
+                    "OPENAI_API_KEY": "<required>"
+                },
+                "storage_keys": {
+                    "provider": "openai",
+                    "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
+                    "note": "Partition identity is always provider+model strings — never the preset id alone"
+                },
+                "failure_modes": [
+                    "Missing or empty OPENAI_API_KEY (fail-fast at semantic startup)",
+                    "Network / provider outage → semantic degraded; lexical/graph still work",
+                    "Cloud embeddings leave the machine (use offline-small for zero-cloud)",
+                    "Changing model later requires frigg index semantic pass (reindex_on_change)"
+                ]
+            },
+            {
+                "id": "cloud-google",
+                "intent": "Cloud Google embeddings when GEMINI_API_KEY is available",
+                "provider": "google",
+                "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
+                "model_id": "google-gemini-embedding-001",
+                "quality": "unbenchmarked",
+                "cli_alias": false,
+                "expands_to": {
+                    "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
+                    "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "google",
+                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_GOOGLE_EMBEDDING_MODEL,
+                    "GEMINI_API_KEY": "<required>"
+                },
+                "storage_keys": {
+                    "provider": "google",
+                    "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
+                    "note": "Partition identity is always provider+model strings — never the preset id alone"
+                },
+                "failure_modes": [
+                    "Missing or empty GEMINI_API_KEY (fail-fast at semantic startup)",
+                    "Network / provider outage → semantic degraded; lexical/graph still work",
+                    "Frigg requests output_dimensionality = projection_dimensions for this model",
+                    "Changing model later requires frigg index semantic pass (reindex_on_change)"
+                ]
+            }
+        ],
+        "presets_note": "Soft intent aliases over models[] only (EXP-code-presets C). Not CLI flags (B deferred). Not new providers (D deferred). Not auto local-vs-cloud by key presence (E rejected). Set provider+model env/config explicitly; preset id is documentation only.",
         "guidance": [
             "Semantic is optional acceleration — never the sole grounding layer for code claims",
             "After hybrid, pivot to exact search_text / search_symbol before answering",
             "After changing provider or model, run frigg index for a semantic pass",
-            "Do not invent unlisted providers from this catalog"
+            "Do not invent unlisted providers or treat preset id as a storage partition key",
+            "Prefer presets for intent (offline vs cloud); always apply expands_to provider+model strings"
         ]
     }))
     .expect("semantic models JSON should serialize")
@@ -673,12 +752,6 @@ mod tests {
         assert_eq!(parsed["quality_scores"], json!("unbenchmarked"));
         assert_eq!(parsed["semantic_default"]["enabled"], json!(false));
         assert_eq!(parsed["reindex_on_change"], json!(true));
-        assert!(
-            parsed["presets"]
-                .as_array()
-                .is_some_and(|presets| presets.is_empty()),
-            "presets deferred to EXP-code-presets"
-        );
 
         let models = parsed["models"]
             .as_array()
@@ -687,6 +760,10 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(models.len(), 3, "curated defaults only — not a model zoo");
+        let model_ids: std::collections::BTreeSet<&str> = models
+            .iter()
+            .filter_map(|row| row["id"].as_str())
+            .collect();
 
         let local = models
             .iter()
@@ -744,6 +821,74 @@ mod tests {
             assert!(row.get("score").is_none());
             assert!(row.get("benchmark_score").is_none());
             assert!(row.get("leaderboard_rank").is_none());
+        }
+
+        let presets = parsed["presets"]
+            .as_array()
+            .expect("presets array (EXP-code-presets C)");
+        assert_eq!(
+            presets.len(),
+            3,
+            "soft presets over existing models only — not a brand zoo"
+        );
+        assert!(
+            parsed["presets_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("CLI") && note.contains("deferred")),
+            "presets_note should state CLI aliases deferred"
+        );
+
+        let expected_presets = [
+            (
+                "offline-small",
+                "local",
+                DEFAULT_LOCAL_EMBEDDING_MODEL,
+                "local-minilm-l6-v2",
+            ),
+            (
+                "cloud-openai",
+                "openai",
+                DEFAULT_OPENAI_EMBEDDING_MODEL,
+                "openai-text-embedding-3-small",
+            ),
+            (
+                "cloud-google",
+                "google",
+                DEFAULT_GOOGLE_EMBEDDING_MODEL,
+                "google-gemini-embedding-001",
+            ),
+        ];
+        for (id, provider, model, model_id) in expected_presets {
+            let preset = presets
+                .iter()
+                .find(|row| row["id"] == id)
+                .unwrap_or_else(|| panic!("missing preset {id}"));
+            assert_eq!(preset["provider"], json!(provider));
+            assert_eq!(preset["model"], json!(model));
+            assert_eq!(preset["model_id"], json!(model_id));
+            assert_eq!(preset["quality"], json!("unbenchmarked"));
+            assert_eq!(
+                preset["cli_alias"],
+                json!(false),
+                "preset {id} is documentation only — not a CLI flag (B deferred)"
+            );
+            assert_eq!(preset["storage_keys"]["provider"], json!(provider));
+            assert_eq!(preset["storage_keys"]["model"], json!(model));
+            assert_eq!(preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_PROVIDER"], json!(provider));
+            assert_eq!(preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_MODEL"], json!(model));
+            assert_eq!(preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_ENABLED"], json!("true"));
+            assert!(
+                model_ids.contains(model_id),
+                "preset {id} model_id must resolve to models[]"
+            );
+            assert!(
+                preset["failure_modes"]
+                    .as_array()
+                    .is_some_and(|modes| !modes.is_empty()),
+                "preset {id} needs failure_modes"
+            );
+            assert!(preset.get("score").is_none());
+            assert!(preset.get("benchmark_score").is_none());
         }
 
         #[cfg(feature = "local-embeddings")]

@@ -754,4 +754,4 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list` / `runtime.tools_exposed`
 - Live machine surface (not inventory freezes): MCP `frigg://policy/tool-surface.json`
 - Evidence packet schema (skill composition only): MCP `frigg://policy/evidence-packet.json`
-- Embedding model defaults / pad / offline facts (not quality leaderboard): MCP `frigg://policy/semantic-models.json`
+- Embedding model defaults / pad / offline facts + soft presets `offline-small` / `cloud-openai` / `cloud-google` (not quality leaderboard; not CLI aliases): MCP `frigg://policy/semantic-models.json`
