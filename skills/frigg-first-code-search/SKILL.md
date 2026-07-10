@@ -18,7 +18,8 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
 
 - Host tool order, Grep-first defaults, and intermittent MCP bridges are **outside** Frigg product code.
 - When the bridge is down or tools are unregistered, that is **harness reliability**, not ranking quality.
-- Soft PreToolUse / adopt hooks are **opt-in** (not guaranteed Frigg-first).
+- Soft PreToolUse / adopt hooks are **opt-in** (not guaranteed Frigg-first). Soft only: Claude hook injects next-step context (`search_text` / `search_batch` / …) and **never hard-denies** Grep/shell (`permissionDecision` is not product).
+- Hard block of Grep/`rg` on indexed roots is a **host experiment**, not Frigg core — do not invent `FRIGG_HOOK_STRICT` or product tool-order hacks.
 - Do **not** invent product hacks (fake Grep, hide host tools, force MCP tool order).
 - Route indexed source through Frigg when the live tool list exposes Frigg tools; progressive disclosure on this top screen is intentional (30-second rule).
 

@@ -4,6 +4,12 @@ Use this template in host pre-tool hooks, reviewer checklists, or agent
 self-critique prompts. It does **not** block shell; it asks for a one-line reason
 when shell search touches indexed application source while Frigg MCP is available.
 
+**Product stance (FUT-021):** Frigg’s Claude PreToolUse hook (`frigg hook pretooluse`) is
+**soft only** — `additionalContext` checklist, never `permissionDecision` deny.
+Hard deny of Grep/`rg` on indexed roots is a **host-side experiment**, not Frigg core.
+Prefer measuring Frigg tool mix (`FRIGG_ROUTING_STATS`) over shell-deny rates.
+The live hook text (`HOOK_NUDGE`) is a compact subset of the checklist below.
+
 ## When to apply
 
 - Frigg MCP tools are registered in the session (`workspace`, `search_text`, …)

@@ -27,12 +27,24 @@ See [`hosts/README.md`](hosts/README.md) for the full adopt-target matrix and sk
 | [`templates/AGENTS.snippet.md`](templates/AGENTS.snippet.md) | Lightweight `AGENTS.md` pointer at the production skill |
 | [`hosts/`](hosts/) | Short notes for Claude, Codex, Cursor, Copilot + matrix |
 
+## Soft shell vs hard block
+
+| Mechanism | Frigg product? | Blocks shell? |
+| --- | --- | --- |
+| Skill / AGENTS text | Yes | No |
+| Soft justification template | Optional pack | No |
+| Claude PreToolUse (`frigg adopt --target hook`) | Yes, **opt-in** | **No** — `additionalContext` only |
+| Host Grep deprioritization / hard deny | **Host only** | Host decides |
+
+Do **not** file product bugs for “agent still grepped.” Soft policy does not reorder tools.
+Success = better Frigg paths when registered (`search_batch`, recovery), not shell deny %.
+
 ## What this is not
 
 - Not a Frigg runtime dependency
 - Not enforced by `cargo test` or Frigg MCP
 - Not a replacement for `skills/frigg-first-code-search/SKILL.md`
-- Not a place to hardcode host tool-order hacks into Frigg product code
+- Not a place to hardcode host tool-order hacks or Grep deny into Frigg product code
 
 ## Install (optional)
 

@@ -9,7 +9,9 @@
 | `--target mcp-project` | `.mcp.json` | Project MCP (HTTP loopback) |
 | `--target hook` | `.claude/settings.json` | **Opt-in** soft PreToolUse nudge only |
 
-Hook is **not** included in `frigg adopt --all`. Use explicit `--target hook` when you want soft Grep/Bash/Read nudges (`frigg hook pretooluse`). Soft only — no hard deny.
+Hook is **not** included in `frigg adopt --all`. Use explicit `--target hook` when you want soft Grep/Bash/Read nudges (`frigg hook pretooluse`).
+
+**Soft only — product never hard-denies Grep/shell.** The hook injects `additionalContext` (richer next-step checklist: `search_text` / `search_batch` / …). It does **not** set `permissionDecision` allow/deny. There is no `FRIGG_HOOK_STRICT` deny mode in Frigg core. Hosts may experiment with harder shell preference **outside** Frigg; measure Frigg mix via opt-in `FRIGG_ROUTING_STATS` / `frigg stats`, not shell-deny rates.
 
 Recommended Claude funnel:
 
@@ -38,7 +40,8 @@ Frigg **does not** create `~/.claude/skills` or `.claude/skills`. Create the par
 
 - Keep `CLAUDE.md` / `AGENTS.md` lightweight: use
   [`../templates/AGENTS.snippet.md`](../templates/AGENTS.snippet.md).
-- Optional PreToolUse: paste soft justification from
+- Optional PreToolUse: opt-in hook nudge is aligned with
   [`../templates/shell-indexed-src-justification.md`](../templates/shell-indexed-src-justification.md)
-  when Bash/`rg` targets indexed source — or rely on the opt-in hook nudge.
-- Do not treat harness flukes as Frigg product bugs.
+  (preferred Frigg path + when shell is still OK). You can also paste that template into host checklists.
+- **Hard block / Grep hide / tool-order hacks are host experiments**, not Frigg product (FUT-001/021). Soft nudge does not reorder the tool menu.
+- Do not treat harness flukes (Grep-first, flaky MCP bridge) as Frigg ranking bugs.

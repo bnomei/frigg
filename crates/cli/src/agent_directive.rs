@@ -16,8 +16,21 @@ pub const MANAGED_BLOCK_START: &str = "<!-- frigg-directive:start version=2026-0
 /// Closing marker for generated Frigg directive blocks.
 pub const MANAGED_BLOCK_END: &str = "<!-- frigg-directive:end -->";
 
-/// Short nudge text suitable for hook output.
-pub const HOOK_NUDGE: &str = "Frigg is the default for code discovery, file listing, navigation, exact code search, and bounded source reads.";
+/// Soft PreToolUse `additionalContext` only — never a hard allow/deny decision.
+///
+/// Compact checklist aligned with `policy-pack/.../shell-indexed-src-justification.md`.
+/// Kept short so hosts do not ignore over-long hook context the way they ignore long skills.
+pub const HOOK_NUDGE: &str = "\
+Frigg is the default for code discovery, file listing, navigation, exact code search, and bounded source reads. \
+Soft nudge only — does not allow or deny shell tools.
+Preferred next step (indexed source while Frigg is registered):
+- exact string/regex → search_text
+- several guesses → search_batch (else parallel search_text)
+- known symbol → search_symbol → go_to_definition
+- vague “where is X?” → search_hybrid → exact proof (not rank-1 alone)
+- list/outline → list_files / document_symbols; proof → read_match / read_file
+Shell still OK: Frigg missing from tools/list; ignored/generated/unindexed path; live-disk when workspace advised; git/build/test output; non-source artifact.
+";
 
 /// Policy body size for managed markdown adoption targets (`AGENTS.md`, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -128,6 +141,41 @@ mod tests {
         assert!(expanded.contains("Shell → Frigg"));
         assert!(!expanded.contains("BAD: hybrid -> grep"));
         assert_core_sentences("expanded directive", &expanded);
+    }
+
+    #[test]
+    fn hook_nudge_teaches_next_steps_and_stays_soft() {
+        assert!(
+            HOOK_NUDGE.contains(CORE_SENTENCES[0]),
+            "hook nudge should open with the canonical default sentence"
+        );
+        for tool in [
+            "search_text",
+            "search_batch",
+            "search_symbol",
+            "search_hybrid",
+            "read_match",
+        ] {
+            assert!(
+                HOOK_NUDGE.contains(tool),
+                "hook nudge should teach preferred tool `{tool}`"
+            );
+        }
+        assert!(
+            HOOK_NUDGE.to_ascii_lowercase().contains("soft nudge only"),
+            "hook must state soft-only (no product hard deny)"
+        );
+        // Soft wording may say "does not … deny"; forbid hard-decision product fields.
+        assert!(
+            !HOOK_NUDGE.contains("permissionDecision"),
+            "hook nudge must not reference permissionDecision"
+        );
+        // Cap noise: hosts ignore over-long additionalContext the way they ignore long skills.
+        assert!(
+            HOOK_NUDGE.len() < 900,
+            "hook nudge should stay compact (got {} chars)",
+            HOOK_NUDGE.len()
+        );
     }
 
     #[test]

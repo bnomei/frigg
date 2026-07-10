@@ -313,10 +313,17 @@ mod tests {
             "hook must not allow or deny tool execution"
         );
         assert!(
-            hook_output
-                .get("additionalContext")
-                .and_then(Value::as_str)
-                .is_some_and(|context| context == HOOK_NUDGE)
+            value.get("permissionDecision").is_none(),
+            "top-level hook JSON must not include permissionDecision (soft only)"
+        );
+        let context = hook_output
+            .get("additionalContext")
+            .and_then(Value::as_str)
+            .expect("additionalContext should exist");
+        assert_eq!(context, HOOK_NUDGE);
+        assert!(
+            context.contains("search_text") && context.contains("search_batch"),
+            "nudge should teach preferred Frigg tools, not only a slogan"
         );
     }
 
