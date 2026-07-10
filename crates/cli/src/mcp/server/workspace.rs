@@ -9,7 +9,15 @@ impl FriggMcpSessionState {
     pub(super) fn new(
         workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
         watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
+        session_result_handle_caches: Arc<
+            RwLock<Vec<std::sync::Weak<RwLock<SessionResultHandleCache>>>>,
+        >,
     ) -> Self {
+        let result_handles = Arc::new(RwLock::new(SessionResultHandleCache::default()));
+        session_result_handle_caches
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Arc::downgrade(&result_handles));
         Self {
             inner: Arc::new(FriggMcpSessionStateInner {
                 display_session_id: Uuid::now_v7().simple().to_string(),
@@ -18,7 +26,7 @@ impl FriggMcpSessionState {
                 adopted_repository_ids: RwLock::new(BTreeSet::new()),
                 workspace_attach_states: RwLock::new(BTreeMap::new()),
                 session_default_repository_id: RwLock::new(None),
-                result_handles: RwLock::new(SessionResultHandleCache::default()),
+                result_handles,
             }),
         }
     }

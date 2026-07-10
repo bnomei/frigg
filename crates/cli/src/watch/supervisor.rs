@@ -40,11 +40,13 @@ const WATCH_STALE_DISPATCH_EPOCH_MESSAGE: &str =
 /// Callback invoked when watch-driven index work invalidates MCP repository caches.
 ///
 /// Arguments: `(repository_id, dirty_paths)`.
-/// - `dirty_paths` are repository-relative when known (changed/deleted/accepted paths).
-/// - **Empty** `dirty_paths` means whole-repository invalidation for session result handles
-///   (conservative: notify-dropped, failed refresh, unknown path set).
+/// - `Some(paths)` — known dirty set (repository-relative when available). Session result
+///   handles for those paths are dropped; **empty `Some` skips handle invalidation** (known
+///   noop / nothing changed) while other repository caches still invalidate.
+/// - `None` — unknown dirty set → whole-repository session handle wipe (notify-dropped,
+///   failed refresh).
 pub type RepositoryCacheInvalidationCallback =
-    Arc<dyn Fn(&str, &[String]) + Send + Sync + 'static>;
+    Arc<dyn Fn(&str, Option<&[String]>) + Send + Sync + 'static>;
 
 fn startup_refresh_error_blocks_retry(error: &FriggError) -> bool {
     matches!(error, FriggError::InvalidInput(_))
@@ -915,12 +917,16 @@ async fn run_supervisor(
                         Ok(summary) => {
                             let mut paths = summary.changed_paths.clone();
                             paths.extend(summary.deleted_paths.iter().cloned());
-                            paths
+                            // Known set (may be empty noop) — do not whole-wipe handles.
+                            Some(paths)
                         }
                         // Unknown dirty set on failure → whole-repo handle invalidation.
-                        Err(_) => Vec::new(),
+                        Err(_) => None,
                     };
-                    callback(&repository.repository_id, &dirty_paths);
+                    callback(
+                        &repository.repository_id,
+                        dirty_paths.as_deref(),
+                    );
                 }
                 task_guard.finish(status, detail);
                 let _ = completion_tx.send(SupervisorCommand::IndexCompleted {
@@ -1071,7 +1077,7 @@ fn handle_notify_event(
     }
     if let Some(callback) = repository_cache_invalidation_callback {
         for (repository_id, dirty_paths) in dirty_paths_by_repo {
-            callback(&repository_id, &dirty_paths);
+            callback(&repository_id, Some(&dirty_paths));
         }
     }
 }
@@ -1114,7 +1120,7 @@ fn handle_notify_dropped(
             .mark_dirty_root(&repository.root);
         if let Some(callback) = repository_cache_invalidation_callback {
             // Unknown path set after notify drop → whole-repo handle invalidation.
-            callback(&repository.repository_id, &[]);
+            callback(&repository.repository_id, None);
         }
         info!(
             repository_id = %repository.repository_id,
@@ -1150,11 +1156,11 @@ fn invalidate_caches_for_stale_completion(
             Ok(summary) => {
                 let mut paths = summary.changed_paths.clone();
                 paths.extend(summary.deleted_paths.iter().cloned());
-                paths
+                Some(paths)
             }
-            Err(_) => Vec::new(),
+            Err(_) => None,
         };
-        callback(repository_id, &dirty_paths);
+        callback(repository_id, dirty_paths.as_deref());
         return true;
     }
     false
@@ -1188,11 +1194,11 @@ fn handle_index_completed(
             Ok(summary) => {
                 let mut paths = summary.changed_paths.clone();
                 paths.extend(summary.deleted_paths.iter().cloned());
-                paths
+                Some(paths)
             }
-            Err(_) => Vec::new(),
+            Err(_) => None,
         };
-        callback(&repository.repository_id, &dirty_paths);
+        callback(&repository.repository_id, dirty_paths.as_deref());
     }
 
     match result {
@@ -1533,7 +1539,7 @@ mod tests {
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: &[String]| {
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
             recorded
                 .lock()
                 .expect("invalidation record poisoned")
@@ -1558,7 +1564,7 @@ mod tests {
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: &[String]| {
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
             recorded
                 .lock()
                 .expect("invalidation record poisoned")
@@ -2008,7 +2014,7 @@ mod tests {
         let worker_epochs = Arc::clone(&epochs);
         let invalidated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: &[String]| {
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
             recorded
                 .lock()
                 .expect("invalidation record poisoned")
@@ -2057,7 +2063,7 @@ mod tests {
 
         let epochs_guard = epochs.lock().expect("repository epochs poisoned");
         if should_invalidate_watch_worker_cache(&epochs_guard, "repo-001", dispatch_epoch) {
-            callback("repo-001", &[]);
+            callback("repo-001", None);
         }
         assert!(
             invalidated

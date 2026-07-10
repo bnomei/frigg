@@ -29,6 +29,7 @@ impl FriggMcpServer {
             session_state: FriggMcpSessionState::new(
                 Arc::clone(&self.runtime_state.workspace_registry),
                 self.runtime_state.watch_runtime.clone(),
+                Arc::clone(&self.runtime_state.session_result_handle_caches),
             ),
             cache_state: self.cache_state.clone(),
         }
@@ -42,7 +43,7 @@ impl FriggMcpServer {
         &self,
     ) -> crate::watch::RepositoryCacheInvalidationCallback {
         let server = self.clone();
-        Arc::new(move |repository_id: &str, dirty_paths: &[String]| {
+        Arc::new(move |repository_id: &str, dirty_paths: Option<&[String]>| {
             let original_repository_id = repository_id.to_owned();
             let workspace = server
                 .runtime_state
@@ -71,7 +72,8 @@ impl FriggMcpServer {
             server.invalidate_repository_precise_graph_caches(repository_id);
             server.invalidate_repository_navigation_caches(repository_id);
             // EXP-handle-inval D: path-scoped session handle drop after watch refresh.
-            // Empty dirty_paths → whole-repo handles (conservative unknown set).
+            // None → whole-repo handles (unknown set). Some([]) → skip (known noop).
+            // Some(paths) → drop only dirty-path anchors across all live sessions.
             let aliases: Vec<String> = workspace
                 .as_ref()
                 .map(|ws| {
@@ -88,12 +90,15 @@ impl FriggMcpServer {
                     ids
                 });
             let alias_refs: Vec<&str> = aliases.iter().map(String::as_str).collect();
-            if dirty_paths.is_empty() {
-                server.invalidate_session_result_handles_for_repository_ids(
-                    alias_refs.iter().copied(),
-                );
-            } else {
-                server.invalidate_session_result_handles_for_paths(&alias_refs, dirty_paths);
+            match dirty_paths {
+                None => {
+                    server.invalidate_session_result_handles_for_repository_ids(
+                        alias_refs.iter().copied(),
+                    );
+                }
+                Some(paths) => {
+                    server.invalidate_session_result_handles_for_paths(&alias_refs, paths);
+                }
             }
         })
     }

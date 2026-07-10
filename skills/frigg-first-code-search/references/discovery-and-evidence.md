@@ -208,8 +208,8 @@ Default behavior:
 Handle lifetime:
 - Session-scoped bookmarks (`handle_expires="session"`), not durable citation ids
 - Dropped on explicit reindex / detach / whole-repo cache wipe for that repository
-- Watch refresh: anchors on **dirty paths only** are dropped; clean-path anchors may remain
-- Unknown dirty set (notify drop, failed refresh) → whole-repo handle wipe
+- Watch refresh with known dirty paths: anchors on those paths only are dropped; clean-path anchors may remain
+- Known-empty success (noop refresh) does not wipe handles; unknown dirty set (notify drop, failed refresh) → whole-repo wipe
 - After post-edit, `use_live_disk`, or `wait_watch`→ready for paths you care about: **re-run search** before trusting an old `result_handle`
 
 ## `read_file`

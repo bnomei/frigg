@@ -331,13 +331,17 @@ handle_scope + handle_expires="session" mark the pairing lifetime.
 
 Handle lifetime (session-scoped, not a durable citation id):
 - Explicit reindex / detach / whole-repo cache wipe → handles for that repo drop (StaleHandle).
-- Watch refresh → only anchors on **dirty paths** drop; untouched-path bookmarks may still work.
+- Watch refresh with a known dirty set → only anchors on **dirty paths** drop; untouched-path
+  bookmarks may still work. Known-empty success (noop refresh) does not wipe handles.
 - Unknown dirty set (notify drop, failed refresh) → whole-repo handle wipe (conservative).
 - After post-edit / use_live_disk / wait_watch→ready for paths you care about:
     **re-run search** before trusting an old result_handle for proof or citations.
   Do not chain pre-edit handles across a freshness transition for those paths.
 
-Stale handle → re-run search; mixed/foreign match_id → use the matching handle from the same call.
+Stale handle → re-run search.
+Mixed/foreign match_id → use the matching handle from the same call; if the handle is known
+but the match vanished after a path-scoped watch drop, re-run search (do not treat as a
+cross-call mix-up alone).
 Text mode returns raw source (no line prefixes) — fine for internal proof.
 ```
 

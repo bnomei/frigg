@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, RwLock,
+    Arc, Mutex, RwLock, Weak,
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -381,6 +381,9 @@ struct FriggMcpRuntimeState {
         Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
     precise_generation_pending_dirty_paths: PendingPreciseDirtyPathMap,
     tool_call_display_sink: Arc<RwLock<Option<ToolCallDisplaySink>>>,
+    /// Live session `result_handle` caches (Weak so closed HTTP sessions drop cleanly).
+    /// Watch invalidation fans out here so multi-session HTTP clients stay honest.
+    session_result_handle_caches: Arc<RwLock<Vec<Weak<RwLock<SessionResultHandleCache>>>>>,
 }
 
 #[derive(Clone)]
@@ -397,7 +400,7 @@ struct FriggMcpSessionStateInner {
     adopted_repository_ids: RwLock<BTreeSet<String>>,
     workspace_attach_states: RwLock<BTreeMap<String, WorkspaceAttachSessionState>>,
     session_default_repository_id: RwLock<Option<String>>,
-    result_handles: RwLock<SessionResultHandleCache>,
+    result_handles: Arc<RwLock<SessionResultHandleCache>>,
 }
 
 #[derive(Debug, Default)]
@@ -520,6 +523,7 @@ impl FriggMcpServer {
             ToolSurfaceProfile::Core
         };
         let watch_runtime = Arc::new(RwLock::new(watch_runtime));
+        let session_result_handle_caches = Arc::new(RwLock::new(Vec::new()));
         Self {
             config: Arc::new(config),
             tool_router: Self::filtered_tool_router(tool_surface_profile),
@@ -538,8 +542,13 @@ impl FriggMcpServer {
                 precise_generation_status_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_generation_pending_dirty_paths: Arc::new(RwLock::new(BTreeMap::new())),
                 tool_call_display_sink: Arc::new(RwLock::new(None)),
+                session_result_handle_caches: Arc::clone(&session_result_handle_caches),
             },
-            session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
+            session_state: FriggMcpSessionState::new(
+                workspace_registry,
+                watch_runtime,
+                session_result_handle_caches,
+            ),
             cache_state: FriggMcpCacheState {
                 symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 symbol_corpus_cache_epoch: Arc::new(AtomicU64::new(0)),

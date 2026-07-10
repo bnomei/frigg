@@ -56,7 +56,7 @@ fn test_repository_cache_invalidation_log() -> Arc<RwLock<Vec<String>>> {
 fn test_repository_cache_invalidation_callback(
     log: Arc<RwLock<Vec<String>>>,
 ) -> RepositoryCacheInvalidationCallback {
-    Arc::new(move |repository_id: &str, _dirty_paths: &[String]| {
+    Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
         log.write()
             .expect("test repository cache invalidation log poisoned")
             .push(repository_id.to_owned());
@@ -1823,7 +1823,7 @@ async fn watch_runtime_invalidates_repository_cache_before_finishing_refresh_tas
     let callback_task_registry = Arc::clone(&task_registry);
     let stable_repository_id =
         crate::domain::model::stable_repository_id_for_root(&workspace_root).0;
-    let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: &[String]| {
+    let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
         if repository_id == "repo-001" {
             let task_registry = callback_task_registry
                 .read()

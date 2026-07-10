@@ -170,40 +170,35 @@ impl FriggMcpServer {
         if repository_ids.is_empty() {
             return;
         }
-        let mut cache = self
-            .session_state
-            .inner
-            .result_handles
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.entries.retain(|_, entry| {
-            !entry.matches.values().any(|anchor| {
-                repository_ids
-                    .iter()
-                    .any(|repository_id| anchor.repository_id == *repository_id)
-            })
+        self.for_each_session_result_handle_cache(|cache| {
+            cache.entries.retain(|_, entry| {
+                !entry.matches.values().any(|anchor| {
+                    repository_ids
+                        .iter()
+                        .any(|repository_id| anchor.repository_id == *repository_id)
+                })
+            });
+            let retained_handles = cache.entries.keys().cloned().collect::<BTreeSet<_>>();
+            cache
+                .insertion_order
+                .retain(|handle| retained_handles.contains(handle));
         });
-        let retained_handles = cache.entries.keys().cloned().collect::<BTreeSet<_>>();
-        cache
-            .insertion_order
-            .retain(|handle| retained_handles.contains(handle));
     }
 
     /// Drop only anchors whose paths are in `dirty_paths` (EXP-handle-inval D).
     ///
     /// Handles with remaining clean-path matches stay valid. Handles that lose all matches
-    /// are removed (subsequent `read_match` → StaleHandle). Empty `dirty_paths` falls back
-    /// to whole-repository invalidation for the given ids.
+    /// are removed (subsequent `read_match` → StaleHandle). **Empty** `dirty_paths` is a
+    /// known-empty set (noop refresh) and skips handle invalidation — use
+    /// [`Self::invalidate_session_result_handles_for_repository_ids`] for unknown sets.
+    ///
+    /// Fans out to every live session handle cache (HTTP multi-session).
     pub(super) fn invalidate_session_result_handles_for_paths(
         &self,
         repository_ids: &[&str],
         dirty_paths: &[String],
     ) {
-        if repository_ids.is_empty() {
-            return;
-        }
-        if dirty_paths.is_empty() {
-            self.invalidate_session_result_handles_for_repository_ids(repository_ids.iter().copied());
+        if repository_ids.is_empty() || dirty_paths.is_empty() {
             return;
         }
         let dirty: BTreeSet<String> = dirty_paths
@@ -212,55 +207,90 @@ impl FriggMcpServer {
             .filter(|path| !path.is_empty())
             .collect();
         if dirty.is_empty() {
-            self.invalidate_session_result_handles_for_repository_ids(repository_ids.iter().copied());
             return;
         }
 
-        let mut cache = self
-            .session_state
-            .inner
-            .result_handles
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut empty_handles = Vec::new();
-        for (handle, entry) in cache.entries.iter_mut() {
-            entry.matches.retain(|_, anchor| {
-                let repo_hit = repository_ids
-                    .iter()
-                    .any(|repository_id| anchor.repository_id == *repository_id);
-                if !repo_hit {
-                    return true;
+        self.for_each_session_result_handle_cache(|cache| {
+            let mut empty_handles = Vec::new();
+            for (handle, entry) in cache.entries.iter_mut() {
+                entry.matches.retain(|_, anchor| {
+                    let repo_hit = repository_ids
+                        .iter()
+                        .any(|repository_id| anchor.repository_id == *repository_id);
+                    if !repo_hit {
+                        return true;
+                    }
+                    let anchor_path = Self::normalize_handle_path(&anchor.path);
+                    !Self::handle_path_is_dirty(&anchor_path, &dirty)
+                });
+                if entry.matches.is_empty() {
+                    empty_handles.push(handle.clone());
                 }
-                let anchor_path = Self::normalize_handle_path(&anchor.path);
-                !Self::handle_path_is_dirty(&anchor_path, &dirty)
-            });
-            if entry.matches.is_empty() {
-                empty_handles.push(handle.clone());
             }
-        }
-        for handle in empty_handles {
-            cache.entries.remove(&handle);
-            cache.insertion_order.retain(|h| h != &handle);
-        }
+            for handle in empty_handles {
+                cache.entries.remove(&handle);
+                cache.insertion_order.retain(|h| h != &handle);
+            }
+        });
     }
 
+    /// Normalize paths for handle dirty-matching: slash style, strip `./`, leading `/`,
+    /// trailing `/`. Does not treat bare basenames as universal matches.
     fn normalize_handle_path(path: &str) -> String {
-        path.replace('\\', "/")
-            .trim_start_matches("./")
-            .trim_start_matches('/')
-            .to_owned()
+        let mut normalized = path.replace('\\', "/");
+        while normalized.starts_with("./") {
+            normalized = normalized[2..].to_owned();
+        }
+        normalized = normalized.trim_start_matches('/').to_owned();
+        while normalized.ends_with('/') && !normalized.is_empty() {
+            normalized.pop();
+        }
+        normalized
     }
 
+    /// True when the anchor path is the dirty path, under a dirty directory, or when an
+    /// absolute dirty path ends with `/{repo-relative-anchor}` (absolute must have a `/`).
     fn handle_path_is_dirty(anchor_path: &str, dirty: &BTreeSet<String>) -> bool {
         if dirty.contains(anchor_path) {
             return true;
         }
-        // Accept absolute dirty paths that end with the repo-relative anchor.
         dirty.iter().any(|dirty_path| {
-            dirty_path == anchor_path
-                || dirty_path.ends_with(&format!("/{anchor_path}"))
-                || anchor_path.ends_with(&format!("/{dirty_path}"))
+            if dirty_path == anchor_path {
+                return true;
+            }
+            // Directory dirty path invalidates all anchors under it.
+            if !dirty_path.is_empty() && anchor_path.starts_with(&format!("{dirty_path}/")) {
+                return true;
+            }
+            // Absolute dirty path → match repo-relative anchor as a full suffix path.
+            // Require a `/` in dirty so bare basenames never over-match nested files.
+            dirty_path.contains('/')
+                && dirty_path.starts_with('/')
+                && dirty_path.ends_with(&format!("/{anchor_path}"))
         })
+    }
+
+    /// Apply `f` to every live session's result-handle cache (prunes dead Weak entries).
+    fn for_each_session_result_handle_cache(
+        &self,
+        mut f: impl FnMut(&mut SessionResultHandleCache),
+    ) {
+        let mut registry = self
+            .runtime_state
+            .session_result_handle_caches
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry.retain(|weak| {
+            if let Some(cache) = weak.upgrade() {
+                let mut guard = cache
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                f(&mut guard);
+                true
+            } else {
+                false
+            }
+        });
     }
 
     /// Drop one session handle entry (used when a composer discards nested tool handles).
@@ -1751,7 +1781,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_dirty_paths_invalidates_all_repo_handles() {
+    fn empty_dirty_paths_skips_handle_invalidation() {
         let server = presentation_test_server();
         let mut matches = vec![sample_text_match("repo-001", "src/a.rs")];
         let handle = server
@@ -1759,11 +1789,70 @@ mod tests {
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
+        // Known-empty dirty set (noop refresh) must not whole-wipe handles.
         server.invalidate_session_result_handles_for_paths(&["repo-001"], &[]);
 
         assert!(matches!(
             server.session_result_handle_lookup(&handle, &mid),
+            SessionResultHandleLookup::Found(_)
+        ));
+    }
+
+    #[test]
+    fn whole_repo_invalidation_drops_all_repo_handles() {
+        let server = presentation_test_server();
+        let mut matches = vec![sample_text_match("repo-001", "src/a.rs")];
+        let handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut matches)
+            .expect("handle");
+        let mid = matches[0].match_id.clone().expect("match_id");
+
+        server.invalidate_session_result_handles_for_repository_ids(["repo-001"]);
+
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle, &mid),
             SessionResultHandleLookup::StaleHandle
+        ));
+    }
+
+    #[test]
+    fn directory_dirty_path_invalidates_nested_anchors() {
+        let server = presentation_test_server();
+        let mut matches = vec![sample_text_match("repo-001", "src/nested/lib.rs")];
+        let handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut matches)
+            .expect("handle");
+        let mid = matches[0].match_id.clone().expect("match_id");
+
+        server.invalidate_session_result_handles_for_paths(
+            &["repo-001"],
+            &["src".to_owned()],
+        );
+
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle, &mid),
+            SessionResultHandleLookup::StaleHandle
+        ));
+    }
+
+    #[test]
+    fn basename_dirty_does_not_overmatch_nested_paths() {
+        let server = presentation_test_server();
+        let mut matches = vec![sample_text_match("repo-001", "src/nested/foo.rs")];
+        let handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut matches)
+            .expect("handle");
+        let mid = matches[0].match_id.clone().expect("match_id");
+
+        // Bare basename must not treat every */foo.rs as dirty.
+        server.invalidate_session_result_handles_for_paths(
+            &["repo-001"],
+            &["foo.rs".to_owned()],
+        );
+
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle, &mid),
+            SessionResultHandleLookup::Found(_)
         ));
     }
 
