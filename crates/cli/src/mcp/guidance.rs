@@ -136,6 +136,7 @@ fn semantic_models_json() -> String {
                 "provider": "local",
                 "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
                 "role": "default",
+                "quality_tier": "offline_smoke",
                 "offline": true,
                 // REAL MiniLM width (pre-pad). Do not report 1536 here.
                 "native_dimensions": LOCAL_DEFAULT_NATIVE_DIMENSIONS,
@@ -144,10 +145,12 @@ fn semantic_models_json() -> String {
                 "reindex_on_change": true,
                 "quality": "unbenchmarked",
                 "known_limits": [
+                    "Not code-retrieval SOTA — offline smoke / zero-key accelerator only (EXP-minilm-quality)",
                     "Weak mapping of product/natural phrases to API identifiers (prefer search_symbol / search_text after hybrid)",
-                    "Offline ≠ high semantic quality for code concepts",
+                    "Offline ≠ high semantic quality for code concepts; ranking/chunk work before larger local models",
                     "Requires local model preparation at startup when provider=local",
-                    "native_dimensions is 384 (real); store pads with zeros to projection_dimensions — pad is not quality"
+                    "native_dimensions is 384 (real); store pads with zeros to projection_dimensions — pad is not quality",
+                    "Embed documents use path+language envelope; after template upgrade run full frigg index (not changed-only)"
                 ]
             },
             {
@@ -155,6 +158,7 @@ fn semantic_models_json() -> String {
                 "provider": "openai",
                 "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
                 "role": "recommended",
+                "quality_tier": "cloud",
                 "offline": false,
                 // REAL width Frigg uses for this model (no pad on happy path).
                 "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
@@ -171,7 +175,11 @@ fn semantic_models_json() -> String {
                 "id": "google-gemini-embedding-001",
                 "provider": "google",
                 "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
+                // role=recommended means supported curated default for this provider — not "best quality".
+                // quality_tier=credential_peer + recommended_when clarify when to pick Google vs OpenAI.
                 "role": "recommended",
+                "quality_tier": "credential_peer",
+                "recommended_when": "GEMINI_API_KEY already present (bring-your-key); not preferred-quality over OpenAI",
                 "offline": false,
                 // REAL width Frigg requests via output_dimensionality (not API catalog default 3072).
                 "native_dimensions": GOOGLE_DEFAULT_NATIVE_DIMENSIONS,
@@ -180,9 +188,12 @@ fn semantic_models_json() -> String {
                 "reindex_on_change": true,
                 "quality": "unbenchmarked",
                 "known_limits": [
+                    "Credential-ecosystem peer (EXP-gemini-role): use when GEMINI_API_KEY is already present — not a measured code-quality leader",
+                    "Do not market as code-specialized embeddings without hybrid-next scoreboard anchors",
                     "Requires GEMINI_API_KEY and network",
                     "native_dimensions is the width Frigg requests (output_dimensionality), not a padded value",
-                    "API catalog default may be 3072; Frigg requests native_dimensions — no storage pad when equal to projection"
+                    "API catalog default may be 3072; Frigg requests native_dimensions — no storage pad when equal to projection",
+                    "OpenAI-only shops need not configure Google; multi-key is never required"
                 ]
             },
             {
@@ -190,6 +201,7 @@ fn semantic_models_json() -> String {
                 "provider": "openai_compat",
                 "model": DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL,
                 "role": "experimental",
+                "quality_tier": "selfhost_protocol",
                 "offline": false,
                 // Protocol default assumes OpenAI-small width; operator model may differ — reindex + match dims.
                 "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
@@ -210,11 +222,12 @@ fn semantic_models_json() -> String {
         "presets": [
             {
                 "id": "offline-small",
-                "intent": "Zero-cloud local semantic when you enable the accelerator without API keys",
+                "intent": "Zero-cloud offline_smoke MiniLM when you enable semantic without API keys (not code SOTA)",
                 "provider": "local",
                 "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
                 "model_id": "local-minilm-l6-v2",
                 "quality": "unbenchmarked",
+                "quality_tier": "offline_smoke",
                 "cli_alias": false,
                 "expands_to": {
                     "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
@@ -231,6 +244,7 @@ fn semantic_models_json() -> String {
                     "Semantic still off by product default until FRIGG_SEMANTIC_RUNTIME_ENABLED=true",
                     "Local model prepare failure at startup (cache / HF artifacts)",
                     "Weak product-phrase → API mapping; still pivot hybrid to search_text / search_symbol",
+                    "Do not treat semantic_status ok + MiniLM as code-quality retrieval",
                     "Changing model later requires frigg index semantic pass (reindex_on_change)"
                 ]
             },
@@ -241,6 +255,7 @@ fn semantic_models_json() -> String {
                 "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
                 "model_id": "openai-text-embedding-3-small",
                 "quality": "unbenchmarked",
+                "quality_tier": "cloud",
                 "cli_alias": false,
                 "expands_to": {
                     "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
@@ -262,11 +277,12 @@ fn semantic_models_json() -> String {
             },
             {
                 "id": "cloud-google",
-                "intent": "Cloud Google embeddings when GEMINI_API_KEY is available",
+                "intent": "Cloud Google embeddings when GEMINI_API_KEY is already present (credential peer, not preferred-quality default)",
                 "provider": "google",
                 "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
                 "model_id": "google-gemini-embedding-001",
                 "quality": "unbenchmarked",
+                "quality_tier": "credential_peer",
                 "cli_alias": false,
                 "expands_to": {
                     "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
@@ -283,6 +299,7 @@ fn semantic_models_json() -> String {
                     "Missing or empty GEMINI_API_KEY (fail-fast at semantic startup)",
                     "Network / provider outage → semantic degraded; lexical/graph still work",
                     "Frigg requests output_dimensionality = projection_dimensions for this model",
+                    "Unmeasured code-quality folklore — do not prefer Google over OpenAI without scoreboard anchors",
                     "Changing model later requires frigg index semantic pass (reindex_on_change)"
                 ]
             },
@@ -318,10 +335,12 @@ fn semantic_models_json() -> String {
         "presets_note": "Soft intent aliases over models[] (EXP-code-presets C + openai_compat self-host). Not CLI flags (B deferred). Not brand embedding vendors (Voyage/Cohere deferred). Not auto local-vs-cloud by key presence (E rejected). Set provider+model (+ endpoint for openai_compat) env/config explicitly; preset id is documentation only.",
         "guidance": [
             "Semantic is optional acceleration — never the sole grounding layer for code claims",
+            "Local MiniLM is offline_smoke only — not code-retrieval SOTA; prefer exact tools after hybrid",
+            "Google Gemini is a credential_peer (use when GEMINI_API_KEY exists) — not an unmeasured preferred-quality cloud default",
             "After hybrid, pivot to exact search_text / search_symbol before answering",
-            "After changing provider or model, run frigg index for a semantic pass",
+            "After changing provider or model (or embed template upgrades), run frigg index for a semantic pass",
             "Do not invent unlisted providers or treat preset id as a storage partition key",
-            "Prefer presets for intent (offline vs cloud vs openai_compat); always apply expands_to provider+model strings",
+            "Prefer presets for intent (offline smoke vs cloud peer keys vs openai_compat); always apply expands_to provider+model strings",
             "openai_compat requires a full embeddings POST URL; storage partition is openai_compat+model, not openai"
         ]
     }))
@@ -857,6 +876,22 @@ mod tests {
         );
         assert!(local["credential_env"].is_null());
         assert_eq!(local["quality"], json!("unbenchmarked"));
+        assert_eq!(
+            local["quality_tier"],
+            json!("offline_smoke"),
+            "MiniLM is offline smoke accelerator, not code SOTA"
+        );
+        let local_limits = local["known_limits"]
+            .as_array()
+            .expect("local known_limits");
+        assert!(
+            local_limits.iter().any(|limit| {
+                limit
+                    .as_str()
+                    .is_some_and(|text| text.contains("Not code-retrieval SOTA"))
+            }),
+            "local known_limits must state MiniLM is not code SOTA"
+        );
         // Model rows must not expose a padded length as the model size.
         assert!(local.get("dimensions").is_none() || local["dimensions"] == local["native_dimensions"]);
         assert!(local.get("stored_dimensions").is_none());
@@ -896,6 +931,30 @@ mod tests {
             "Google path requests full projection width; storage pad unused on happy path"
         );
         assert_eq!(google["quality"], json!("unbenchmarked"));
+        assert_eq!(
+            google["quality_tier"],
+            json!("credential_peer"),
+            "Gemini is credential ecosystem peer, not measured quality leader"
+        );
+        assert!(
+            google["recommended_when"]
+                .as_str()
+                .is_some_and(|text| text.contains("GEMINI_API_KEY")),
+            "google recommended_when must mention GEMINI_API_KEY bring-your-key"
+        );
+        let google_limits = google["known_limits"]
+            .as_array()
+            .expect("google known_limits");
+        assert!(
+            google_limits.iter().any(|limit| {
+                limit.as_str().is_some_and(|text| {
+                    text.contains("Credential-ecosystem peer")
+                        || text.contains("credential peer")
+                })
+            }),
+            "google known_limits must state credential-peer positioning"
+        );
+        assert_eq!(openai["quality_tier"], json!("cloud"));
 
         let openai_compat = models
             .iter()
@@ -1046,6 +1105,24 @@ mod tests {
             .find(|row| row["id"] == "offline-small")
             .expect("offline-small");
         assert!(offline["required_credential_env"].is_null());
+        assert_eq!(
+            offline["quality_tier"],
+            json!("offline_smoke"),
+            "offline-small preset must carry MiniLM offline_smoke tier"
+        );
+        let cloud_google = presets
+            .iter()
+            .find(|row| row["id"] == "cloud-google")
+            .expect("cloud-google");
+        assert_eq!(
+            cloud_google["quality_tier"],
+            json!("credential_peer"),
+            "cloud-google preset must carry Gemini credential_peer tier"
+        );
+        assert_eq!(
+            cloud_google["required_credential_env"],
+            json!(GEMINI_API_KEY_ENV_VAR)
+        );
 
         #[cfg(feature = "local-embeddings")]
         {

@@ -36,6 +36,7 @@ fn match_fixture(
         lexical_sources: vec![],
         graph_sources: vec![],
         semantic_sources: vec![],
+        graph_mode: None,
         path_class: None,
         source_class,
         surface_families: surface_families

@@ -1,6 +1,35 @@
 # Frigg Operator Runbook
 
-This runbook describes the runtime states operators are most likely to see while running Frigg. It is diagnostic only: it documents current behavior and recovery expectations without changing runtime behavior.
+This runbook is primarily **diagnostic** (runtime states and recovery) and does not change Frigg behavior. The first section below is **maintainer process** (surface growth / module splits) for contributors; skip it if you only operate a deployment.
+
+## Contributor hygiene (surface growth + mega-modules)
+
+Product/process notes for maintainers (EXP-when-to-grow-surface **A**, EXP-split-mega-modules **opportunistic B/C/D**). Not agent-facing runtime diagnostics.
+
+### When to grow the public MCP surface
+
+| Prefer | When |
+| --- | --- |
+| **Skill loop** over existing tools | Agent can already compose symbol → text → hybrid → batch → proof |
+| **Internal fix** (policy, ranking, module) | Miss is order/quality; not a missing orchestration primitive |
+| **Thin composer** (`impact_bundle` / `search_batch` class) | Multi-primitive scenario needs shared handles + recovery budgets skill cannot share |
+| **New public tool** | Last resort; never tool-per-scenario (`review_bundle`, packet MCP tools, host-order “fixes”) |
+
+Public surface grows only when orchestration **cannot** be a skill loop without shared handles/recovery. Ranking/policy growth stays internal and eval-gated (no free Laravel special-case growth on the non-PHP track).
+
+### When to split large modules
+
+Hotspots today include `mcp/server.rs`, `search_tools/hybrid.rs`, `presentation.rs`, large nav files — partly already factored under `server/` and `search_tools/`.
+
+| Rule | Meaning |
+| --- | --- |
+| **No split for LOC alone** | Split when change sets repeatedly collide (e.g. hybrid present vs pivot assist) |
+| **Opportunistic** | Extract pure helpers/tests first when already editing for behavior — not a “refactor week” |
+| **One registration manifest** | Keep `PUBLIC_TOOL_NAMES` + `#[tool]` discoverable; thin router OK; do not scatter tool names across crates |
+| **Policy tree** | `searcher/policy/` is already stage-split; more folders need ownership docs, not file count |
+| **No crate split for hygiene** | Avoid `frigg-mcp` / `frigg-rank` microservice factorization without a monorepo benefit case |
+
+Model new composition modules on small callers of existing impls (`impact_bundle` pattern).
 
 ## First checks
 
@@ -41,15 +70,40 @@ Curated embedding-model defaults and storage contract facts live on the MCP poli
 
 | Preset id | Expands to | Notes |
 | --- | --- | --- |
-| `offline-small` | `local` + `all-MiniLM-L6-v2` | Zero-cloud; still need `FRIGG_SEMANTIC_RUNTIME_ENABLED=true` |
+| `offline-small` | `local` + `all-MiniLM-L6-v2` | Zero-cloud **offline_smoke** MiniLM (not code SOTA); still need `FRIGG_SEMANTIC_RUNTIME_ENABLED=true` |
 | `cloud-openai` | `openai` + `text-embedding-3-small` | Requires `OPENAI_API_KEY` |
-| `cloud-google` | `google` + `gemini-embedding-001` | Requires `GEMINI_API_KEY` |
+| `cloud-google` | `google` + `gemini-embedding-001` | **Credential peer** when `GEMINI_API_KEY` already present (not preferred-quality default) |
 | `openai-compat-selfhost` | `openai_compat` + endpoint + model | Requires full embeddings URL + `FRIGG_OPENAI_COMPAT_API_KEY` |
 
 - Preset `id` is **documentation** (`cli_alias: false`). Set provider+model env/config from `expands_to`. Storage partition identity remains **provider + model strings**, never the preset id alone.
 - **Not** CLI flags (B deferred). **Not** brand embedding vendors like Voyage/Cohere (deferred). **Not** auto local-vs-cloud by key presence (E rejected).
 - **`quality_scores: unbenchmarked`** — not a CI leaderboard
 - Semantic runtime stays **off by default**; when enabled without a cloud provider, Frigg uses local MiniLM
+
+### Local MiniLM quality (`offline_smoke`)
+
+| Fact | Guidance |
+| --- | --- |
+| Role | Default **offline smoke** accelerator when semantic is enabled without keys |
+| Not SOTA | Do **not** treat MiniLM as code-retrieval quality equivalent to cloud or code-specialized models |
+| Agent loop | Hybrid with MiniLM still requires exact `search_text` / `search_symbol` pivots before proof |
+| Ranking first | Prefer ranking/chunk improvements over larger local models until eval shows candidate-set misses |
+| Embed envelope | Index-time documents get `path:` + `language:` headers; pure source stays in stored `content_text` for excerpts. Template bumps re-hash chunks → run a **full** `frigg index` (not changed-only) so partitions do not mix old/new envelopes |
+
+Catalog: `quality_tier: offline_smoke` on `local-minilm-l6-v2` / preset `offline-small` in `frigg://policy/semantic-models.json`.
+
+### Google Gemini role (`credential_peer`)
+
+| Fact | Guidance |
+| --- | --- |
+| Role | Supported **credential-ecosystem peer** when `GEMINI_API_KEY` is already available |
+| Not preferred quality | Do **not** promote Gemini embeddings as the default cloud quality leader without hybrid-next scoreboard anchors |
+| When to choose | Gemini-centric shops / existing Gemini keys — “bring your key,” not “switch for better code vectors” |
+| When not | OpenAI-only hosts: leave `provider=openai` or `local`; multi-key is never required |
+| Client | Keep task types + batch + `output_dimensionality` (already first-class); Vertex enterprise path deferred |
+| Quality | `quality_scores: unbenchmarked` — same honesty bar as other cloud models |
+
+Catalog: `quality_tier: credential_peer` on `google-gemini-embedding-001` / preset `cloud-google`.
 
 ### OpenAI-compatible endpoints (`provider=openai_compat`)
 
@@ -91,6 +145,26 @@ Semantic vectors live in one sqlite-vec table with a **fixed** column width
 **Cosine / partitions:** Similarity is only meaningful **within** a `(repository_id, provider, model)` partition under matched pad policy. MiniLM-padded rows are not mixed with OpenAI rows in one head. Switching provider/model requires a semantic reindex (`frigg index`); partitions do not auto-heal.
 
 **Agent-facing JSON** (`frigg://policy/semantic-models.json`): model rows expose **real** `native_dimensions` only (e.g. MiniLM **384**). They do **not** report 1536 as the model size when the model is padded. Store width is only `projection_dimensions` + `pad_to_projection`.
+
+## Hybrid graph channel vs navigation graph
+
+Hybrid `search_hybrid` can score paths via a **graph channel**. That channel shares
+relation vocabulary with MCP navigation (`SymbolGraph`, `RelationKind` in
+`crates/cli/src/graph`) but is a **separate runtime pipeline**:
+
+| Surface | What it is | What it is not |
+| --- | --- | --- |
+| Hybrid graph channel | Ranking-time expansion from lexical seeds (durable path projections and/or ephemeral file analysis) | Not `incoming_calls` / `go_to_definition` / SCIP call hierarchy |
+| MCP navigation tools | Target resolution → precise and/or heuristic nav edges | Not hybrid fusion scores |
+
+Agent-facing honesty (EXP-nav-hybrid-graph-channel):
+
+- Compact `ranking_note` may include `hybrid graph is ranking signal (not nav call edges)` when graph contributed.
+- Per-match `graph_mode` when graph sources exist: `projection` | `heuristic_symbol_graph` | `heuristic_implementation` | `unknown` (lowest-confidence wins if mixed).
+- Full `response_mode` channel metadata for `graph_precise` includes `pipeline: hybrid_ephemeral` + note.
+- After hybrid graph neighbors: prove with `search_symbol` / `find_references` / `incoming_calls`, not rank-1 alone.
+
+Post-edit: hybrid projections and precise nav caches can both go stale independently — check workspace freshness for both search and nav.
 
 ## Semantic degraded mode
 

@@ -1,5 +1,9 @@
 //! MCP server orchestration: tool routing, session-scoped workspace adoption, runtime caches,
 //! and the public tool handlers agents invoke over streamable HTTP or stdio.
+//!
+//! Hygiene (EXP-split-mega-modules): prefer opportunistic extracts into `server/*` when editing
+//! for behavior — not LOC-only splits. Keep tool registration discoverable in this crate;
+//! see `docs/operator-runbook.md` § Contributor hygiene.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

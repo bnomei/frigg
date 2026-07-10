@@ -492,7 +492,9 @@ fn build_semantic_embedding_records_with_runtime(
     for (batch_index, batch) in chunks.chunks(SEMANTIC_EMBEDDING_BATCH_SIZE).enumerate() {
         let batch_input = batch
             .iter()
-            .map(|chunk| chunk.content_text.clone())
+            .map(|chunk| {
+                semantic_embed_document_text(&chunk.path, &chunk.language, &chunk.content_text)
+            })
             .collect::<Vec<_>>();
         let vectors = execute_semantic_embedding_batch(
             runtime,
@@ -905,7 +907,14 @@ fn build_semantic_chunk_candidate(
     end_line: usize,
     content_text: String,
 ) -> SemanticChunkCandidate {
-    let content_hash = blake3::hash(content_text.as_bytes());
+    // Hash is of the path-centered embed envelope (path + language + body) so index rows
+    // re-embed when the template or body changes (EXP-minilm-quality E), without rewriting
+    // stored excerpt body text.
+    let content_hash = semantic_chunk_content_hash(
+        &file_context.path,
+        &file_context.language,
+        &content_text,
+    );
 
     let mut chunk_id_hasher = file_context.chunk_id_prefix.clone();
     chunk_id_hasher.update(&chunk_index.to_le_bytes());
@@ -929,6 +938,32 @@ fn build_semantic_chunk_candidate(
         content_hash_blake3: content_hash,
         content_text,
     }
+}
+
+/// Path-centered document text sent to embedding providers (EXP-minilm-quality E).
+///
+/// Stored `content_text` stays pure source for excerpts; only the embed batch uses this envelope
+/// so MiniLM (and other models) see relative path + language with the body.
+///
+/// `SEMANTIC_CHUNK_MAX_CHARS` still caps the **source body** only; the short header may push
+/// the embed string slightly over that body budget.
+///
+/// Content hashes are taken over this exact string so any template edit invalidates reuse
+/// without a separate version constant.
+pub(crate) fn semantic_embed_document_text(path: &str, language: &str, content_text: &str) -> String {
+    let mut out = String::with_capacity(path.len() + language.len() + content_text.len() + 32);
+    out.push_str("path: ");
+    out.push_str(path);
+    out.push('\n');
+    out.push_str("language: ");
+    out.push_str(language);
+    out.push_str("\n\n");
+    out.push_str(content_text);
+    out
+}
+
+fn semantic_chunk_content_hash(path: &str, language: &str, content_text: &str) -> blake3::Hash {
+    blake3::hash(semantic_embed_document_text(path, language, content_text).as_bytes())
 }
 
 fn semantic_chunk_text_from_source(source: &str, start: usize, end: usize) -> &str {
@@ -1014,4 +1049,39 @@ fn deterministic_semantic_trace_id(
     hasher.update(&[0]);
     hasher.update(model.as_bytes());
     format!("trace-semantic-{}", hasher.finalize().to_hex())
+}
+
+#[cfg(test)]
+mod embed_envelope_tests {
+    use super::{semantic_chunk_content_hash, semantic_embed_document_text};
+
+    #[test]
+    fn semantic_embed_document_text_prefixes_path_and_language() {
+        let text = semantic_embed_document_text(
+            "crates/cli/src/foo.rs",
+            "rust",
+            "pub fn open_window() {}",
+        );
+        assert_eq!(
+            text,
+            "path: crates/cli/src/foo.rs\nlanguage: rust\n\npub fn open_window() {}"
+        );
+    }
+
+    #[test]
+    fn semantic_chunk_content_hash_tracks_envelope_fields() {
+        let base = semantic_chunk_content_hash("a.rs", "rust", "fn a() {}");
+        let other_path = semantic_chunk_content_hash("b.rs", "rust", "fn a() {}");
+        let other_lang = semantic_chunk_content_hash("a.rs", "python", "fn a() {}");
+        let other_body = semantic_chunk_content_hash("a.rs", "rust", "fn b() {}");
+        assert_ne!(base, other_path);
+        assert_ne!(base, other_lang);
+        assert_ne!(base, other_body);
+        assert_eq!(base, semantic_chunk_content_hash("a.rs", "rust", "fn a() {}"));
+        // Hash is of the formatted embed envelope (not body alone).
+        assert_eq!(
+            base,
+            blake3::hash(semantic_embed_document_text("a.rs", "rust", "fn a() {}").as_bytes())
+        );
+    }
 }

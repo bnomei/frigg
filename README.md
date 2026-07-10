@@ -392,7 +392,9 @@ frigg index
 frigg serve
 ```
 
-The local provider uses `all-MiniLM-L6-v2` by default and does not require an API key. When `provider=local`, Frigg prepares missing local model artifacts automatically during startup. If local model preparation fails, startup fails with `local_model_prepare_failed`. Set `FRIGG_SEMANTIC_MODEL_CACHE` to choose the local model cache root. If `HF_HOME` is set and local model loading fails, unset `HF_HOME` so Frigg's cache selection controls the prepared artifacts.
+The local provider uses `all-MiniLM-L6-v2` by default and does not require an API key. Treat it as an **offline smoke / zero-key accelerator**, not code-retrieval SOTA: weak product-phrase → API mapping is expected; after hybrid, still pivot to `search_text` / `search_symbol`. Prefer cloud or `openai_compat` when semantic quality matters. When `provider=local`, Frigg prepares missing local model artifacts automatically during startup. If local model preparation fails, startup fails with `local_model_prepare_failed`. Set `FRIGG_SEMANTIC_MODEL_CACHE` to choose the local model cache root. If `HF_HOME` is set and local model loading fails, unset `HF_HOME` so Frigg's cache selection controls the prepared artifacts.
+
+Document embeddings include a compact `path` + `language` envelope around each source chunk (body text stored for excerpts stays pure source). After Frigg upgrades that change this template, run a **full** `frigg index` (not only changed-path refresh) so every semantic row re-embeds under the new envelope.
 
 OpenAI provider:
 
@@ -403,7 +405,7 @@ export OPENAI_API_KEY=<API_KEY>
 frigg index
 ```
 
-Google provider:
+Google provider (credential peer):
 
 ```bash
 export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
@@ -411,6 +413,8 @@ export FRIGG_SEMANTIC_RUNTIME_PROVIDER=google
 export GEMINI_API_KEY=<API_KEY>
 frigg index
 ```
+
+Use `google` when **`GEMINI_API_KEY` is already present** in the environment (Gemini-centric shops). Frigg keeps Google as a **supported peer** for key coverage — not as an unmeasured preferred code-quality leader over OpenAI. OpenAI-only installs need not configure Google. Quality scores remain **unbenchmarked** until hybrid-next scoreboard anchors exist.
 
 OpenAI-compatible provider (vLLM, LM Studio, Azure-compatible, gateways):
 
@@ -431,10 +435,10 @@ Defaults: `local` -> `all-MiniLM-L6-v2`, `openai` / `openai_compat` -> `text-emb
 
 | Provider | Default model | Credential | Endpoint |
 | --- | --- | --- | --- |
-| `local` | `all-MiniLM-L6-v2` | none | in-process |
+| `local` | `all-MiniLM-L6-v2` (offline smoke, not code SOTA) | none | in-process |
 | `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` | fixed `api.openai.com` |
 | `openai_compat` | `text-embedding-3-small` (override for your backend) | `FRIGG_OPENAI_COMPAT_API_KEY` (or `OPENAI_API_KEY`) | **required** full POST URL |
-| `google` | `gemini-embedding-001` | `GEMINI_API_KEY` | Google Generative Language API |
+| `google` | `gemini-embedding-001` (credential peer, not preferred-quality default) | `GEMINI_API_KEY` | Google Generative Language API |
 
 Machine-readable catalog: MCP resource `frigg://policy/semantic-models.json`. Each model lists **real** `native_dimensions` (pre-pad model width — e.g. MiniLM **384**, not 1536). Store schema width is separate: `projection_dimensions` (1536); short vectors are zero-padded only to fit sqlite-vec (`pad_to_projection`), which is **not** a quality upgrade. Quality scores are **unbenchmarked**. Soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`, `openai-compat-selfhost`) expand to provider+model env keys; they are **not** CLI flags and never replace storage partition identity. Semantic remains optional acceleration (see `frigg://policy/support-matrix.json`). Operator detail: [docs/operator-runbook.md](docs/operator-runbook.md) (Why the DB pads).
 

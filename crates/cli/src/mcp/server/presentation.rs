@@ -791,16 +791,32 @@ impl FriggMcpServer {
         // product default is semantic-off; compact strips readiness dumps but must
         // not hide lexical-only mode. Encode the cliff in short ranking_note only —
         // do not re-open long metadata.warning / semantic_status in compact.
+        // EXP-nav-hybrid-graph-channel A+D: when hybrid graph contributed, state
+        // that graph channel is ranking signal ≠ MCP nav call edges (still compact).
         let lexical_only = response
             .metadata
             .as_ref()
             .and_then(|metadata| metadata.lexical_only_mode)
             .unwrap_or(false);
-        response.ranking_note = Some(if lexical_only {
-            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
-                .to_owned()
-        } else {
-            "discovery_only; confirm with exact search".to_owned()
+        let graph_channel_contributed = response.matches.iter().any(|matched| {
+            matched.graph_score > 0.0
+                || !matched.graph_sources.is_empty()
+                || matched.graph_mode.is_some()
+        });
+        response.ranking_note = Some(match (lexical_only, graph_channel_contributed) {
+            (true, true) => {
+                "discovery_only; lexical_only (semantic not contributing); hybrid graph is ranking signal (not nav call edges); confirm with exact search"
+                    .to_owned()
+            }
+            (true, false) => {
+                "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
+                    .to_owned()
+            }
+            (false, true) => {
+                "discovery_only; hybrid graph is ranking signal (not nav call edges); confirm with exact search"
+                    .to_owned()
+            }
+            (false, false) => "discovery_only; confirm with exact search".to_owned(),
         });
         if response.best_pivot_path.is_none() {
             response.best_pivot_path = response
@@ -1674,6 +1690,153 @@ mod tests {
             multi_channel.ranking_note.as_deref(),
             Some("discovery_only; confirm with exact search"),
             "when semantic contributes, ranking_note stays the short discovery form"
+        );
+
+        let with_graph = server.present_search_hybrid_response(
+            SearchHybridResponse {
+                matches: vec![SearchHybridMatch {
+                    match_id: None,
+                    repository_id: "repo".to_owned(),
+                    path: "src/a.rs".to_owned(),
+                    line: 1,
+                    column: 1,
+                    excerpt: "fn a".to_owned(),
+                    anchor: None,
+                    blended_score: 1.0,
+                    lexical_score: 0.5,
+                    graph_score: 0.4,
+                    semantic_score: 0.0,
+                    lexical_sources: vec![],
+                    graph_sources: vec!["graph:foo:calls:src/a.rs:1".to_owned()],
+                    semantic_sources: vec![],
+                    graph_mode: Some("heuristic_symbol_graph".to_owned()),
+                    path_class: None,
+                    source_class: None,
+                    surface_families: vec![],
+                    navigation_hint: None,
+                    rank_reasons: vec![],
+                }],
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                ranking_note: None,
+                best_pivot_path: None,
+                latency_class: None,
+                metadata: Some(SearchHybridMetadata {
+                    channels: BTreeMap::new(),
+                    lexical_backend: None,
+                    lexical_backend_note: None,
+                    semantic_requested: Some(true),
+                    semantic_enabled: Some(true),
+                    semantic_status: None,
+                    semantic_reason: None,
+                    semantic_candidate_count: None,
+                    semantic_hit_count: Some(0),
+                    semantic_match_count: Some(0),
+                    lexical_only_mode: Some(false),
+                    query_shape: None,
+                    warning: None,
+                    exact_pivot_assistance: None,
+                    witness_demotion_applied: None,
+                    diagnostics_count: 0,
+                    diagnostics: crate::mcp::types::SearchHybridDiagnosticsSummary {
+                        walk: 0,
+                        read: 0,
+                        total: 0,
+                    },
+                    stage_attribution: None,
+                    semantic_capability: None,
+                    utility: None,
+                    context_efficiency: None,
+                    cache_debug: None,
+                }),
+                recovery: RecoveryFields::default(),
+            },
+            Some(ResponseMode::Compact),
+            Some("where is catalog"),
+        );
+        assert_eq!(
+            with_graph.ranking_note.as_deref(),
+            Some(
+                "discovery_only; hybrid graph is ranking signal (not nav call edges); confirm with exact search"
+            ),
+            "compact must surface hybrid-graph≠nav honesty when graph contributes"
+        );
+        assert_eq!(
+            with_graph.matches[0].graph_mode.as_deref(),
+            Some("heuristic_symbol_graph"),
+            "graph_mode must survive compact presentation"
+        );
+
+        let lexical_only_and_graph = server.present_search_hybrid_response(
+            SearchHybridResponse {
+                matches: vec![SearchHybridMatch {
+                    match_id: None,
+                    repository_id: "repo".to_owned(),
+                    path: "src/a.rs".to_owned(),
+                    line: 1,
+                    column: 1,
+                    excerpt: "fn a".to_owned(),
+                    anchor: None,
+                    blended_score: 1.0,
+                    lexical_score: 0.5,
+                    graph_score: 0.4,
+                    semantic_score: 0.0,
+                    lexical_sources: vec![],
+                    graph_sources: vec!["graph_projection:t:src/a.rs:1".to_owned()],
+                    semantic_sources: vec![],
+                    graph_mode: Some("projection".to_owned()),
+                    path_class: None,
+                    source_class: None,
+                    surface_families: vec![],
+                    navigation_hint: None,
+                    rank_reasons: vec![],
+                }],
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                ranking_note: None,
+                best_pivot_path: None,
+                latency_class: None,
+                metadata: Some(SearchHybridMetadata {
+                    channels: BTreeMap::new(),
+                    lexical_backend: None,
+                    lexical_backend_note: None,
+                    semantic_requested: Some(false),
+                    semantic_enabled: Some(false),
+                    semantic_status: None,
+                    semantic_reason: None,
+                    semantic_candidate_count: None,
+                    semantic_hit_count: None,
+                    semantic_match_count: None,
+                    lexical_only_mode: Some(true),
+                    query_shape: None,
+                    warning: None,
+                    exact_pivot_assistance: None,
+                    witness_demotion_applied: None,
+                    diagnostics_count: 0,
+                    diagnostics: crate::mcp::types::SearchHybridDiagnosticsSummary {
+                        walk: 0,
+                        read: 0,
+                        total: 0,
+                    },
+                    stage_attribution: None,
+                    semantic_capability: None,
+                    utility: None,
+                    context_efficiency: None,
+                    cache_debug: None,
+                }),
+                recovery: RecoveryFields::default(),
+            },
+            Some(ResponseMode::Compact),
+            Some("where is catalog"),
+        );
+        assert_eq!(
+            lexical_only_and_graph.ranking_note.as_deref(),
+            Some(
+                "discovery_only; lexical_only (semantic not contributing); hybrid graph is ranking signal (not nav call edges); confirm with exact search"
+            ),
+            "lexical_only + graph must combine both honesty tokens"
         );
     }
 

@@ -333,6 +333,15 @@ pub struct SearchHybridMatch {
     pub lexical_sources: Vec<String>,
     pub graph_sources: Vec<String>,
     pub semantic_sources: Vec<String>,
+    /// Hybrid graph-channel pipeline for this match when `graph_score` / `graph_sources` contributed.
+    ///
+    /// Values: `projection` (durable path relations), `heuristic_symbol_graph` (ephemeral
+    /// SymbolGraph expansion), `heuristic_implementation` (PHP/heuristic impl edges),
+    /// `unknown` (graph_sources present but no recognized provenance prefix).
+    /// This is **not** MCP navigation precision (`incoming_calls` / SCIP mode) — hybrid graph
+    /// is a ranking signal only (EXP-nav-hybrid-graph-channel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_mode: Option<String>,
     /// Path-class hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path_class: Option<PathClass>,
@@ -410,6 +419,14 @@ pub struct SearchHybridChannelMetadata {
     pub diagnostic_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<SearchHybridChannelDiagnostic>,
+    /// Present on the hybrid graph channel only: pipeline identity for honesty vs MCP nav.
+    ///
+    /// Value is always `hybrid_ephemeral` when set — ranking-time expansion, not `incoming_calls`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<String>,
+    /// Short dual-pipeline note for operators (full response_mode; stripped in compact).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline_note: Option<String>,
 }
 
 /// Aggregate manifest walk and read diagnostic counts for hybrid search.

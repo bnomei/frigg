@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Hygiene (EXP-when-to-grow-surface / EXP-split-mega-modules): skill surface-growth filter (skill → internal → thin composer → new tool last); operator runbook contributor rules for opportunistic module splits (no split-for-LOC, one registration manifest); `mcp/server.rs` module-doc pointer to that policy.
+- Hybrid graph channel honesty (EXP-nav-hybrid-graph-channel): per-match `graph_mode`, ranking_note when graph contributes (“ranking signal not nav call edges”), full channel `pipeline: hybrid_ephemeral`; skill/operator dual-pipeline docs. Hybrid graph remains separate from MCP navigation.
+- Google Gemini embeddings positioned as **credential_peer** (use when `GEMINI_API_KEY` is already present; not an unmeasured preferred-quality cloud default) in catalog, README, operator runbook, and skill.
+- Local MiniLM positioned as **offline_smoke** (not code-retrieval SOTA) in catalog, README, operator runbook, and skill; semantic document embeddings for **all** providers now include a compact `path` + `language` envelope (stored excerpt body stays pure source; run a **full** `frigg index` after upgrade so partitions do not mix envelopes).
 - Semantic provider `openai_compat`: OpenAI-protocol embeddings against a configurable full POST URL (`--semantic-runtime-openai-compat-endpoint` / `FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT`), Bearer via `FRIGG_OPENAI_COMPAT_API_KEY` (falls back to `OPENAI_API_KEY`), distinct storage partition from `openai`. Catalog/preset `openai-compat-selfhost` on `frigg://policy/semantic-models.json`.
 - Hybrid compact `ranking_note` signals `lexical_only (semantic not contributing)` when semantic is off or empty (product default remains semantic-off; no readiness metadata dump in compact).
 - MCP policy resource `frigg://policy/semantic-models.json`: curated embedding-model catalog (defaults, **real** `native_dimensions` only, pad flag, offline, credentials; quality unbenchmarked) plus soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`, `openai-compat-selfhost`) that expand to provider+model (not CLI aliases). Docs: why sqlite-vec pads short vectors to projection width.

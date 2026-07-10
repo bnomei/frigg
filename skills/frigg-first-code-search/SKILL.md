@@ -146,6 +146,7 @@ BAD: invent compose_evidence_packet / sealed evidence MCP tools — packets are 
 BAD: invent review_bundle / bug_trace_bundle / citation-service tools — impact_bundle is the composition template
 BAD: invent product tool-order hacks or blame Frigg ranking when host Grep wins / MCP bridge is flaky
 BAD: answer from hybrid rank-1 alone or treat ranking policy as a second agent skill
+BAD: treat hybrid graph neighbors / graph_score as proven call edges (use incoming_calls / find_references)
 BAD: claim Frigg-first in a Task/subagent without re-probing live tools/list for that spawn
 BAD: treat parent-OK/child-missing Frigg (or empty Frigg server on this spawn) as ranking/hybrid/index failure — that is harness registration (FUT-003)
 BAD: treat every Tool not found as inheritance — invented phantoms and extended-only names are surface honesty
@@ -265,6 +266,10 @@ GOOD: lexical_only ranking_note → still Frigg exact tools; semantic is opt-in 
 
 **Semantic default (product):** runtime semantic is **off** unless the operator enables it. Hybrid without semantic is intentional (lexical + graph), not a broken server. Compact does **not** dump `semantic_status` / long readiness warnings — the mode cliff is only the short `ranking_note` token. Full `response_mode` keeps diagnostics for operators.
 
+**Local MiniLM (`provider=local`, preset `offline-small`):** **offline smoke** only — not code-retrieval SOTA. `semantic_status: ok` with MiniLM does **not** mean product/NL phrases map well to APIs. Always pivot hybrid → exact `search_text` / `search_symbol` before proof. Prefer cloud / `openai_compat` when operators care about semantic quality; do not chase “better hybrid rank-1” under MiniLM alone.
+
+**Google Gemini (`provider=google`, preset `cloud-google`):** **credential peer** — use when `GEMINI_API_KEY` is already present. Not an unmeasured “best cloud for code” default over OpenAI. OpenAI-only sessions need not configure Google.
+
 Prefer `suggested_next` identifiers after hybrid (short symbol/text queries); do not paste the original natural-language question into `search_symbol`.
 
 ### Exact text search
@@ -332,7 +337,7 @@ GOOD: treat NavigationMode heuristic as valid Frigg; precise is an upgrade when 
 | **Fallback** | Scoped `search_text` may supplement tests; shell `rg` is not the main reference pass |
 | **Proof** | Read clusters; confirm `outgoing_calls` with body reads |
 | **Done** | Navigation evidence before edit or impact claim |
-| **Product support** | `summary` counts/top_paths, mode flags; **`impact_bundle` is the only public composition orchestrator** |
+| **Product support** | `summary` counts/top_paths, mode flags; **public thin composers** are `impact_bundle` (nav) and `search_batch` (multi-probe) — no further scenario bundles |
 
 ```text
 PREFERRED: impact_bundle(symbol, path_class=runtime)
@@ -349,11 +354,19 @@ outgoing_calls(symbol)              # trust=provisional (+ trust_note); confirm 
 find_implementations(symbol)        # traits/interfaces only
 ```
 
-**Composition bar:** a new public “bundle/service” tool is justified only when it is a thin
-orchestrator over existing tools with shared recovery/handles and a clear scenario latency win
-(same class as `impact_bundle`). Do **not** invent `review_bundle`, `bug_trace_bundle`,
-citation services, or other scenario composers. Multi-claim review packets stay **skill-assembled**
-(see Technical review + `frigg://policy/evidence-packet.json`).
+**Composition bar / surface growth (EXP-when-to-grow-surface A):** a new public “bundle/service”
+tool is justified only when orchestration **cannot** be a skill loop without shared handles and
+recovery budgets (same class as `impact_bundle` / `search_batch`). Prefer, in order:
+
+1. **Skill loop** over existing tools (symbol → text → hybrid → batch → proof)
+2. **Internal module / policy / ranking fix** (not agent-visible) when the miss is order/quality
+3. **Thin composer** (`impact_bundle`, `search_batch` class) when multi-primitive orchestration needs
+   shared handles/recovery the skill loop cannot share — not a substitute for fixing ranking (2)
+4. **New public tool** last; never tool-per-scenario (`review_bundle`, `bug_trace_bundle`, citation
+   services, packet MCP tools). Multi-claim review packets stay **skill-assembled**
+   (see Technical review + `frigg://policy/evidence-packet.json`).
+
+Do **not** invent tools to “fix” harness registration, ranking, or host Grep order.
 
 ### Files & outline
 
@@ -722,6 +735,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 - `presentation_mode=json` when you need `start_line`, `end_line`, bytes, or machine-readable fields.
 - Hybrid compact may omit rich scores and semantic readiness dumps — still read `ranking_note`:
   - `lexical_only (semantic not contributing)` means mode cliff (default-off or empty semantic), not “Frigg failed”
+  - `hybrid graph is ranking signal (not nav call edges)` means graph channel ≠ `incoming_calls` / SCIP nav — confirm with exact tools; optional per-match `graph_mode` (`projection` / `heuristic_symbol_graph` / `heuristic_implementation` / `unknown`)
   - Pivot to exact tools; do not shell-grep indexed source
 - Prefer `latency_class` guidance when present (`hot` / `warm` / `cold`); do not use shell as a latency strategy on indexed source.
 
@@ -762,4 +776,4 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list` / `runtime.tools_exposed`
 - Live machine surface (not inventory freezes): MCP `frigg://policy/tool-surface.json`
 - Evidence packet schema (skill composition only): MCP `frigg://policy/evidence-packet.json`
-- Embedding model defaults / pad / offline facts + soft presets `offline-small` / `cloud-openai` / `cloud-google` (not quality leaderboard; not CLI aliases): MCP `frigg://policy/semantic-models.json`
+- Embedding model defaults / pad / offline facts + soft presets (`offline-small` = MiniLM **offline_smoke**; `cloud-google` = Gemini **credential_peer**; `cloud-openai` / `openai-compat-selfhost`) — not quality leaderboard; not CLI aliases: MCP `frigg://policy/semantic-models.json`

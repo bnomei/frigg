@@ -746,6 +746,7 @@ impl FriggMcpServer {
                     message: Self::bounded_text(&diagnostic.message),
                 })
                 .collect::<Vec<_>>();
+            let is_graph = result.channel == EvidenceChannel::GraphPrecise;
             channels.insert(
                 result.channel.as_str().to_owned(),
                 SearchHybridChannelMetadata {
@@ -760,6 +761,11 @@ impl FriggMcpServer {
                     match_count: result.stats.match_count,
                     diagnostic_count: result.diagnostics.len(),
                     diagnostics,
+                    pipeline: is_graph.then(|| "hybrid_ephemeral".to_owned()),
+                    pipeline_note: is_graph.then(|| {
+                        "Hybrid graph channel is ranking-time expansion (projection and/or ephemeral SymbolGraph); not MCP navigation call edges (incoming_calls / go_to_definition). Confirm graph neighbors with exact tools."
+                            .to_owned()
+                    }),
                 },
             );
         }
@@ -1120,6 +1126,8 @@ impl FriggMcpServer {
             }
         }
         lexical_sources.sort();
+        let graph_mode = Self::hybrid_graph_mode_from_sources(&evidence.graph_sources)
+            .map(str::to_owned);
         SearchHybridMatch {
             match_id: None,
             repository_id: evidence.document.repository_id,
@@ -1135,6 +1143,7 @@ impl FriggMcpServer {
             lexical_sources,
             graph_sources: evidence.graph_sources,
             semantic_sources: evidence.semantic_sources,
+            graph_mode,
             path_class: Some(classify_repository_path(&path)),
             source_class: Some(hybrid_match_source_class(&path)),
             surface_families: hybrid_match_surface_families(&path),
@@ -1144,6 +1153,36 @@ impl FriggMcpServer {
                 go_to_definition: hybrid_match_definition_navigation_supported(&path),
             }),
             rank_reasons: Vec::new(),
+        }
+    }
+
+    /// Map hybrid graph provenance ids to an agent-visible pipeline mode (EXP-nav-hybrid-graph-channel D).
+    ///
+    /// When sources mix modes, return the **lowest-confidence** label for honesty.
+    pub(crate) fn hybrid_graph_mode_from_sources(sources: &[String]) -> Option<&'static str> {
+        if sources.is_empty() {
+            return None;
+        }
+        let mut projection = false;
+        let mut heuristic_impl = false;
+        let mut heuristic_symbol_graph = false;
+        for source in sources {
+            if source.starts_with("graph_projection:") {
+                projection = true;
+            } else if source.contains(":heuristic:") {
+                heuristic_impl = true;
+            } else if source.starts_with("graph:") {
+                heuristic_symbol_graph = true;
+            }
+        }
+        if heuristic_impl {
+            Some("heuristic_implementation")
+        } else if heuristic_symbol_graph {
+            Some("heuristic_symbol_graph")
+        } else if projection {
+            Some("projection")
+        } else {
+            Some("unknown")
         }
     }
 
@@ -1309,6 +1348,7 @@ mod tests {
                 .collect(),
             graph_sources: vec![],
             semantic_sources: vec![],
+            graph_mode: None,
             path_class: None,
             source_class: Some(SourceClass::Runtime),
             surface_families: vec!["runtime".to_owned()],
@@ -1319,6 +1359,53 @@ mod tests {
             }),
             rank_reasons: vec![],
         }
+    }
+
+    #[test]
+    fn hybrid_graph_mode_from_sources_prefers_lowest_confidence_when_mixed() {
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&[]),
+            None
+        );
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&[
+                "graph_projection:foo:src/a.rs:1".to_owned()
+            ]),
+            Some("projection")
+        );
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&[
+                "graph:foo:calls:src/b.rs:2".to_owned()
+            ]),
+            Some("heuristic_symbol_graph")
+        );
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&[
+                "graph:foo:heuristic:implements:src/c.rs:3".to_owned()
+            ]),
+            Some("heuristic_implementation")
+        );
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&[
+                "graph_projection:foo:src/a.rs:1".to_owned(),
+                "graph:foo:heuristic:implements:src/c.rs:3".to_owned(),
+            ]),
+            Some("heuristic_implementation"),
+            "mixed sources must report lowest-confidence mode"
+        );
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&[
+                "graph_projection:foo:src/a.rs:1".to_owned(),
+                "graph:foo:calls:src/b.rs:2".to_owned(),
+            ]),
+            Some("heuristic_symbol_graph"),
+            "projection + heuristic_symbol_graph → heuristic_symbol_graph"
+        );
+        assert_eq!(
+            FriggMcpServer::hybrid_graph_mode_from_sources(&["other:noise".to_owned()]),
+            Some("unknown"),
+            "unrecognized provenance still surfaces a mode for honesty"
+        );
     }
 
     #[test]
