@@ -8,7 +8,8 @@ when shell search touches indexed application source while Frigg MCP is availabl
 **soft only** — `additionalContext` checklist, never `permissionDecision` deny.
 Hard deny of Grep/`rg` on indexed roots is a **host-side experiment**, not Frigg core.
 Prefer measuring Frigg tool mix (`FRIGG_ROUTING_STATS`) over shell-deny rates.
-The live hook text (`HOOK_NUDGE`) is a compact subset of the checklist below.
+The live hook text (`HOOK_NUDGE`) is an **aligned compact checklist** derived from this
+template (preferred paths + shell-OK boundary), not a full paste of every bullet below.
 
 ## When to apply
 
@@ -30,9 +31,10 @@ One-line justification required (pick one):
 
 Preferred Frigg path for this habit:
 - exact string → search_text
-- several guesses → search_batch (or parallel Frigg probes if batch missing)
-- known symbol → search_symbol → navigation
+- several guesses → search_batch (else parallel search_text/search_symbol)
+- known symbol → search_symbol → go_to_definition
 - broad discovery → search_hybrid → exact proof (not rank-1 alone)
+- list/outline → list_files / document_symbols; proof → read_match / read_file
 ```
 
 ## Positive fallbacks (do not shame)

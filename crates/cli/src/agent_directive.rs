@@ -22,12 +22,12 @@ pub const MANAGED_BLOCK_END: &str = "<!-- frigg-directive:end -->";
 /// Kept short so hosts do not ignore over-long hook context the way they ignore long skills.
 pub const HOOK_NUDGE: &str = "\
 Frigg is the default for code discovery, file listing, navigation, exact code search, and bounded source reads. \
-Soft nudge only — does not allow or deny shell tools.
+Advisory context only — does not block or auto-approve shell tools.
 Preferred next step (indexed source while Frigg is registered):
 - exact string/regex → search_text
-- several guesses → search_batch (else parallel search_text)
+- several guesses → search_batch (else parallel search_text/search_symbol)
 - known symbol → search_symbol → go_to_definition
-- vague “where is X?” → search_hybrid → exact proof (not rank-1 alone)
+- vague \"where is X?\" → search_hybrid → exact proof (not rank-1 alone)
 - list/outline → list_files / document_symbols; proof → read_match / read_file
 Shell still OK: Frigg missing from tools/list; ignored/generated/unindexed path; live-disk when workspace advised; git/build/test output; non-source artifact.
 ";
@@ -154,7 +154,11 @@ mod tests {
             "search_batch",
             "search_symbol",
             "search_hybrid",
+            "go_to_definition",
+            "list_files",
+            "document_symbols",
             "read_match",
+            "read_file",
         ] {
             assert!(
                 HOOK_NUDGE.contains(tool),
@@ -162,8 +166,12 @@ mod tests {
             );
         }
         assert!(
-            HOOK_NUDGE.to_ascii_lowercase().contains("soft nudge only"),
-            "hook must state soft-only (no product hard deny)"
+            HOOK_NUDGE.contains("Advisory context only"),
+            "hook must state advisory/soft-only (no product hard deny)"
+        );
+        assert!(
+            HOOK_NUDGE.contains("Shell still OK"),
+            "hook must keep positive shell fallback boundary"
         );
         // Soft wording may say "does not … deny"; forbid hard-decision product fields.
         assert!(
@@ -171,8 +179,9 @@ mod tests {
             "hook nudge must not reference permissionDecision"
         );
         // Cap noise: hosts ignore over-long additionalContext the way they ignore long skills.
+        // Current text is ~0.7k; fail if it bloats toward skill-length context.
         assert!(
-            HOOK_NUDGE.len() < 900,
+            HOOK_NUDGE.len() < 800,
             "hook nudge should stay compact (got {} chars)",
             HOOK_NUDGE.len()
         );
