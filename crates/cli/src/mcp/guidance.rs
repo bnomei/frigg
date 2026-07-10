@@ -184,6 +184,7 @@ fn semantic_models_json() -> String {
                     "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "local",
                     "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_LOCAL_EMBEDDING_MODEL
                 },
+                "required_credential_env": null,
                 "storage_keys": {
                     "provider": "local",
                     "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
@@ -207,9 +208,9 @@ fn semantic_models_json() -> String {
                 "expands_to": {
                     "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
                     "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "openai",
-                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_OPENAI_EMBEDDING_MODEL,
-                    "OPENAI_API_KEY": "<required>"
+                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_OPENAI_EMBEDDING_MODEL
                 },
+                "required_credential_env": OPENAI_API_KEY_ENV_VAR,
                 "storage_keys": {
                     "provider": "openai",
                     "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -233,9 +234,9 @@ fn semantic_models_json() -> String {
                 "expands_to": {
                     "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
                     "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "google",
-                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_GOOGLE_EMBEDDING_MODEL,
-                    "GEMINI_API_KEY": "<required>"
+                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_GOOGLE_EMBEDDING_MODEL
                 },
+                "required_credential_env": GEMINI_API_KEY_ENV_VAR,
                 "storage_keys": {
                     "provider": "google",
                     "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
@@ -580,7 +581,7 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
             "FRIGG Semantic Models Catalog",
         )
         .with_description(
-            "Curated embedding-model defaults and contract facts (dims, pad, offline, credentials). Quality scores unbenchmarked — not a live leaderboard; peer to support-matrix.",
+            "Curated embedding-model defaults, soft intent presets (offline-small / cloud-*), and contract facts (dims, pad, offline, credentials). Quality unbenchmarked — not a live leaderboard; peer to support-matrix. Presets are not CLI flags.",
         )
         .with_mime_type("application/json"),
         Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
@@ -760,9 +761,9 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(models.len(), 3, "curated defaults only — not a model zoo");
-        let model_ids: std::collections::BTreeSet<&str> = models
+        let models_by_id: std::collections::BTreeMap<&str, &Value> = models
             .iter()
-            .filter_map(|row| row["id"].as_str())
+            .filter_map(|row| row["id"].as_str().map(|id| (id, row)))
             .collect();
 
         let local = models
@@ -874,12 +875,41 @@ mod tests {
             );
             assert_eq!(preset["storage_keys"]["provider"], json!(provider));
             assert_eq!(preset["storage_keys"]["model"], json!(model));
-            assert_eq!(preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_PROVIDER"], json!(provider));
-            assert_eq!(preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_MODEL"], json!(model));
-            assert_eq!(preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_ENABLED"], json!("true"));
+            assert_eq!(
+                preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_PROVIDER"],
+                json!(provider)
+            );
+            assert_eq!(
+                preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_MODEL"],
+                json!(model)
+            );
+            assert_eq!(
+                preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_ENABLED"],
+                json!("true")
+            );
+            // expands_to must not smuggle placeholder secret values.
             assert!(
-                model_ids.contains(model_id),
-                "preset {id} model_id must resolve to models[]"
+                preset["expands_to"].get(OPENAI_API_KEY_ENV_VAR).is_none()
+                    && preset["expands_to"].get(GEMINI_API_KEY_ENV_VAR).is_none(),
+                "preset {id} must not put credential values in expands_to"
+            );
+            let resolved = models_by_id
+                .get(model_id)
+                .unwrap_or_else(|| panic!("preset {id} model_id must resolve to models[]"));
+            assert_eq!(
+                resolved["provider"],
+                json!(provider),
+                "preset {id} provider must match models[]"
+            );
+            assert_eq!(
+                resolved["model"],
+                json!(model),
+                "preset {id} model must match models[]"
+            );
+            assert_eq!(
+                preset["required_credential_env"],
+                resolved["credential_env"],
+                "preset {id} credential env must match models[]"
             );
             assert!(
                 preset["failure_modes"]
@@ -890,6 +920,11 @@ mod tests {
             assert!(preset.get("score").is_none());
             assert!(preset.get("benchmark_score").is_none());
         }
+        let offline = presets
+            .iter()
+            .find(|row| row["id"] == "offline-small")
+            .expect("offline-small");
+        assert!(offline["required_credential_env"].is_null());
 
         #[cfg(feature = "local-embeddings")]
         {
