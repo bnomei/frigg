@@ -158,8 +158,8 @@ pub struct GoToDefinitionResponse {
 
 /// Parameters for `find_declarations` (secondary to `go_to_definition` for agents).
 ///
-/// Prefer `go_to_definition(symbol=…)` for ordinary body anchors. Use this tool when the
-/// language model of declaration vs definition matters (headers, interfaces, re-exports).
+/// Prefer `go_to_definition(symbol=…)` for ordinary body anchors. Use this tool when
+/// declaration vs definition matters (headers, interfaces, re-exports, ambient decls).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsParams {
     /// Preferred when the name is known (same as go_to_definition).

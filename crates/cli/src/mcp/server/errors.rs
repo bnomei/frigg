@@ -359,18 +359,24 @@ mod tests {
         let go_desc = go_to.description.as_deref().unwrap_or("");
         let decl_desc = decls.description.as_deref().unwrap_or("");
         assert!(
-            go_desc.to_ascii_lowercase().contains("default")
-                || go_desc.contains("Do not call find_declarations first"),
+            go_desc.contains("Default agent route"),
             "go_to_definition description should claim default agent route: {go_desc}"
         );
         assert!(
-            decl_desc.to_ascii_lowercase().contains("secondary")
-                || decl_desc.contains("Do not call serially"),
-            "find_declarations description should be secondary / non-serial: {decl_desc}"
+            go_desc.contains("Do not call find_declarations first"),
+            "go_to_definition description should forbid declarations-first: {go_desc}"
         );
         assert!(
-            go_desc.contains("symbol"),
+            go_desc.contains("Prefer symbol="),
             "go_to_definition should still prefer symbol=: {go_desc}"
+        );
+        assert!(
+            decl_desc.contains("Secondary to go_to_definition"),
+            "find_declarations description should be secondary: {decl_desc}"
+        );
+        assert!(
+            decl_desc.contains("Do not call serially with go_to_definition by default"),
+            "find_declarations description should forbid serial dual-call default: {decl_desc}"
         );
     }
 

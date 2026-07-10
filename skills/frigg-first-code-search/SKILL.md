@@ -249,15 +249,19 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 | **Product support** | Runtime-first defaults, `column`/`excerpt`, empty-`{}` rejection; both def/decl tools kept for LSP parity |
 
 ```text
+DEFAULT LOOP (stop after proof unless decl≠def is the actual question):
 1. search_symbol(name, path_class=runtime)  # prefer symbol + column from hit when present
-2. go_to_definition(symbol=name)            # DEFAULT agent route for "where is this implemented?"
-3. find_declarations(symbol=name)           # ONLY when decl≠def matters (headers, interfaces,
-                                            # re-exports, ambient decls) — not a second default
-4. If path+line only was used: check ambiguous_location / location_warning before editing
-5. read_match OR read_file
+2. go_to_definition(symbol=name)            # body / implementation anchor
+3. If path+line only was used: check ambiguous_location / location_warning before editing
+4. read_match OR read_file
+
+OPTIONAL BRANCH (not a numbered step after 2 by default):
+  find_declarations(symbol=name)
+  — only when declaration vs definition matters (headers, interfaces, re-exports, ambient decls)
+  — never run both serially as the default known-symbol loop
 
 BAD: go_to_definition + find_declarations every time and treat both rows as two anchors
-GOOD: go_to_definition(symbol=…) for body anchors; declarations only when language model needs it
+GOOD: go_to_definition(symbol=…) for body anchors; declarations only when decl≠def matters
 ```
 
 ### Impact
