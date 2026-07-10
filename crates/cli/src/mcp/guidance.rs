@@ -10,6 +10,11 @@ use serde_json::{Map, Value, json};
 
 use crate::languages::{LanguageSupportCapability, SymbolLanguage};
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
+use crate::settings::{
+    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL,
+    GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
+};
+use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
 
 pub(crate) const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-matrix.json";
 pub(crate) const TOOL_SURFACE_RESOURCE_URI: &str = "frigg://policy/tool-surface.json";
@@ -17,10 +22,20 @@ pub(crate) const SHELL_REPLACEMENT_MAP_RESOURCE_URI: &str =
     "frigg://policy/shell-replacement-map.json";
 /// Machine schema for skill-composed multi-claim review packets (not a callable MCP tool).
 pub(crate) const EVIDENCE_PACKET_RESOURCE_URI: &str = "frigg://policy/evidence-packet.json";
+/// Curated embedding-model scoreboard (peer to support-matrix; not live quality metrics).
+pub(crate) const SEMANTIC_MODELS_RESOURCE_URI: &str = "frigg://policy/semantic-models.json";
 pub(crate) const SHELL_GUIDANCE_RESOURCE_URI: &str = "frigg://guidance/shell-vs-frigg.md";
 pub(crate) const ROUTING_STATS_RESOURCE_URI: &str =
     crate::mcp::routing_stats::ROUTING_STATS_RESOURCE_URI;
 pub(crate) const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
+
+/// Native output width of the default local MiniLM alias (parity with
+/// `embeddings::local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions` when local-embeddings is on).
+const LOCAL_DEFAULT_NATIVE_DIMENSIONS: usize = 384;
+/// OpenAI `text-embedding-3-small` native width used by Frigg storage requests.
+const OPENAI_DEFAULT_NATIVE_DIMENSIONS: usize = 1_536;
+/// Google `gemini-embedding-001` default width Frigg requests when padding to projection.
+const GOOGLE_DEFAULT_NATIVE_DIMENSIONS: usize = 768;
 
 #[derive(Debug, Clone, Serialize)]
 struct LanguageSupportEntry {
@@ -76,6 +91,93 @@ fn support_matrix_json() -> String {
         "languages": languages
     }))
     .expect("support matrix JSON should serialize")
+}
+
+/// Curated embedding model scoreboard (EXP-scoreboard B).
+///
+/// Static rows only — no live CI quality metrics. Semantic retrieval remains optional acceleration
+/// (see support-matrix), never the grounding layer.
+fn semantic_models_json() -> String {
+    serde_json::to_string_pretty(&json!({
+        "schema_id": "frigg.policy.semantic_models.v1",
+        "product": "frigg",
+        "product_role": "optional_accelerator_model_catalog",
+        "live": true,
+        "quality_scores": "unbenchmarked",
+        "quality_scores_note": "No numeric leaderboard is published. Rows are curated defaults and contract facts (dims, pad, offline, credentials). Prefer exact Frigg tools over hybrid rank-1 even when semantic is on.",
+        "semantic_default": {
+            "enabled": false,
+            "note": "Semantic runtime is off by default. When enabled without a cloud provider, Frigg resolves to local MiniLM."
+        },
+        "projection_dimensions": DEFAULT_VECTOR_DIMENSIONS,
+        "projection_note": "sqlite-vec projection width. Models with smaller native_dimensions are padded to this size; changing provider/model requires a semantic reindex (frigg index).",
+        "reindex_on_change": true,
+        "source_of_truth": {
+            "defaults": "crates/cli/src/settings/semantic_runtime.rs DEFAULT_*_EMBEDDING_MODEL",
+            "projection": "crates/cli/src/storage/mod.rs DEFAULT_VECTOR_DIMENSIONS",
+            "local_dims": "crates/cli/src/embeddings/local_model.rs DEFAULT_LOCAL_MODEL_ALIAS.dimensions"
+        },
+        "models": [
+            {
+                "id": "local-minilm-l6-v2",
+                "provider": "local",
+                "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
+                "role": "default",
+                "offline": true,
+                "native_dimensions": LOCAL_DEFAULT_NATIVE_DIMENSIONS,
+                "pad_to_projection": LOCAL_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
+                "credential_env": null,
+                "reindex_on_change": true,
+                "quality": "unbenchmarked",
+                "known_limits": [
+                    "Weak mapping of product/natural phrases to API identifiers (prefer search_symbol / search_text after hybrid)",
+                    "Offline ≠ high semantic quality for code concepts",
+                    "Requires local model preparation at startup when provider=local"
+                ]
+            },
+            {
+                "id": "openai-text-embedding-3-small",
+                "provider": "openai",
+                "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
+                "role": "recommended",
+                "offline": false,
+                "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
+                "pad_to_projection": OPENAI_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
+                "credential_env": OPENAI_API_KEY_ENV_VAR,
+                "reindex_on_change": true,
+                "quality": "unbenchmarked",
+                "known_limits": [
+                    "Requires OPENAI_API_KEY and network",
+                    "Cloud embeddings leave the machine; use local when zero-cloud is required"
+                ]
+            },
+            {
+                "id": "google-gemini-embedding-001",
+                "provider": "google",
+                "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
+                "role": "recommended",
+                "offline": false,
+                "native_dimensions": GOOGLE_DEFAULT_NATIVE_DIMENSIONS,
+                "pad_to_projection": GOOGLE_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
+                "credential_env": GEMINI_API_KEY_ENV_VAR,
+                "reindex_on_change": true,
+                "quality": "unbenchmarked",
+                "known_limits": [
+                    "Requires GEMINI_API_KEY and network",
+                    "API may accept other output dimensionalities; Frigg stores the projection width"
+                ]
+            }
+        ],
+        "presets": [],
+        "presets_note": "Optional alias table deferred (EXP-code-presets). Use provider+model env flags today.",
+        "guidance": [
+            "Semantic is optional acceleration — never the sole grounding layer for code claims",
+            "After hybrid, pivot to exact search_text / search_symbol before answering",
+            "After changing provider or model, run frigg index for a semantic pass",
+            "Do not invent unlisted providers from this catalog"
+        ]
+    }))
+    .expect("semantic models JSON should serialize")
 }
 
 /// JSON Schema-shaped policy resource for agent-assembled evidence packets (EXP-evidence-packet A+D).
@@ -392,6 +494,14 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
             "Skill-composed multi-claim evidence packet shape (schema only; not a callable MCP tool).",
         )
         .with_mime_type("application/json"),
+        Resource::new(
+            SEMANTIC_MODELS_RESOURCE_URI,
+            "FRIGG Semantic Models Scoreboard",
+        )
+        .with_description(
+            "Curated embedding-model defaults and contract facts (dims, pad, offline, credentials). Quality scores unbenchmarked; peer to support-matrix.",
+        )
+        .with_mime_type("application/json"),
         Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
             .with_description(
                 "Guidance for when to use shell tools versus repo-aware Frigg surfaces.",
@@ -414,6 +524,7 @@ pub(crate) fn read_policy_resource(
         TOOL_SURFACE_RESOURCE_URI => (tool_surface_json(active_profile), "application/json"),
         SHELL_REPLACEMENT_MAP_RESOURCE_URI => (shell_replacement_map_json(), "application/json"),
         EVIDENCE_PACKET_RESOURCE_URI => (evidence_packet_json(), "application/json"),
+        SEMANTIC_MODELS_RESOURCE_URI => (semantic_models_json(), "application/json"),
         SHELL_GUIDANCE_RESOURCE_URI => (shell_vs_frigg_markdown(active_profile), "text/markdown"),
         ROUTING_STATS_RESOURCE_URI => (
             crate::mcp::routing_stats::snapshot_json(),
@@ -486,6 +597,13 @@ pub(crate) fn read_guidance_prompt(
             ),
             PromptMessage::new_resource_link(
                 Role::Assistant,
+                Resource::new(
+                    SEMANTIC_MODELS_RESOURCE_URI,
+                    "FRIGG Semantic Models Scoreboard",
+                ),
+            ),
+            PromptMessage::new_resource_link(
+                Role::Assistant,
                 Resource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy"),
             ),
             PromptMessage::new_resource_link(
@@ -507,12 +625,19 @@ pub(crate) fn read_guidance_prompt(
 #[cfg(test)]
 mod tests {
     use super::{
-        EVIDENCE_PACKET_RESOURCE_URI, ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI,
+        EVIDENCE_PACKET_RESOURCE_URI, GOOGLE_DEFAULT_NATIVE_DIMENSIONS,
+        LOCAL_DEFAULT_NATIVE_DIMENSIONS, OPENAI_DEFAULT_NATIVE_DIMENSIONS, ROUTING_GUIDE_PROMPT_NAME,
+        SEMANTIC_MODELS_RESOURCE_URI, SHELL_GUIDANCE_RESOURCE_URI,
         SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI,
-        read_guidance_prompt, read_policy_resource,
+        policy_resources, read_guidance_prompt, read_policy_resource,
     };
     use crate::languages::{LanguageSupportCapability, SymbolLanguage};
     use crate::mcp::tool_surface::ToolSurfaceProfile;
+    use crate::settings::{
+        DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL,
+        DEFAULT_OPENAI_EMBEDDING_MODEL, GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
+    };
+    use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
     use rmcp::model::ResourceContents;
     use serde_json::{Value, json};
 
@@ -522,6 +647,107 @@ mod tests {
             unreachable!("expected text resource contents");
         };
         text.clone()
+    }
+
+    #[test]
+    fn semantic_models_scoreboard_matches_runtime_defaults_and_stays_unbenchmarked() {
+        assert!(
+            policy_resources()
+                .iter()
+                .any(|resource| resource.uri == SEMANTIC_MODELS_RESOURCE_URI),
+            "policy_resources should list semantic-models"
+        );
+
+        let json = resource_text(SEMANTIC_MODELS_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("semantic models JSON should parse");
+        assert_eq!(
+            parsed["schema_id"],
+            json!("frigg.policy.semantic_models.v1")
+        );
+        assert_eq!(
+            parsed["projection_dimensions"],
+            json!(DEFAULT_VECTOR_DIMENSIONS)
+        );
+        assert_eq!(parsed["quality_scores"], json!("unbenchmarked"));
+        assert_eq!(parsed["semantic_default"]["enabled"], json!(false));
+        assert_eq!(parsed["reindex_on_change"], json!(true));
+        assert!(
+            parsed["presets"]
+                .as_array()
+                .is_some_and(|presets| presets.is_empty()),
+            "presets deferred to EXP-code-presets"
+        );
+
+        let models = parsed["models"]
+            .as_array()
+            .expect("models array")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(models.len(), 3, "curated defaults only — not a model zoo");
+
+        let local = models
+            .iter()
+            .find(|row| row["provider"] == "local")
+            .expect("local row");
+        assert_eq!(local["model"], json!(DEFAULT_LOCAL_EMBEDDING_MODEL));
+        assert_eq!(local["role"], json!("default"));
+        assert_eq!(local["offline"], json!(true));
+        assert_eq!(
+            local["native_dimensions"],
+            json!(LOCAL_DEFAULT_NATIVE_DIMENSIONS)
+        );
+        assert_eq!(local["pad_to_projection"], json!(true));
+        assert!(local["credential_env"].is_null());
+        assert_eq!(local["quality"], json!("unbenchmarked"));
+
+        let openai = models
+            .iter()
+            .find(|row| row["provider"] == "openai")
+            .expect("openai row");
+        assert_eq!(openai["model"], json!(DEFAULT_OPENAI_EMBEDDING_MODEL));
+        assert_eq!(openai["credential_env"], json!(OPENAI_API_KEY_ENV_VAR));
+        assert_eq!(
+            openai["native_dimensions"],
+            json!(OPENAI_DEFAULT_NATIVE_DIMENSIONS)
+        );
+        assert_eq!(openai["offline"], json!(false));
+        assert_eq!(openai["quality"], json!("unbenchmarked"));
+
+        let google = models
+            .iter()
+            .find(|row| row["provider"] == "google")
+            .expect("google row");
+        assert_eq!(google["model"], json!(DEFAULT_GOOGLE_EMBEDDING_MODEL));
+        assert_eq!(google["credential_env"], json!(GEMINI_API_KEY_ENV_VAR));
+        assert_eq!(
+            google["native_dimensions"],
+            json!(GOOGLE_DEFAULT_NATIVE_DIMENSIONS)
+        );
+        assert_eq!(google["pad_to_projection"], json!(true));
+        assert_eq!(google["quality"], json!("unbenchmarked"));
+
+        // No fake leaderboard fields that imply measured ranking quality.
+        for row in &models {
+            assert!(row.get("score").is_none());
+            assert!(row.get("benchmark_score").is_none());
+            assert!(row.get("leaderboard_rank").is_none());
+        }
+
+        #[cfg(feature = "local-embeddings")]
+        {
+            use crate::embeddings::local_model::DEFAULT_LOCAL_MODEL_ALIAS;
+            assert_eq!(
+                LOCAL_DEFAULT_NATIVE_DIMENSIONS,
+                DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+                "scoreboard local dims must match DEFAULT_LOCAL_MODEL_ALIAS"
+            );
+            assert_eq!(
+                DEFAULT_LOCAL_EMBEDDING_MODEL,
+                DEFAULT_LOCAL_MODEL_ALIAS.semantic_model
+            );
+        }
     }
 
     #[test]
@@ -929,7 +1155,8 @@ mod tests {
             ToolSurfaceProfile::Extended,
         )
         .expect("routing prompt should exist");
-        assert_eq!(prompt.messages.len(), 5);
+        // text + support-matrix + semantic-models + tool-surface + shell-map + shell-guidance
+        assert_eq!(prompt.messages.len(), 6);
     }
 
     #[test]

@@ -421,6 +421,8 @@ Defaults: `local` -> `all-MiniLM-L6-v2`, `openai` -> `text-embedding-3-small`, `
 | `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
 | `google` | `gemini-embedding-001` | `GEMINI_API_KEY` |
 
+Machine-readable catalog (dims, pad-to-projection, offline, reindex-on-change, known limits): MCP resource `frigg://policy/semantic-models.json`. Quality scores are **unbenchmarked** — contract facts only, not a live leaderboard. Semantic remains optional acceleration (see `frigg://policy/support-matrix.json`).
+
 After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic index pass with `frigg index`.
 
 Zero-cloud semantic behavior applies only when `provider=local`.

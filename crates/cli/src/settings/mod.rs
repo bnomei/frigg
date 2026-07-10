@@ -17,10 +17,10 @@ pub use frigg_config::{
 pub use lexical_runtime::{LexicalBackendMode, LexicalRuntimeConfig};
 pub use runtime_profile::{RuntimeProfile, RuntimeTransportKind, runtime_profile_for_transport};
 pub use semantic_runtime::{
-    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL, GEMINI_API_KEY_ENV_VAR,
-    OPENAI_API_KEY_ENV_VAR, SEMANTIC_RUNTIME_INVALID_PARAMS_CODE, SemanticRuntimeConfig,
-    SemanticRuntimeConfigError, SemanticRuntimeCredentialError, SemanticRuntimeCredentials,
-    SemanticRuntimeProvider, SemanticRuntimeStartupError,
+    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL,
+    GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR, SEMANTIC_RUNTIME_INVALID_PARAMS_CODE,
+    SemanticRuntimeConfig, SemanticRuntimeConfigError, SemanticRuntimeCredentialError,
+    SemanticRuntimeCredentials, SemanticRuntimeProvider, SemanticRuntimeStartupError,
 };
 pub use watch::{
     DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY, DEFAULT_WATCH_RETRY_MS,

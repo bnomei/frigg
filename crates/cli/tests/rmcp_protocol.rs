@@ -14,6 +14,7 @@ use rmcp::{
 use serde_json::Value;
 
 const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-matrix.json";
+const SEMANTIC_MODELS_RESOURCE_URI: &str = "frigg://policy/semantic-models.json";
 const SHELL_REPLACEMENT_MAP_RESOURCE_URI: &str = "frigg://policy/shell-replacement-map.json";
 const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 const MISSING_POLICY_RESOURCE_URI: &str = "frigg://policy/missing.json";
@@ -114,6 +115,13 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
         resources
             .resources
             .iter()
+            .any(|resource| resource.uri == SEMANTIC_MODELS_RESOURCE_URI),
+        "resources/list should expose the semantic-models scoreboard resource"
+    );
+    assert!(
+        resources
+            .resources
+            .iter()
             .any(|resource| resource.uri == SHELL_REPLACEMENT_MAP_RESOURCE_URI),
         "resources/list should expose the shell replacement map resource"
     );
@@ -130,6 +138,24 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
     assert!(
         text.contains("\"schema_id\": \"frigg.policy.support_matrix.v4\""),
         "support matrix should contain the expected policy schema"
+    );
+
+    let semantic_models = client
+        .read_resource(ReadResourceRequestParams::new(SEMANTIC_MODELS_RESOURCE_URI))
+        .await
+        .expect("resources/read should route semantic-models through RMCP");
+    let ResourceContents::TextResourceContents { uri, text, .. } = &semantic_models.contents[0]
+    else {
+        panic!("semantic models should be returned as text resource contents");
+    };
+    assert_eq!(uri, SEMANTIC_MODELS_RESOURCE_URI);
+    assert!(
+        text.contains("\"schema_id\": \"frigg.policy.semantic_models.v1\""),
+        "semantic models should contain the expected policy schema"
+    );
+    assert!(
+        text.contains("\"quality_scores\": \"unbenchmarked\""),
+        "semantic models must not pretend live quality metrics"
     );
 
     let replacement_map = client

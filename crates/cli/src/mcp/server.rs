@@ -82,7 +82,8 @@ use crate::mcp::explorer::{
 };
 use crate::mcp::guidance::{
     ROUTING_GUIDE_PROMPT_NAME, ROUTING_STATS_RESOURCE_URI, SHELL_GUIDANCE_RESOURCE_URI,
-    SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI,
+    SEMANTIC_MODELS_RESOURCE_URI, SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
+    TOOL_SURFACE_RESOURCE_URI,
     guidance_prompts, policy_resources, read_guidance_prompt, read_policy_resource,
 };
 use crate::mcp::server_cache::{
@@ -2402,7 +2403,7 @@ impl ServerHandler for FriggMcpServer {
                     .with_description("Local-first code search + navigation MCP server"),
             )
             .with_instructions(agent_directive::mcp_instructions(&format!(
-                "Runtime profile: `{runtime_profile}`. Tool surface: `{tool_surface_profile}`. Omit repository_id in normal single-repo work; call workspace for compact status or to adopt a target path/repository. Repo-aware tools auto-adopt sensible defaults when possible. Detailed routing lives in `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, `{SHELL_REPLACEMENT_MAP_RESOURCE_URI}`, `{SHELL_GUIDANCE_RESOURCE_URI}`, optional local stats `{ROUTING_STATS_RESOURCE_URI}` (enable FRIGG_ROUTING_STATS=1), and prompt `{ROUTING_GUIDE_PROMPT_NAME}`.{playbook_guidance} {tool_surface_note}"
+                "Runtime profile: `{runtime_profile}`. Tool surface: `{tool_surface_profile}`. Omit repository_id in normal single-repo work; call workspace for compact status or to adopt a target path/repository. Repo-aware tools auto-adopt sensible defaults when possible. Detailed routing lives in `{SUPPORT_MATRIX_RESOURCE_URI}`, `{SEMANTIC_MODELS_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, `{SHELL_REPLACEMENT_MAP_RESOURCE_URI}`, `{SHELL_GUIDANCE_RESOURCE_URI}`, optional local stats `{ROUTING_STATS_RESOURCE_URI}` (enable FRIGG_ROUTING_STATS=1), and prompt `{ROUTING_GUIDE_PROMPT_NAME}`.{playbook_guidance} {tool_surface_note}"
             )))
     }
 

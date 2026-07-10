@@ -243,7 +243,7 @@ search_symbol: catalog_entries    path_class=runtime
 | **Fallback** | Skip hybrid if a likely symbol/string is already known. Never shell-grep as the precision layer after hybrid |
 | **Proof** | Exact search, then `read_match` / `read_file` |
 | **Done** | Never answer from hybrid rank-1 alone; exact Frigg evidence present |
-| **Product support** | Compact pivots, `ranking_note`, `best_pivot_path`, `suggested_next` |
+| **Product support** | Compact pivots, `ranking_note`, `best_pivot_path`, `suggested_next`; semantic model/pad facts on `frigg://policy/semantic-models.json` (quality unbenchmarked; optional accelerator only) |
 
 ```text
 1. search_hybrid("<user question>")
@@ -754,3 +754,4 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list` / `runtime.tools_exposed`
 - Live machine surface (not inventory freezes): MCP `frigg://policy/tool-surface.json`
 - Evidence packet schema (skill composition only): MCP `frigg://policy/evidence-packet.json`
+- Embedding model defaults / pad / offline facts (not quality leaderboard): MCP `frigg://policy/semantic-models.json`

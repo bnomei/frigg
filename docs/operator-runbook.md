@@ -30,6 +30,18 @@ This runbook describes the runtime states operators are most likely to see while
 
 Use `workspace_prepare` or `workspace_index` only when you intentionally want to initialize or refresh Frigg state from a client. These tools are confirm-gated because they operate on ignored `.frigg/` state.
 
+## Semantic models (scoreboard)
+
+Curated embedding-model defaults and storage contract facts live on the MCP policy resource:
+
+- URI: `frigg://policy/semantic-models.json` (`schema_id: frigg.policy.semantic_models.v1`)
+- Peer to language tiers at `frigg://policy/support-matrix.json` (do not confuse the two axes)
+- Includes: provider defaults, native dims, pad-to-projection (store width 1536), offline?, credential env, `reindex_on_change`, known limits
+- **`quality_scores: unbenchmarked`** — not a CI leaderboard; do not treat rows as measured ranking quality
+- Semantic runtime stays **off by default**; when enabled without a cloud provider, Frigg uses local MiniLM
+
+After changing provider or model, run `frigg index` for a semantic pass.
+
 ## Semantic degraded mode
 
 Semantic retrieval is optional. When disabled or unavailable, Frigg still searches with lexical, path/witness, graph, symbol, and structural evidence. `search_hybrid` reports semantic participation in its execution note and channel health.
