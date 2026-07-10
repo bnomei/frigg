@@ -261,7 +261,7 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 | **Fallback** | No hybrid or unscoped grep when name is known. Do **not** call `find_declarations` first (or serially by default) |
 | **Proof** | `read_match` or `read_file` (json/citation if citing) |
 | **Done** | Starts at `search_symbol`; definition-first navigation with `symbol`, not path+line alone |
-| **Product support** | Runtime-first defaults, `column`/`excerpt`, empty-`{}` rejection; both def/decl tools kept for LSP parity |
+| **Product support** | Runtime-first defaults, `column`/`excerpt`, empty-`{}` rejection; both def/decl tools kept for LSP parity; heuristic `mode` is valid |
 
 ```text
 DEFAULT LOOP (stop after proof unless decl≠def is the actual question):
@@ -269,6 +269,7 @@ DEFAULT LOOP (stop after proof unless decl≠def is the actual question):
 2. go_to_definition(symbol=name)            # body / implementation anchor
 3. If path+line only was used: check ambiguous_location / location_warning before editing
 4. read_match OR read_file
+5. If navigation mode is heuristic/unavailable: still usable — do NOT install scip-* mid-task
 
 OPTIONAL BRANCH (not a numbered step after 2 by default):
   find_declarations(symbol=name)
@@ -276,7 +277,9 @@ OPTIONAL BRANCH (not a numbered step after 2 by default):
   — never run both serially as the default known-symbol loop
 
 BAD: go_to_definition + find_declarations every time and treat both rows as two anchors
+BAD: pause the agent loop to install rust-analyzer / scip generators because precise is missing
 GOOD: go_to_definition(symbol=…) for body anchors; declarations only when decl≠def matters
+GOOD: treat NavigationMode heuristic as valid Frigg; precise is an upgrade when ready
 ```
 
 ### Impact
@@ -405,6 +408,7 @@ Agent health decision tree (branch here only — not full scorecards):
   1. recommended_action (primary)
   2. zero-hit recovery / ZeroHitIndex when a search returned empty
   3. optional lexical_ready / semantic_ready — never promote SCIP generator install mid-task
+     (precise SCIP is an **optional accelerator**; heuristic nav is valid Frigg)
   4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / debouncing / refreshing / active);
      optional refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms (dual-class only — no third queue)
   5. Transport: read `runtime.profile` + `watch_status.reason` — default stdio is often `mode_off`
@@ -503,6 +507,7 @@ GOOD: after ready → new search → new result_handle → read_match
 ```
 
 If navigation `mode` is unavailable/heuristic, widen with `search_text` before assuming code is absent.
+Heuristic nav is **valid product behavior** — precise SCIP is optional acceleration, not a gate on “Frigg works.”
 
 ### Refactor impact
 

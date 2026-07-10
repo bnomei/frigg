@@ -47,7 +47,7 @@ A degraded semantic state means Frigg remains usable, but natural-language recal
 
 ## Precise partial and failure states
 
-Precise navigation comes from optional SCIP artifacts and best-effort automatic generators. Frigg keeps working without precise data by using Tree-sitter, source-backed heuristics, lexical search, and structural tools.
+Precise navigation comes from optional SCIP artifacts and best-effort automatic generators. **Precise is an optional accelerator, not the product core.** Frigg keeps working without precise data by using Tree-sitter, source-backed heuristics, lexical search, and structural tools. Agents should treat heuristic `NavigationMode` as valid Frigg. Installing `scip-*` / language-server toolchains is a **host/environment** concern — Frigg does not own or ship generator installers. Prefer non-blocking attach: search and heuristic nav remain usable while generation runs in the background; do not block the default agent loop on generators.
 
 `workspace_current.precise`, `workspace_attach.precise`, and `workspace_attach.precise_lifecycle` are the compact operator surfaces. Explicit diagnostics expose lower-level `health.scip`, `health.precise_ingest`, and `health.precise_generators` details. The generator scorecard includes discovery state, tool/version, expected artifact path, repo-local writes/executions/patch risk, last generation duration, artifact counts/bytes, failure class, and recommended action.
 
