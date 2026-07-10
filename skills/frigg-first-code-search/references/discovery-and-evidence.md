@@ -238,9 +238,9 @@ Notes:
 - default output is text-first: selected source bytes only, with no `structuredContent`
 - use `presentation_mode=json` for repository, path, byte, metadata, or machine-readable `content` fields
 
-## `explore` (extended profile)
+## `explore` (core product surface)
 
-Use `explore` after you already know the file and want bounded follow-up inside it.
+Use `explore` after you already know the file and want bounded follow-up inside it. It is on the **core** tool surface (not extended-only).
 
 Operations:
 - `probe`: search inside the file

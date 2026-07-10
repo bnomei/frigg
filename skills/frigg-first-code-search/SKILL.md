@@ -411,7 +411,7 @@ recommended_action=reindex means index substrate not Ready:
 Tool surface honesty:
   - Trust runtime.tools_exposed (or live tools/list) for this process
   - Do not call names only in host schema caches, skill memory, or source #[tool] attributes
-  - tool_surface_profile is core|extended; explore/playbook may be absent on core
+  - tool_surface_profile is core|extended; **explore is core**; playbook tools only with `--features playbook` + extended
 
 Policy progressive disclosure:
   - Skill scenario cards are SSOT for agent routing
@@ -614,7 +614,7 @@ document_symbols or read_file on a representative file
 - Do not write Tree-sitter queries for ordinary symbol or text search.
 - Opt-in: `include_follow_up_structural=true` for replayable `search_structural` suggestions on structure-aware tools (not hybrid/symbol search).
 
-**Explore** (extended profile) — **anchored in-file only**:
+**Explore** (core product surface, tier-3 for routing) — **anchored in-file only**:
 
 ```text
 Use explore after you already have a file anchor.
@@ -669,7 +669,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 | Definition / body anchor | `go_to_definition(symbol=...)` (default; not path+line alone; trust `ambiguous_location`) |
 | Declaration-only need | `find_declarations` only when decl≠def matters — not a serial default with go_to_definition |
 | AST shape | `inspect_syntax_tree` + `search_structural` (tier-3) |
-| In-file zoom (extended) | `explore` — not a substitute for `search_text` |
+| In-file zoom (core) | `explore` — not a substitute for `search_text` |
 | Repo health / adoption | `workspace` gate |
 
 ---

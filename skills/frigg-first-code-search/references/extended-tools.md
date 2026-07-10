@@ -1,10 +1,17 @@
-# Extended Tools
+# Extended / opt-in tools
 
-These tools are only available when the Frigg runtime exposes the extended tool surface.
+## Profile model
 
-## `explore`
+- **Core** — Futura primary loop + in-file `explore`. This is the default product surface for agents.
+- **Extended** — core tools plus **playbook** tools when the binary was built with `--features playbook`.
+- On default builds (no playbook feature), core and extended register the **same** tool names.
+- Trust `runtime.tools_exposed` / live `tools/list` for this process.
 
-`explore` is the bounded follow-up file tool. Use it after discovery when you need:
+## `explore` (core)
+
+`explore` is **not** extended-only. Full docs live in [discovery-and-evidence.md](discovery-and-evidence.md).
+
+Use it after discovery when you need:
 - probe/zoom/refine within one artifact
 - continuation cursors
 - anchored windows instead of repeated full reads
@@ -14,15 +21,18 @@ Presentation defaults:
 - `probe` and `refine` stay structured by default
 - `presentation_mode=text` is invalid for `probe` and `refine`
 
-See [discovery-and-evidence.md](discovery-and-evidence.md) for the detailed input and output shape.
-
-## Playbook Tools
+## Playbook tools (dev / trace; not default)
 
 - `playbook_run`
 - `playbook_replay`
 - `playbook_compose_citations`
 
-These tools require Frigg to be compiled with the `playbook` feature. They are for explicit trace-oriented search workflows, not normal first-line repo navigation.
+These require:
+
+1. Compile with `--features playbook` (**not** in default cargo features)
+2. Extended tool-surface profile (`FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`, the process default when playbook is compiled in)
+
+They are for **explicit** trace-oriented search workflows, not normal first-line repo navigation.
 
 Use them when the task explicitly needs:
 - a replayable multi-step search trace

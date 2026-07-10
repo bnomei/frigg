@@ -299,22 +299,19 @@ Proof and optional policy:
 
 ## MCP tool surface
 
-Frigg exposes the `extended` MCP tool surface by default. Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=core` to restrict the server to the stable core set.
+Frigg exposes the `extended` MCP tool surface by default. On default builds (without `--features playbook`), **core and extended expose the same public tools**. Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=core` when you need to hide playbook tools on a binary built with `--features playbook`.
 
-Core tool groups:
+Core tool groups (product surface):
 
 - Workspace status and adoption: `workspace`.
 - File listing: `list_files`.
 - Source reads: `read_file`, `read_match`.
 - Discovery: `search_text`, `search_hybrid`, `search_symbol`, `search_batch`.
+- In-file follow-up: `explore` (probe/zoom/refine after you already have a file anchor).
 - Navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`, `impact_bundle`.
 - Structure: `document_symbols`, `inspect_syntax_tree`, `search_structural`.
 
-Extended-only tools in default builds:
-
-- `explore`
-
-Feature-gated extended-only playbook tools are available only when Frigg is compiled with `--features playbook`:
+Playbook tools are **dev/trace tooling**, not default product surface. They require compiling with `--features playbook` (not in default features) and the extended profile:
 
 - `playbook_run`
 - `playbook_replay`

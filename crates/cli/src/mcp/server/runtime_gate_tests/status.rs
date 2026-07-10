@@ -25,6 +25,10 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
         names.contains("workspace"),
         "core tools should remain registered when extended-only tools are disabled"
     );
+    assert!(
+        names.contains("explore"),
+        "explore is product tooling and must remain registered on core"
+    );
 }
 
 #[test]

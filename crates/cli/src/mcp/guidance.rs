@@ -235,9 +235,9 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
     let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
     let active = manifest_for_tool_surface_profile(active_profile);
     let core_guidance = if cfg!(feature = "playbook") {
-        "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore or playbook tools."
+        "Product tools including explore are on core. Playbook tools are compile-time opt-in (`--features playbook`) and extended-profile only — not default cargo features. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core to hide playbook tools even when the binary was built with the playbook feature."
     } else {
-        "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore."
+        "Product tools including explore are on core. Playbook tools require building with `--features playbook` and the extended profile; they are not on default builds."
     };
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.tool_surface.v1",
@@ -275,10 +275,15 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
 }
 
 fn shell_vs_frigg_markdown(active_profile: ToolSurfaceProfile) -> String {
-    let explore_guidance = if active_profile == ToolSurfaceProfile::Extended {
-        "`explore` is available for bounded single-artifact follow-up after discovery. `explore(operation=zoom)` defaults to the same text-first read rendering as `read_file` and `read_match`, while `probe` and `refine` stay structured by default."
+    let explore_guidance = "`explore` is on the core product surface for bounded single-artifact follow-up after discovery. `explore(operation=zoom)` defaults to the same text-first read rendering as `read_file` and `read_match`, while `probe` and `refine` stay structured by default.";
+    let playbook_guidance = if cfg!(feature = "playbook") {
+        if active_profile == ToolSurfaceProfile::Extended {
+            "Playbook tools (`playbook_run`, `playbook_replay`, `playbook_compose_citations`) are present on this extended build — they are trace/dev tooling, not first-line discovery."
+        } else {
+            "Playbook tools are compiled in but hidden on the `core` profile; set FRIGG_MCP_TOOL_SURFACE_PROFILE=extended only for explicit playbook workflows."
+        }
     } else {
-        "`explore` is intentionally absent from the active `core` profile."
+        "Playbook tools are not compiled into this binary (build with `--features playbook` only for explicit trace/dev workflows)."
     };
     format!(
         "# Shell vs Frigg\n\n\
@@ -304,10 +309,11 @@ Shell replacement map:\n\
 - `sed -n '10,80p' path` -> `read_file` with `start_line`, `end_line`, or `line_count`\n\
 - follow definitions/references/calls -> navigation tools (or `impact_bundle` when the symbol is already known)\n\n\
 Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and file-containment probes (`files_with_matches`). For `search_text`, pass the search term as `query`, not `pattern`. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers. Use `search_batch` when you would fire several Frigg probes in one turn (text/symbol/hybrid); each probe is a full independent search, then results merge. Prefer `impact_bundle` for impact/refactor questions with a known symbol before chaining `find_references` / `incoming_calls` / `find_implementations` by hand.\n\n\
-`read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)` in the extended profile.\n\n\
+`read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)`.\n\n\
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
 Semantic retrieval remains an optional accelerator, not the grounding layer.\n\n\
-{explore_guidance}\n"
+{explore_guidance}\n\
+{playbook_guidance}\n"
     )
 }
 
@@ -604,16 +610,25 @@ mod tests {
     }
 
     #[test]
-    fn tool_surface_policy_lists_explore_as_extended_only() {
+    fn tool_surface_policy_lists_explore_on_core_not_extended_only() {
         let json = resource_text(TOOL_SURFACE_RESOURCE_URI, ToolSurfaceProfile::Extended);
         let parsed =
             serde_json::from_str::<Value>(&json).expect("tool surface policy JSON should parse");
         assert!(
-            parsed["extended_only_tools"]
+            parsed["core_tools"]
+                .as_array()
+                .expect("core_tools should be an array")
+                .iter()
+                .any(|entry| entry == "explore"),
+            "explore is product tooling and belongs on core"
+        );
+        assert!(
+            !parsed["extended_only_tools"]
                 .as_array()
                 .expect("extended_only_tools should be an array")
                 .iter()
-                .any(|entry| entry == "explore")
+                .any(|entry| entry == "explore"),
+            "explore must not be extended-only"
         );
     }
 
@@ -699,12 +714,20 @@ mod tests {
             )
         );
         assert!(
-            !parsed["active_tools"]
+            parsed["active_tools"]
                 .as_array()
                 .expect("active_tools")
                 .iter()
                 .any(|entry| entry == "explore"),
-            "core active_tools must omit extended-only explore"
+            "core active_tools must include product explore tool"
+        );
+        assert!(
+            !parsed["active_tools"]
+                .as_array()
+                .expect("active_tools")
+                .iter()
+                .any(|entry| entry.as_str().is_some_and(|s| s.starts_with("playbook_"))),
+            "core active_tools must omit playbook tools"
         );
     }
 

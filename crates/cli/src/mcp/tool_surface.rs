@@ -10,9 +10,11 @@ pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 /// Registered MCP tool subset exposed by the running server process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolSurfaceProfile {
-    /// Stable restricted public runtime surface.
+    /// Default product surface: Futura primary loop + in-file `explore` (no playbook tools).
     Core,
-    /// Default public runtime surface that layers advanced exploration and optional playbook tools on top of the stable profile.
+    /// Product core plus optional playbook tools when compiled with `--features playbook`.
+    ///
+    /// Without the playbook feature, core and extended expose the same public tool names.
     Extended,
 }
 
@@ -34,15 +36,19 @@ pub struct ToolSurfaceManifest {
     pub tool_names: Vec<String>,
 }
 
+/// Tools registered only on the extended profile.
+///
+/// `explore` is **core** (agent product). Playbook tools are **dev/trace tooling**:
+/// compile-time opt-in (`--features playbook`) and extended-profile only — not on
+/// default cargo features, and not on `core` even when the feature is compiled in.
 #[cfg(feature = "playbook")]
 const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &[
-    "explore",
     "playbook_compose_citations",
     "playbook_replay",
     "playbook_run",
 ];
 #[cfg(not(feature = "playbook"))]
-const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &["explore"];
+const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &[];
 
 /// Resolves the active tool-surface profile from `FRIGG_MCP_TOOL_SURFACE_PROFILE`.
 pub fn active_runtime_tool_surface_profile() -> ToolSurfaceProfile {
@@ -170,5 +176,50 @@ mod tests {
             runtime_tool_surface_profile_from_env(Some(" ExTeNdEd ".to_owned())),
             ToolSurfaceProfile::Extended
         );
+    }
+
+    #[test]
+    fn explore_is_on_core_surface_playbook_is_not() {
+        use super::manifest_for_tool_surface_profile;
+
+        let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
+        assert!(
+            core.tool_names.iter().any(|name| name == "explore"),
+            "explore is product tooling and belongs on core"
+        );
+        assert!(
+            !core.tool_names.iter().any(|name| name.starts_with("playbook_")),
+            "playbook tools must not appear on core"
+        );
+
+        let extended = manifest_for_tool_surface_profile(ToolSurfaceProfile::Extended);
+        assert!(
+            extended.tool_names.iter().any(|name| name == "explore"),
+            "explore remains available on extended"
+        );
+        #[cfg(feature = "playbook")]
+        {
+            for playbook in [
+                "playbook_run",
+                "playbook_replay",
+                "playbook_compose_citations",
+            ] {
+                assert!(
+                    extended.tool_names.iter().any(|name| name == playbook),
+                    "playbook tool {playbook} should be extended-only when feature is on"
+                );
+                assert!(
+                    !core.tool_names.iter().any(|name| name == playbook),
+                    "playbook tool {playbook} must stay off core"
+                );
+            }
+        }
+        #[cfg(not(feature = "playbook"))]
+        {
+            assert_eq!(
+                core.tool_names, extended.tool_names,
+                "without playbook feature, core and extended expose the same public tools"
+            );
+        }
     }
 }
