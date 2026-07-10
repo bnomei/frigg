@@ -83,17 +83,18 @@ Classify before filing a Frigg product bug:
 
 | Symptom | Class | Owner | Operator action |
 | --- | --- | --- | --- |
-| `Tool not found: frigg__…` / Frigg absent from live `tools/list` in a Task/subagent while parent works | **Harness MCP registration / inheritance** | Host harness (Claude Task, Cursor agent, etc.) | Re-probe live tools on the child spawn; shell/Grep fallback is correct for that spawn; fix host MCP inheritance or connect child to HTTP `frigg serve` if the host supports it. **Not** a ranking, hybrid, or index bug. |
+| Frigg absent from live `tools/list` in a Task/subagent while parent still has Frigg (often surfaces as `Tool not found` on a known Frigg tool) | **Harness MCP registration / inheritance** | Host harness (Claude Task, Cursor agent, etc.) | (1) Re-probe live tools on the child; shell/Grep fallback is correct for that spawn. (2) Fix host MCP inheritance / child MCP config so the child actually receives Frigg. **Not** a ranking, hybrid, or index bug. |
 | Schema/descriptor files under host `mcps/frigg/tools/` exist but agent cannot call Frigg | Same — **schema on disk ≠ runtime registration** | Host | Do not treat descriptors as proof Frigg is live; re-check `tools/list`. |
 | HTTP connect refused / timeout to `127.0.0.1:37444/mcp` | Transport / process | Operator | Start `frigg serve`; verify port and adopt MCP URL. |
 | Frigg tools present; weak/wrong hits | Search / index / ranking | Frigg product | Use this runbook’s workspace, semantic, and precise sections. |
 | Grep-first while Frigg tools are registered | Host tool-order preference | Host / soft policy | Soft hooks and skill only; Frigg does not hide Grep (see harness policy pack). |
+| `Tool not found` for an invented / extended-only name while other Frigg tools work | Surface honesty / profile | Agent / config | Use live `tools/list` / `runtime.tools_exposed`; not FUT-003 inheritance. |
 
-**Wontfix product (FUT-003):** Guaranteeing third-party subagent MCP inheritance, controlling built-in Grep order, or failing Frigg CI because a host Task tool flaked.
+**Wontfix product (FUT-003):** Guaranteeing third-party subagent MCP inheritance, controlling built-in Grep order, or failing Frigg CI because a host Task tool flaked. (Dogfood hosts may include Grok-class agents; the boundary is harness reliability, not a single vendor.)
 
-**When multi-client work matters:** Prefer loopback HTTP + `frigg serve` so registered clients share one runtime. Shared HTTP does **not** create registration on a child that never received Frigg tools.
+**When multi-client work matters:** After each spawn has Frigg registered, prefer loopback HTTP + `frigg serve` so clients share one runtime. Shared HTTP does **not** create registration on a child that never received Frigg tools.
 
-Agents should **probe-on-spawn** (skill language): verify Frigg on the live tool surface for *this* Task/subagent before claiming Frigg-first compliance.
+Agents should **probe-on-spawn** (skill language): verify Frigg via live `tools/list` (or a successful Frigg call) for *this* Task/subagent — not parent tools or on-disk descriptors.
 
 ## Quick diagnosis map
 

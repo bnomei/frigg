@@ -16,7 +16,7 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
 
 **Harness boundary (Frigg is an evidence layer, not an agent OS):**
 
-- Host tool order, Grep-first defaults, and intermittent MCP bridges are **outside** Frigg product code (**FUT-003** — not a Frigg CI gate or ranking bug).
+- Host tool order, Grep-first defaults, and intermittent MCP **registration/inheritance** flukes are **outside** Frigg product code (**FUT-003** harness boundary — not a Frigg CI gate or ranking bug).
 - When the bridge is down or tools are unregistered, that is **harness reliability**, not ranking quality.
 - Soft PreToolUse / adopt hooks are **opt-in** (not guaranteed Frigg-first). Soft only: Claude hook injects next-step context (`search_text` / `search_batch` / …) and **never hard-denies** Grep/shell (`permissionDecision` is not product).
 - Hard block of Grep/`rg` on indexed roots is a **host experiment**, not Frigg core — do not invent `FRIGG_HOOK_STRICT` or product tool-order hacks.
@@ -26,15 +26,20 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
 **Probe-on-spawn (Task / subagent / new session):**
 
 ```text
-1. Before claiming Frigg-first, verify Frigg is on the *live* tool surface for THIS spawn:
-   tools/list, CallMcpTool descriptors, or runtime.tools_exposed (after workspace if already attached).
-2. If Frigg tools are missing ("Tool not found: frigg__…", empty Frigg server, schema-only cache):
+1. Before claiming Frigg-first, verify Frigg is on the *live* host tool surface for THIS spawn:
+   live tools/list (or a successful Frigg CallMcpTool). Do NOT trust on-disk mcps/…/tools
+   descriptors or a parent session's tool list as proof this spawn has Frigg.
+2. If Frigg is absent from live tools/list for this spawn (empty Frigg server, or
+   Tool not found when calling a known Frigg tool like search_text while the parent still has Frigg):
    - Shell/Grep/Read fallback is correct for this spawn
    - Note the gap once (harness MCP inheritance / registration) — do NOT file as Frigg search/ranking failure
    - Do NOT invent workspace_reindex / bridge_health / fake tools to "fix" registration
+   - (Invented names / extended-only tools missing while other Frigg tools work → surface honesty,
+     not inheritance — see tool-surface rules)
 3. Parent session success does NOT imply child Task success — re-probe every delegation.
-4. Prefer loopback HTTP + frigg serve when multiple clients/subagents should share one Frigg;
-   HTTP shares state when registration works — it does not create child registration by itself.
+4. Prefer loopback HTTP + frigg serve when multiple clients/subagents should share one Frigg
+   *after* each spawn actually has Frigg registered; HTTP shares state when registration works —
+   it does not create child registration by itself.
 ```
 
 **Transport contract (dual mode — hosts choose; Frigg does not force one):**
@@ -142,7 +147,8 @@ BAD: invent review_bundle / bug_trace_bundle / citation-service tools — impact
 BAD: invent product tool-order hacks or blame Frigg ranking when host Grep wins / MCP bridge is flaky
 BAD: answer from hybrid rank-1 alone or treat ranking policy as a second agent skill
 BAD: claim Frigg-first in a Task/subagent without re-probing live tools/list for that spawn
-BAD: treat "Tool not found: frigg__*" as ranking/hybrid/index failure (it is harness registration)
+BAD: treat parent-OK/child-missing Frigg (or empty Frigg server on this spawn) as ranking/hybrid/index failure — that is harness registration (FUT-003)
+BAD: treat every Tool not found as inheritance — invented phantoms and extended-only names are surface honesty
 BAD: invent bridge_health / subagent_mcp_status Frigg tools (cannot observe missing registration from inside Frigg)
 ```
 
