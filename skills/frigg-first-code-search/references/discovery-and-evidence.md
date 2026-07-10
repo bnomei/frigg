@@ -205,6 +205,13 @@ Default behavior:
 - use `presentation_mode=json` for repository, path, line window, byte, metadata, or machine-readable `content` fields
 - typed `resource_not_found` if the handle or match has expired
 
+Handle lifetime:
+- Session-scoped bookmarks (`handle_expires="session"`), not durable citation ids
+- Dropped on explicit reindex / detach / whole-repo cache wipe for that repository
+- Watch refresh: anchors on **dirty paths only** are dropped; clean-path anchors may remain
+- Unknown dirty set (notify drop, failed refresh) → whole-repo handle wipe
+- After post-edit, `use_live_disk`, or `wait_watch`→ready for paths you care about: **re-run search** before trusting an old `result_handle`
+
 ## `read_file`
 
 Use `read_file` as the repository-backed replacement for `cat`, `sed -n`, and bounded source-code reads once the path matters to the Frigg investigation flow.

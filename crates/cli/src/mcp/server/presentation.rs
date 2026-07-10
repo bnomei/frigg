@@ -189,6 +189,80 @@ impl FriggMcpServer {
             .retain(|handle| retained_handles.contains(handle));
     }
 
+    /// Drop only anchors whose paths are in `dirty_paths` (EXP-handle-inval D).
+    ///
+    /// Handles with remaining clean-path matches stay valid. Handles that lose all matches
+    /// are removed (subsequent `read_match` → StaleHandle). Empty `dirty_paths` falls back
+    /// to whole-repository invalidation for the given ids.
+    pub(super) fn invalidate_session_result_handles_for_paths(
+        &self,
+        repository_ids: &[&str],
+        dirty_paths: &[String],
+    ) {
+        if repository_ids.is_empty() {
+            return;
+        }
+        if dirty_paths.is_empty() {
+            self.invalidate_session_result_handles_for_repository_ids(repository_ids.iter().copied());
+            return;
+        }
+        let dirty: BTreeSet<String> = dirty_paths
+            .iter()
+            .map(|path| Self::normalize_handle_path(path))
+            .filter(|path| !path.is_empty())
+            .collect();
+        if dirty.is_empty() {
+            self.invalidate_session_result_handles_for_repository_ids(repository_ids.iter().copied());
+            return;
+        }
+
+        let mut cache = self
+            .session_state
+            .inner
+            .result_handles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut empty_handles = Vec::new();
+        for (handle, entry) in cache.entries.iter_mut() {
+            entry.matches.retain(|_, anchor| {
+                let repo_hit = repository_ids
+                    .iter()
+                    .any(|repository_id| anchor.repository_id == *repository_id);
+                if !repo_hit {
+                    return true;
+                }
+                let anchor_path = Self::normalize_handle_path(&anchor.path);
+                !Self::handle_path_is_dirty(&anchor_path, &dirty)
+            });
+            if entry.matches.is_empty() {
+                empty_handles.push(handle.clone());
+            }
+        }
+        for handle in empty_handles {
+            cache.entries.remove(&handle);
+            cache.insertion_order.retain(|h| h != &handle);
+        }
+    }
+
+    fn normalize_handle_path(path: &str) -> String {
+        path.replace('\\', "/")
+            .trim_start_matches("./")
+            .trim_start_matches('/')
+            .to_owned()
+    }
+
+    fn handle_path_is_dirty(anchor_path: &str, dirty: &BTreeSet<String>) -> bool {
+        if dirty.contains(anchor_path) {
+            return true;
+        }
+        // Accept absolute dirty paths that end with the repo-relative anchor.
+        dirty.iter().any(|dirty_path| {
+            dirty_path == anchor_path
+                || dirty_path.ends_with(&format!("/{anchor_path}"))
+                || anchor_path.ends_with(&format!("/{dirty_path}"))
+        })
+    }
+
     /// Drop one session handle entry (used when a composer discards nested tool handles).
     pub(super) fn drop_session_result_handle(&self, result_handle: &str) {
         if result_handle.is_empty() {
@@ -1611,6 +1685,114 @@ mod tests {
                 matches[0].match_id.as_deref().expect("match id")
             ),
             SessionResultHandleLookup::StaleHandle
+        ));
+    }
+
+    /// EXP-handle-inval D: dirty-path anchors drop; clean-path anchors on the same
+    /// handle (or other handles) remain valid for `read_match`.
+    #[test]
+    fn path_scoped_handle_invalidation_drops_only_dirty_anchors() {
+        let server = presentation_test_server();
+        let mut dirty_matches = vec![sample_text_match("repo-001", "src/dirty.rs")];
+        let mut clean_matches = vec![sample_text_match("repo-001", "src/clean.rs")];
+        let mut mixed_matches = vec![
+            sample_text_match("repo-001", "src/dirty.rs"),
+            sample_text_match("repo-001", "src/other.rs"),
+        ];
+        let dirty_handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut dirty_matches)
+            .expect("dirty handle");
+        let clean_handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut clean_matches)
+            .expect("clean handle");
+        let mixed_handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut mixed_matches)
+            .expect("mixed handle");
+        let dirty_mid = dirty_matches[0].match_id.clone().expect("dirty match_id");
+        let clean_mid = clean_matches[0].match_id.clone().expect("clean match_id");
+        let mixed_dirty_mid = mixed_matches[0].match_id.clone().expect("mixed dirty match_id");
+        let mixed_clean_mid = mixed_matches[1].match_id.clone().expect("mixed clean match_id");
+
+        server.invalidate_session_result_handles_for_paths(
+            &["repo-001"],
+            &["src/dirty.rs".to_owned()],
+        );
+
+        assert!(
+            matches!(
+                server.session_result_handle_lookup(&dirty_handle, &dirty_mid),
+                SessionResultHandleLookup::StaleHandle
+            ),
+            "handle with only dirty anchors must be removed"
+        );
+        assert!(
+            matches!(
+                server.session_result_handle_lookup(&clean_handle, &clean_mid),
+                SessionResultHandleLookup::Found(_)
+            ),
+            "untouched-path handle must survive path-scoped invalidation"
+        );
+        assert!(
+            matches!(
+                server.session_result_handle_lookup(&mixed_handle, &mixed_clean_mid),
+                SessionResultHandleLookup::Found(_)
+            ),
+            "clean anchors on a multi-path handle must survive"
+        );
+        // Dirty match removed from the handle; handle still exists → MixedHandle
+        // (not Found). Agents should re-search rather than re-use the old match_id.
+        assert!(
+            matches!(
+                server.session_result_handle_lookup(&mixed_handle, &mixed_dirty_mid),
+                SessionResultHandleLookup::MixedHandle { .. }
+            ),
+            "dirty match_id on a surviving handle must not resolve"
+        );
+    }
+
+    #[test]
+    fn empty_dirty_paths_invalidates_all_repo_handles() {
+        let server = presentation_test_server();
+        let mut matches = vec![sample_text_match("repo-001", "src/a.rs")];
+        let handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut matches)
+            .expect("handle");
+        let mid = matches[0].match_id.clone().expect("match_id");
+
+        server.invalidate_session_result_handles_for_paths(&["repo-001"], &[]);
+
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle, &mid),
+            SessionResultHandleLookup::StaleHandle
+        ));
+    }
+
+    #[test]
+    fn path_scoped_invalidation_does_not_touch_other_repositories() {
+        let server = presentation_test_server();
+        let mut repo_a = vec![sample_text_match("repo-a", "src/lib.rs")];
+        let mut repo_b = vec![sample_text_match("repo-b", "src/lib.rs")];
+        let handle_a = server
+            .assign_result_handle_for_text_matches("search_text", &mut repo_a)
+            .expect("handle a");
+        let handle_b = server
+            .assign_result_handle_for_text_matches("search_text", &mut repo_b)
+            .expect("handle b");
+        let mid_a = repo_a[0].match_id.clone().expect("mid a");
+        let mid_b = repo_b[0].match_id.clone().expect("mid b");
+
+        server.invalidate_session_result_handles_for_paths(
+            &["repo-a"],
+            &["src/lib.rs".to_owned()],
+        );
+
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle_a, &mid_a),
+            SessionResultHandleLookup::StaleHandle
+        ));
+        assert!(matches!(
+            server.session_result_handle_lookup(&handle_b, &mid_b),
+            SessionResultHandleLookup::Found(_)
         ));
     }
 

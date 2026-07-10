@@ -42,7 +42,7 @@ impl FriggMcpServer {
         &self,
     ) -> crate::watch::RepositoryCacheInvalidationCallback {
         let server = self.clone();
-        Arc::new(move |repository_id: &str| {
+        Arc::new(move |repository_id: &str, dirty_paths: &[String]| {
             let original_repository_id = repository_id.to_owned();
             let workspace = server
                 .runtime_state
@@ -70,6 +70,31 @@ impl FriggMcpServer {
             server.scip_invalidate_repository_precise_generation_cache(repository_id);
             server.invalidate_repository_precise_graph_caches(repository_id);
             server.invalidate_repository_navigation_caches(repository_id);
+            // EXP-handle-inval D: path-scoped session handle drop after watch refresh.
+            // Empty dirty_paths → whole-repo handles (conservative unknown set).
+            let aliases: Vec<String> = workspace
+                .as_ref()
+                .map(|ws| {
+                    Self::runtime_task_repository_aliases(ws)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    let mut ids = vec![repository_id.to_owned()];
+                    if original_repository_id != repository_id {
+                        ids.push(original_repository_id.clone());
+                    }
+                    ids
+                });
+            let alias_refs: Vec<&str> = aliases.iter().map(String::as_str).collect();
+            if dirty_paths.is_empty() {
+                server.invalidate_session_result_handles_for_repository_ids(
+                    alias_refs.iter().copied(),
+                );
+            } else {
+                server.invalidate_session_result_handles_for_paths(&alias_refs, dirty_paths);
+            }
         })
     }
 

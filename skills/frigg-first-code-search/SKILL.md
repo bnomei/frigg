@@ -96,6 +96,7 @@ BAD: go_to_definition(path, line) without symbol on dense lines
 BAD: ignore ambiguous_location=true / location_warning and edit from path+line defs
 BAD: find_declarations then go_to_definition (or both) as the default known-symbol loop
 BAD: read_match with a match_id from another result_handle
+BAD: read_match with a pre-edit result_handle after post-edit / reindex without re-search
 BAD: repo-wide shell rg to "confirm" an explainable Frigg zero
 BAD: throwaway shell rg on indexed src when Frigg is attached
 BAD: calling tools only in a stale schema cache, not in live tools/list
@@ -112,7 +113,7 @@ After search: read_match (or read_file) before answering or editing.
 After hybrid: exact search_text or search_symbol before proof.
 After impact query: navigation evidence before textual whole-repo grep.
 After surprising zero: trust zero_hit_reason / recovery fields before shell.
-After edit: workspace freshness before reusing Frigg for touched paths.
+After edit: workspace freshness before reusing Frigg for touched paths; re-search before old handles.
 ```
 
 Multi-hypothesis answers must cite at least one Frigg proof window with no parallel shell grep on indexed source while Frigg is healthy.
@@ -327,6 +328,15 @@ Prefer anchored path filters (`^ontology/`) over bare substrings (`ontology`).
 match_id is valid ONLY with its own result_handle from the SAME call.
 match_id is scoped: search:m1, symbols:m1, hybrid:m1, nav:m1 (never reuse across tools).
 handle_scope + handle_expires="session" mark the pairing lifetime.
+
+Handle lifetime (session-scoped, not a durable citation id):
+- Explicit reindex / detach / whole-repo cache wipe → handles for that repo drop (StaleHandle).
+- Watch refresh → only anchors on **dirty paths** drop; untouched-path bookmarks may still work.
+- Unknown dirty set (notify drop, failed refresh) → whole-repo handle wipe (conservative).
+- After post-edit / use_live_disk / wait_watch→ready for paths you care about:
+    **re-run search** before trusting an old result_handle for proof or citations.
+  Do not chain pre-edit handles across a freshness transition for those paths.
+
 Stale handle → re-run search; mixed/foreign match_id → use the matching handle from the same call.
 Text mode returns raw source (no line prefixes) — fine for internal proof.
 ```
@@ -422,11 +432,17 @@ Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or
 4. If wait_watch → read runtime.watch_status.reason (mode_off / no_lease / refreshing / active);
      wait or path-scoped live reads — do not "verify" with whole-repo rg or micro-manage retries
 5. If reindex → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
+6. **Handles after freshness:** do not `read_match` a pre-edit result_handle for touched paths.
+     Re-run search_text / search_symbol / nav after ready (or after watch commits dirty paths).
+     Untouched-path handles may still resolve; treat that as opportunistic, not guaranteed
+     across reindex or whole-repo invalidation.
 BAD: workspace dirty → rg -n across the repo
 BAD: recommended_action=reindex → call invented MCP workspace_reindex
 BAD: wait_watch → invent a retry loop without reading watch_status
+BAD: post-edit → read_match(old_handle) for a file you just changed
 GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path watch refresh
 GOOD: recommended_action=reindex → frigg index (CLI) or wait for operator; read gate_hint
+GOOD: after ready → new search → new result_handle → read_match
 ```
 
 ### Bug trace
