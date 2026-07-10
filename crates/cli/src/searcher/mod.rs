@@ -673,7 +673,10 @@ impl TextSearcher {
         filters: SearchFilters,
     ) -> FriggResult<SearchHybridExecutionOutput> {
         let credentials = SemanticRuntimeCredentials::from_process_env();
-        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::new(credentials.clone());
+        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::with_endpoint(
+            credentials.clone(),
+            self.config.semantic_runtime.openai_compat_endpoint.clone(),
+        );
         self.search_hybrid_with_filters_using_executor(
             query,
             filters,
@@ -688,7 +691,10 @@ impl TextSearcher {
         filters: SearchFilters,
         credentials: &SemanticRuntimeCredentials,
     ) -> FriggResult<SearchHybridExecutionOutput> {
-        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::new(credentials.clone());
+        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::with_endpoint(
+            credentials.clone(),
+            self.config.semantic_runtime.openai_compat_endpoint.clone(),
+        );
         self.search_hybrid_with_filters_using_executor(
             query,
             filters,

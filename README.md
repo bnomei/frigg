@@ -372,9 +372,10 @@ Precedence is `CLI flag > environment variable > default`.
 | `FRIGG_SQLITE_BUSY_TIMEOUT_MS` | `30000` | SQLite wait timeout for transient writer contention. |
 | `FRIGG_CONTEXT_EFFICIENCY_LOG` | `false` | Append compact context-efficiency rows to `.frigg/context.jsonl`. |
 | `--semantic-runtime-enabled` / `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enable semantic indexing and recall. |
-| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `google`, or `local`. |
+| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `openai_compat`, `google`, or `local`. |
 | `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Embedding model override. |
 | `--semantic-runtime-strict-mode` / `FRIGG_SEMANTIC_RUNTIME_STRICT_MODE` | `false` | Convert semantic provider failures into user-visible errors instead of graceful fallback. |
+| `--semantic-runtime-openai-compat-endpoint` / `FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT` | (required for `openai_compat`) | Full embeddings POST URL for OpenAI-compatible servers. |
 
 Built-in watch mode runs behind `frigg serve` and refreshes adopted repositories while active MCP sessions hold watcher leases. It updates `.frigg/storage.sqlite3`; it does not create a separate sidecar index.
 
@@ -411,17 +412,31 @@ export GEMINI_API_KEY=<API_KEY>
 frigg index
 ```
 
+OpenAI-compatible provider (vLLM, LM Studio, Azure-compatible, gateways):
+
+```bash
+export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
+export FRIGG_SEMANTIC_RUNTIME_PROVIDER=openai_compat
+export FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT=http://127.0.0.1:1234/v1/embeddings
+export FRIGG_OPENAI_COMPAT_API_KEY=<API_KEY_OR_DUMMY>
+# optional: export FRIGG_SEMANTIC_RUNTIME_MODEL=<backend-model-id>
+frigg index
+```
+
+`openai_compat` uses the OpenAI embeddings HTTP wire format against a **full** embeddings POST URL. Storage partition identity is `provider=openai_compat` + model (not `openai`). Bearer auth prefers `FRIGG_OPENAI_COMPAT_API_KEY` and falls back to `OPENAI_API_KEY`.
+
 Provider defaults:
 
-Defaults: `local` -> `all-MiniLM-L6-v2`, `openai` -> `text-embedding-3-small`, `google` -> `gemini-embedding-001`.
+Defaults: `local` -> `all-MiniLM-L6-v2`, `openai` / `openai_compat` -> `text-embedding-3-small`, `google` -> `gemini-embedding-001`.
 
-| Provider | Default model | Credential |
-| --- | --- | --- |
-| `local` | `all-MiniLM-L6-v2` | none |
-| `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
-| `google` | `gemini-embedding-001` | `GEMINI_API_KEY` |
+| Provider | Default model | Credential | Endpoint |
+| --- | --- | --- | --- |
+| `local` | `all-MiniLM-L6-v2` | none | in-process |
+| `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` | fixed `api.openai.com` |
+| `openai_compat` | `text-embedding-3-small` (override for your backend) | `FRIGG_OPENAI_COMPAT_API_KEY` (or `OPENAI_API_KEY`) | **required** full POST URL |
+| `google` | `gemini-embedding-001` | `GEMINI_API_KEY` | Google Generative Language API |
 
-Machine-readable catalog: MCP resource `frigg://policy/semantic-models.json`. Each model lists **real** `native_dimensions` (pre-pad model width — e.g. MiniLM **384**, not 1536). Store schema width is separate: `projection_dimensions` (1536); short vectors are zero-padded only to fit sqlite-vec (`pad_to_projection`), which is **not** a quality upgrade. Quality scores are **unbenchmarked**. Soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`) expand to provider+model env keys; they are **not** CLI flags and never replace storage partition identity. Semantic remains optional acceleration (see `frigg://policy/support-matrix.json`). Operator detail: [docs/operator-runbook.md](docs/operator-runbook.md) (Why the DB pads).
+Machine-readable catalog: MCP resource `frigg://policy/semantic-models.json`. Each model lists **real** `native_dimensions` (pre-pad model width — e.g. MiniLM **384**, not 1536). Store schema width is separate: `projection_dimensions` (1536); short vectors are zero-padded only to fit sqlite-vec (`pad_to_projection`), which is **not** a quality upgrade. Quality scores are **unbenchmarked**. Soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`, `openai-compat-selfhost`) expand to provider+model env keys; they are **not** CLI flags and never replace storage partition identity. Semantic remains optional acceleration (see `frigg://policy/support-matrix.json`). Operator detail: [docs/operator-runbook.md](docs/operator-runbook.md) (Why the DB pads).
 
 After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic index pass with `frigg index`.
 

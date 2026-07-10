@@ -84,6 +84,7 @@ pub(crate) fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfi
             .or(enabled.then_some(SemanticRuntimeProvider::Local)),
         model: cli.semantic_runtime_model.clone(),
         strict_mode: cli.semantic_runtime_strict_mode.unwrap_or(false),
+        openai_compat_endpoint: cli.semantic_runtime_openai_compat_endpoint.clone(),
     }
 }
 

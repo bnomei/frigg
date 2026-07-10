@@ -57,6 +57,7 @@ fn hybrid_ranking_semantic_channel_surfaces_docs_runtime_and_tests_witnesses() -
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -147,6 +148,7 @@ fn hybrid_semantic_uses_runtime_repository_id_override_for_storage() -> FriggRes
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -223,6 +225,7 @@ fn hybrid_ranking_semantic_ok_still_expands_lexical_recall_for_underfilled_queri
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -328,6 +331,7 @@ fn hybrid_ranking_semantic_hit_count_tracks_retained_documents_not_raw_chunks() 
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -421,6 +425,7 @@ fn hybrid_ranking_semantic_request_reuses_request_scoped_storage_context_but_sti
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -494,6 +499,7 @@ fn hybrid_ranking_semantic_unavailable_without_corpus_still_expands_lexical_reca
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -567,6 +573,7 @@ fn hybrid_ranking_semantic_ok_empty_channel_when_active_index_is_filtered_out() 
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -627,6 +634,7 @@ fn hybrid_ranking_semantic_reports_unsupported_language_filter_as_unavailable() 
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -713,6 +721,7 @@ fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_mani
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -1511,6 +1520,7 @@ fn hybrid_ranking_semantic_channel_blends_retrieval_when_enabled() -> FriggResul
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![0.0, 1.0]);
 
@@ -1634,6 +1644,7 @@ fn hybrid_ranking_semantic_channel_ignores_excluded_paths_and_non_active_models(
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: Some("test-gemini-key".to_owned()),
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -1810,6 +1821,7 @@ fn hybrid_ranking_semantic_channel_can_be_disabled_per_query_toggle() -> FriggRe
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = PanicSemanticQueryEmbeddingExecutor;
 
@@ -1852,6 +1864,7 @@ fn hybrid_ranking_semantic_channel_degrades_on_provider_failure_non_strict() -> 
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor =
         MockSemanticQueryEmbeddingExecutor::failure("mock semantic provider unavailable");
@@ -1901,6 +1914,7 @@ fn hybrid_ranking_semantic_channel_strict_mode_surfaces_strict_failure() -> Frig
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor =
         MockSemanticQueryEmbeddingExecutor::failure("mock semantic provider unavailable");
@@ -1941,6 +1955,7 @@ fn hybrid_ranking_semantic_enabled_replay_is_deterministic() -> FriggResult<()> 
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![0.0, 1.0]);
 
@@ -1985,6 +2000,7 @@ fn hybrid_ranking_semantic_degraded_replay_is_deterministic() -> FriggResult<()>
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor =
         MockSemanticQueryEmbeddingExecutor::failure("mock semantic provider unavailable");
@@ -2030,6 +2046,7 @@ fn hybrid_ranking_semantic_strict_failure_replay_is_deterministic() -> FriggResu
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor =
         MockSemanticQueryEmbeddingExecutor::failure("mock semantic provider unavailable");
@@ -2077,6 +2094,7 @@ fn hybrid_search_semantic_query_embedding_works_inside_existing_tokio_runtime() 
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
     let runtime = tokio::runtime::Builder::new_current_thread()

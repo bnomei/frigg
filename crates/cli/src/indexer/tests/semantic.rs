@@ -24,6 +24,7 @@ fn semantic_indexing_index_persists_deterministic_embeddings_when_enabled() -> F
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let first = index_repository_with_semantic_executor(
@@ -141,6 +142,7 @@ fn semantic_indexing_local_model_alias_indexes_with_canonical_partition() -> Fri
         provider: Some(SemanticRuntimeProvider::Local),
         model: Some("AllMiniLML6V2".to_owned()),
         strict_mode: false,
+    openai_compat_endpoint: None,
     };
     let summary = index_repository_with_semantic_executor(
         "repo-001",
@@ -206,6 +208,7 @@ fn semantic_full_index_skips_stale_deleted_absolute_paths_outside_workspace() ->
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let summary = index_repository_with_semantic_executor(
         "repo-001",
@@ -257,6 +260,7 @@ fn semantic_changed_only_full_rebuilds_when_deleted_path_cannot_be_mapped() -> F
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let old_summary = index_repository_with_semantic_executor(
         "repo-001",
@@ -343,6 +347,7 @@ fn semantic_indexing_enabled_succeeds_inside_existing_tokio_runtime() -> FriggRe
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -390,7 +395,10 @@ fn semantic_indexing_disabled_preserves_index_behavior() -> FriggResult<()> {
         IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
-        &RuntimeSemanticEmbeddingExecutor::new(SemanticRuntimeCredentials::default()),
+        &RuntimeSemanticEmbeddingExecutor::with_endpoint(
+            SemanticRuntimeCredentials::default(),
+            None,
+        ),
     )?;
     assert_eq!(summary.files_scanned, 2);
     assert_eq!(summary.files_changed, 2);
@@ -423,6 +431,7 @@ fn semantic_indexing_validation_failure_keeps_existing_semantic_state() -> Frigg
     let valid_credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let valid_summary = index_repository_with_semantic_executor(
         "repo-001",
@@ -447,6 +456,7 @@ fn semantic_indexing_validation_failure_keeps_existing_semantic_state() -> Frigg
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+    openai_compat_endpoint: None,
     };
     let invalid_credentials = SemanticRuntimeCredentials::default();
     let error = index_repository_with_semantic_executor(
@@ -489,6 +499,7 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let first = index_repository_with_semantic_executor(
@@ -586,6 +597,7 @@ fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let first_executor = CountingSemanticEmbeddingExecutor::default();
     let first = index_repository_with_semantic_executor(
@@ -670,6 +682,7 @@ fn semantic_full_rebuild_reuses_existing_chunk_embeddings() -> FriggResult<()> {
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let first_executor = CountingSemanticEmbeddingExecutor::default();
     let first = index_repository_with_semantic_executor(
@@ -729,6 +742,7 @@ fn semantic_changed_only_reuses_unchanged_chunks_inside_changed_file() -> FriggR
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let first_executor = CountingSemanticEmbeddingExecutor::default();
     let first = index_repository_with_semantic_executor(
@@ -806,6 +820,7 @@ fn semantic_changed_only_deletes_rows_for_changed_file_that_fails_semantic_read(
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
 
     let first = index_repository_with_semantic_executor(
@@ -876,6 +891,7 @@ fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> 
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
 
     let first = index_repository_with_semantic_executor(
@@ -987,6 +1003,7 @@ fn semantic_indexing_index_failure_surfaces_batch_context() -> FriggResult<()> {
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let error = index_repository_with_semantic_executor(
         "repo-001",
@@ -1401,6 +1418,7 @@ fn index_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> Fr
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let _summary = index_repository_with_semantic_executor(
@@ -1457,6 +1475,7 @@ fn incremental_semantic_advance_deletes_changed_unreadable_rows() -> FriggResult
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let first = index_repository_with_semantic_executor(
@@ -1522,6 +1541,7 @@ fn index_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_unch
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let summary = index_repository_with_semantic_executor(
@@ -1580,6 +1600,7 @@ fn index_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() -> F
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let semantic_summary = index_repository_with_semantic_executor(
@@ -1605,7 +1626,10 @@ fn index_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() -> F
         IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
-        &RuntimeSemanticEmbeddingExecutor::new(SemanticRuntimeCredentials::default()),
+        &RuntimeSemanticEmbeddingExecutor::with_endpoint(
+            SemanticRuntimeCredentials::default(),
+            None,
+        ),
     )?;
     assert_ne!(
         manifest_only_summary.snapshot_id,
@@ -1656,6 +1680,7 @@ fn index_plan_changed_only_with_dirty_hint_advances_after_manifest_fast_pass() -
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
     let semantic_summary = index_repository_with_semantic_executor(

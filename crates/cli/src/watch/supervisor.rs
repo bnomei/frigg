@@ -1797,6 +1797,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: Some("text-embedding-3-small".to_owned()),
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
         let credentials = SemanticRuntimeCredentials::default();
 

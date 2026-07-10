@@ -1271,10 +1271,12 @@ fn startup_refresh_status_requests_semantic_bootstrap_for_valid_manifest_without
             provider: Some(crate::settings::SemanticRuntimeProvider::OpenAi),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         },
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
     )
     .expect("startup refresh status should resolve");
@@ -1319,10 +1321,12 @@ fn startup_refresh_status_skips_semantic_bootstrap_when_no_eligible_entries_exis
             provider: Some(crate::settings::SemanticRuntimeProvider::OpenAi),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         },
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
     )
     .expect("startup refresh status should resolve");
@@ -1406,6 +1410,7 @@ fn watch_semantic_followup_validation_error_skips_doomed_followup_after_manifest
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+    openai_compat_endpoint: None,
     };
     let credentials = SemanticRuntimeCredentials::default();
 

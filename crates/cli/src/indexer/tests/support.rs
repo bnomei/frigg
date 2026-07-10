@@ -205,6 +205,7 @@ pub(super) fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+            openai_compat_endpoint: None,
     }
 }
 
@@ -214,6 +215,7 @@ pub(super) fn semantic_runtime_enabled_local() -> SemanticRuntimeConfig {
         provider: Some(SemanticRuntimeProvider::Local),
         model: Some("all-MiniLM-L6-v2".to_owned()),
         strict_mode: false,
+            openai_compat_endpoint: None,
     }
 }
 

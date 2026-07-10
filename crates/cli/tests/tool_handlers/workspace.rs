@@ -459,6 +459,7 @@ async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+        openai_compat_endpoint: None,
     };
     let server = server_for_config(config);
 
@@ -540,6 +541,7 @@ async fn workspace_attach_hides_repository_health_artifact_counts() {
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+        openai_compat_endpoint: None,
     };
     let server = server_for_config(config);
 

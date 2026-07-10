@@ -17,7 +17,10 @@ use crate::embeddings::{
     cached_semantic_embedding_provider, provider_factory::canonical_provider_model,
 };
 use crate::indexer::manifest::normalize_repository_relative_path;
-use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
+use crate::settings::{
+    OPENAI_COMPAT_ENDPOINT_ENV_VAR, SemanticRuntimeConfig, SemanticRuntimeCredentials,
+    SemanticRuntimeProvider,
+};
 use crate::storage::{
     DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, SemanticChunkEmbeddingRecord, SemanticHeadRecord,
     Storage, StorageSession,
@@ -169,11 +172,18 @@ fn execute_semantic_embedding_batch(
 #[derive(Debug, Default)]
 pub(super) struct RuntimeSemanticEmbeddingExecutor {
     credentials: SemanticRuntimeCredentials,
+    endpoint: Option<String>,
 }
 
 impl RuntimeSemanticEmbeddingExecutor {
-    pub(super) fn new(credentials: SemanticRuntimeCredentials) -> Self {
-        Self { credentials }
+    pub(super) fn with_endpoint(
+        credentials: SemanticRuntimeCredentials,
+        endpoint: Option<String>,
+    ) -> Self {
+        Self {
+            credentials,
+            endpoint,
+        }
     }
 }
 
@@ -200,6 +210,7 @@ impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
                     model: &request.model,
                     credentials: &self.credentials,
                     local_artifact_policy: LocalArtifactPolicy::AllowPreparation,
+                    endpoint: self.endpoint.as_deref(),
                 })
                 .map_err(|err| {
                     FriggError::Internal(format!(
@@ -241,12 +252,17 @@ pub(super) fn resolve_semantic_runtime_config_from_env() -> FriggResult<Semantic
     let model = std::env::var(FRIGG_SEMANTIC_RUNTIME_MODEL_ENV)
         .ok()
         .map(|raw| raw.trim().to_owned());
+    let openai_compat_endpoint = std::env::var(OPENAI_COMPAT_ENDPOINT_ENV_VAR)
+        .ok()
+        .map(|raw| raw.trim().to_owned())
+        .filter(|value| !value.is_empty());
 
     Ok(SemanticRuntimeConfig {
         enabled,
         provider,
         model,
         strict_mode,
+        openai_compat_endpoint,
     })
 }
 

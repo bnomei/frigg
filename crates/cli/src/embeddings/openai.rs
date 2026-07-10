@@ -54,11 +54,14 @@ struct OpenAiErrorPayload {
 }
 
 /// OpenAI embeddings client implementing the shared [`EmbeddingProvider`] contract.
+///
+/// Also used for [`EmbeddingProviderKind::OpenAiCompat`] with a custom endpoint and kind identity.
 pub struct OpenAiEmbeddingProvider {
     http: Arc<dyn HttpExecutor>,
     sleeper: Arc<dyn BackoffSleeper>,
     api_key: String,
     config: OpenAiEmbeddingProviderConfig,
+    kind: EmbeddingProviderKind,
 }
 
 impl OpenAiEmbeddingProvider {
@@ -67,9 +70,26 @@ impl OpenAiEmbeddingProvider {
     }
 
     pub fn with_config(api_key: impl Into<String>, config: OpenAiEmbeddingProviderConfig) -> Self {
+        Self::with_config_kind(api_key, config, EmbeddingProviderKind::OpenAi)
+    }
+
+    /// Builds an OpenAI-protocol client with an explicit provider kind (`openai` or `openai_compat`).
+    pub fn with_config_kind(
+        api_key: impl Into<String>,
+        config: OpenAiEmbeddingProviderConfig,
+        kind: EmbeddingProviderKind,
+    ) -> Self {
+        debug_assert!(
+            matches!(
+                kind,
+                EmbeddingProviderKind::OpenAi | EmbeddingProviderKind::OpenAiCompat
+            ),
+            "OpenAiEmbeddingProvider kind must be openai or openai_compat"
+        );
         Self::with_runtime(
             api_key.into(),
             config,
+            kind,
             Arc::new(ReqwestHttpExecutor::new(Client::new())),
             Arc::new(TokioSleeper),
         )
@@ -78,6 +98,7 @@ impl OpenAiEmbeddingProvider {
     pub(super) fn with_runtime(
         api_key: String,
         config: OpenAiEmbeddingProviderConfig,
+        kind: EmbeddingProviderKind,
         http: Arc<dyn HttpExecutor>,
         sleeper: Arc<dyn BackoffSleeper>,
     ) -> Self {
@@ -86,6 +107,7 @@ impl OpenAiEmbeddingProvider {
             sleeper,
             api_key,
             config,
+            kind,
         }
     }
 
@@ -308,7 +330,7 @@ impl OpenAiEmbeddingProvider {
 #[async_trait]
 impl EmbeddingProvider for OpenAiEmbeddingProvider {
     fn kind(&self) -> EmbeddingProviderKind {
-        EmbeddingProviderKind::OpenAi
+        self.kind
     }
 
     async fn embed(&self, request: EmbeddingRequest) -> EmbeddingResult<EmbeddingResponse> {

@@ -260,6 +260,7 @@ fn hybrid_ranking_semantic_auth_queries_keep_runtime_and_readme_witnesses() -> F
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -432,6 +433,7 @@ fn hybrid_ranking_entrypoint_queries_promote_main_over_runner_helpers() -> Frigg
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 
@@ -549,6 +551,7 @@ fn hybrid_ranking_symbol_plus_entrypoint_queries_keep_runner_family_above_semant
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;

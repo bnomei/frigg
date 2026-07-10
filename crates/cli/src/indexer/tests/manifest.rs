@@ -445,10 +445,12 @@ fn index_materializes_authoritative_retrieval_projection_heads() -> FriggResult<
         provider: None,
         model: None,
         strict_mode: false,
+    openai_compat_endpoint: None,
     };
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: None,
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let summary = index_repository_with_runtime_config(
         "repo-001",
@@ -565,10 +567,12 @@ fn index_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggResu
         provider: None,
         model: None,
         strict_mode: false,
+    openai_compat_endpoint: None,
     };
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: None,
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let summary = index_repository_with_runtime_config(
         "repo-001",
@@ -652,10 +656,12 @@ fn index_changed_only_repairs_missing_retrieval_projection_family_on_reused_snap
         provider: None,
         model: None,
         strict_mode: false,
+    openai_compat_endpoint: None,
     };
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: None,
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let initial_summary = index_repository_with_runtime_config(
         "repo-001",

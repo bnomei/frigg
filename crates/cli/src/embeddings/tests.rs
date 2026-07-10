@@ -108,6 +108,7 @@ fn openai_provider_for_test(
             timeout: Duration::from_secs(5),
             retry_policy,
         },
+        EmbeddingProviderKind::OpenAi,
         http,
         sleeper,
     )
@@ -167,6 +168,7 @@ fn provider_trait_exposes_kind_and_default_limits() {
 fn provider_trait_helpers_expose_stable_defaults_and_strings() {
     let retry_policy = RetryPolicy::default();
     assert_eq!(EmbeddingProviderKind::OpenAi.as_str(), "openai");
+    assert_eq!(EmbeddingProviderKind::OpenAiCompat.as_str(), "openai_compat");
     assert_eq!(EmbeddingProviderKind::Google.as_str(), "google");
     assert_eq!(EmbeddingProviderKind::Local.as_str(), "local");
     assert_eq!(EmbeddingProviderKind::VectorStore.as_str(), "vector_store");
@@ -823,6 +825,7 @@ async fn reqwest_http_executor_sends_parseable_openai_json_body() {
             timeout: Duration::from_secs(5),
             retry_policy: RetryPolicy::default(),
         },
+        EmbeddingProviderKind::OpenAi,
         Arc::new(ReqwestHttpExecutor::new(Client::new())),
         Arc::new(MockSleeper::default()),
     );
@@ -1295,9 +1298,11 @@ fn semantic_provider_factory_constructs_openai_and_google_without_embedding_call
         model: "text-embedding-3-small",
         credentials: &crate::settings::SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
+            openai_compat_api_key: None,
             gemini_api_key: None,
         },
         local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        endpoint: None,
     })
     .expect("openai provider should construct from credentials");
     assert_eq!(openai.kind(), EmbeddingProviderKind::OpenAi);
@@ -1307,12 +1312,45 @@ fn semantic_provider_factory_constructs_openai_and_google_without_embedding_call
         model: "gemini-embedding-001",
         credentials: &crate::settings::SemanticRuntimeCredentials {
             openai_api_key: None,
+            openai_compat_api_key: None,
             gemini_api_key: Some("test-gemini-key".to_owned()),
         },
         local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        endpoint: None,
     })
     .expect("google provider should construct from credentials");
     assert_eq!(google.kind(), EmbeddingProviderKind::Google);
+
+    let compat = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+        provider: crate::settings::SemanticRuntimeProvider::OpenAiCompat,
+        model: "nomic-embed-text",
+        credentials: &crate::settings::SemanticRuntimeCredentials {
+            openai_api_key: None,
+            openai_compat_api_key: Some("compat-key".to_owned()),
+            gemini_api_key: None,
+        },
+        local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        endpoint: Some("http://127.0.0.1:1234/v1/embeddings"),
+    })
+    .expect("openai_compat provider should construct with endpoint and key");
+    assert_eq!(compat.kind(), EmbeddingProviderKind::OpenAiCompat);
+
+    let missing_endpoint =
+        cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+            provider: crate::settings::SemanticRuntimeProvider::OpenAiCompat,
+            model: "nomic-embed-text",
+            credentials: &crate::settings::SemanticRuntimeCredentials {
+                openai_api_key: None,
+                openai_compat_api_key: Some("compat-key".to_owned()),
+                gemini_api_key: None,
+            },
+            local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
+        });
+    assert!(
+        missing_endpoint.is_err(),
+        "openai_compat without endpoint must fail construction"
+    );
 }
 
 #[test]
@@ -1322,6 +1360,7 @@ fn semantic_provider_factory_routes_local_without_requiring_api_key() {
         model: "unsupported-local-model",
         credentials: &crate::settings::SemanticRuntimeCredentials::default(),
         local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        endpoint: None,
     });
     let error = match result {
         Ok(_) => panic!("unsupported local model should fail before provider construction"),

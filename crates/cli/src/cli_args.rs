@@ -120,6 +120,20 @@ pub(crate) struct Cli {
     )]
     pub(crate) semantic_runtime_strict_mode: Option<bool>,
 
+    /// Full embeddings POST URL for `provider=openai_compat` (required for that provider).
+    ///
+    /// Example: `http://127.0.0.1:1234/v1/embeddings`
+    ///
+    /// [env: FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT]
+    #[arg(
+        long,
+        value_name = "URL",
+        env = "FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT",
+        hide_env = true,
+        global = true
+    )]
+    pub(crate) semantic_runtime_openai_compat_endpoint: Option<String>,
+
     /// Watch behavior for served workspaces.
     ///
     /// [env: FRIGG_WATCH_MODE=auto]

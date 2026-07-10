@@ -136,6 +136,7 @@ fn hybrid_ranking_semantic_laravel_ui_queries_surface_livewire_and_blade_witness
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -417,6 +418,7 @@ fn hybrid_ranking_semantic_laravel_route_queries_surface_route_witnesses() -> Fr
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -630,6 +632,7 @@ fn hybrid_ranking_semantic_laravel_linkstack_queries_recover_layouts_and_blade_v
     let credentials = SemanticRuntimeCredentials {
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
+        openai_compat_api_key: None,
     };
     let executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
 

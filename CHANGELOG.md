@@ -2,8 +2,9 @@
 
 ## Unreleased
 
+- Semantic provider `openai_compat`: OpenAI-protocol embeddings against a configurable full POST URL (`--semantic-runtime-openai-compat-endpoint` / `FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT`), Bearer via `FRIGG_OPENAI_COMPAT_API_KEY` (falls back to `OPENAI_API_KEY`), distinct storage partition from `openai`. Catalog/preset `openai-compat-selfhost` on `frigg://policy/semantic-models.json`.
 - Hybrid compact `ranking_note` signals `lexical_only (semantic not contributing)` when semantic is off or empty (product default remains semantic-off; no readiness metadata dump in compact).
-- MCP policy resource `frigg://policy/semantic-models.json`: curated embedding-model catalog (defaults, **real** `native_dimensions` only, pad flag, offline, credentials; quality unbenchmarked) plus soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`) that expand to provider+model (not CLI aliases). Docs: why sqlite-vec pads short vectors to projection width.
+- MCP policy resource `frigg://policy/semantic-models.json`: curated embedding-model catalog (defaults, **real** `native_dimensions` only, pad flag, offline, credentials; quality unbenchmarked) plus soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`, `openai-compat-selfhost`) that expand to provider+model (not CLI aliases). Docs: why sqlite-vec pads short vectors to projection width.
 - Skill + operator runbook: probe-on-spawn for Task/subagent Frigg registration; classify `Tool not found: frigg__*` as harness inheritance (FUT-003), not ranking/product P0.
 - Soft PreToolUse `HOOK_NUDGE` teaches preferred Frigg next steps (`search_text` / `search_batch` / …) while remaining soft-only (no `permissionDecision` deny; no strict mode).
 - Adopt: best-effort `--skill-provider {claude,codex,cursor,copilot}` copies `frigg-first-code-search` only when the host parent skills directory already exists (never creates `…/skills`).

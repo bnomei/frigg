@@ -186,7 +186,10 @@ pub fn index_repository_with_runtime_config_and_dirty_paths_and_progress_and_com
     on_before_commit: impl FnOnce(&IndexPlan) -> FriggResult<()>,
     on_progress: impl FnMut(IndexProgressEvent),
 ) -> FriggResult<IndexSummary> {
-    let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
+    let executor = RuntimeSemanticEmbeddingExecutor::with_endpoint(
+        credentials.clone(),
+        semantic_runtime.openai_compat_endpoint.clone(),
+    );
     index_repository_with_semantic_executor_and_dirty_paths(
         repository_id,
         workspace_root,

@@ -23,7 +23,8 @@ use super::local_model::{
 };
 use super::{
     EmbeddingError, EmbeddingProvider, EmbeddingProviderKind, EmbeddingResult,
-    GoogleEmbeddingProvider, OpenAiEmbeddingProvider, ProviderFailure,
+    GoogleEmbeddingProvider, OpenAiEmbeddingProvider, OpenAiEmbeddingProviderConfig,
+    ProviderFailure,
 };
 
 /// Policy controlling whether local model artifacts may be prepared during provider construction.
@@ -40,6 +41,8 @@ pub struct SemanticEmbeddingProviderFactoryConfig<'a> {
     pub model: &'a str,
     pub credentials: &'a SemanticRuntimeCredentials,
     pub local_artifact_policy: LocalArtifactPolicy,
+    /// Full embeddings POST URL required for [`SemanticRuntimeProvider::OpenAiCompat`].
+    pub endpoint: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,6 +51,7 @@ struct SemanticEmbeddingProviderCacheKey {
     model: String,
     credential_fingerprint: Option<String>,
     local_artifact_identity: Option<String>,
+    endpoint_fingerprint: Option<String>,
 }
 
 static SEMANTIC_EMBEDDING_PROVIDER_CACHE: OnceLock<
@@ -66,6 +70,17 @@ fn build_semantic_embedding_provider(
         SemanticRuntimeProvider::OpenAi => {
             let api_key = require_api_key(config.provider, config.credentials)?;
             Ok(Arc::new(OpenAiEmbeddingProvider::new(api_key.to_owned())))
+        }
+        SemanticRuntimeProvider::OpenAiCompat => {
+            let api_key = require_api_key(config.provider, config.credentials)?;
+            let endpoint = require_openai_compat_endpoint(config.endpoint)?;
+            let mut provider_config = OpenAiEmbeddingProviderConfig::default();
+            provider_config.endpoint = endpoint;
+            Ok(Arc::new(OpenAiEmbeddingProvider::with_config_kind(
+                api_key.to_owned(),
+                provider_config,
+                EmbeddingProviderKind::OpenAiCompat,
+            )))
         }
         SemanticRuntimeProvider::Google => {
             let api_key = require_api_key(config.provider, config.credentials)?;
@@ -146,9 +161,9 @@ pub(crate) fn canonical_provider_model(
             .map_err(local_model_error_to_embedding_error),
         #[cfg(not(feature = "local-embeddings"))]
         SemanticRuntimeProvider::Local => Err(local_embeddings_unavailable_error()),
-        SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
-            Ok(model.trim().to_owned())
-        }
+        SemanticRuntimeProvider::OpenAi
+        | SemanticRuntimeProvider::OpenAiCompat
+        | SemanticRuntimeProvider::Google => Ok(model.trim().to_owned()),
     }
 }
 
@@ -207,9 +222,17 @@ fn provider_cache_key(
         }
         #[cfg(not(feature = "local-embeddings"))]
         SemanticRuntimeProvider::Local => return Err(local_embeddings_unavailable_error()),
-        SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
-            (config.model.trim().to_owned(), None)
+        SemanticRuntimeProvider::OpenAi
+        | SemanticRuntimeProvider::OpenAiCompat
+        | SemanticRuntimeProvider::Google => (config.model.trim().to_owned(), None),
+    };
+
+    let endpoint_fingerprint = match config.provider {
+        SemanticRuntimeProvider::OpenAiCompat => {
+            let endpoint = require_openai_compat_endpoint(config.endpoint)?;
+            Some(blake3::hash(endpoint.as_bytes()).to_hex().to_string())
         }
+        _ => None,
     };
 
     Ok(SemanticEmbeddingProviderCacheKey {
@@ -220,6 +243,7 @@ fn provider_cache_key(
             .api_key_for(config.provider)
             .map(|api_key| blake3::hash(api_key.as_bytes()).to_hex().to_string()),
         local_artifact_identity,
+        endpoint_fingerprint,
     })
 }
 
@@ -274,6 +298,7 @@ fn prepare_local_artifacts_for_policy_with(
                 provider: Some(SemanticRuntimeProvider::Local),
                 model: Some(model.to_owned()),
                 strict_mode: false,
+            openai_compat_endpoint: None,
             };
             prepare(&semantic_runtime)
         }
@@ -319,9 +344,44 @@ fn require_api_key(
 fn provider_kind(provider: SemanticRuntimeProvider) -> EmbeddingProviderKind {
     match provider {
         SemanticRuntimeProvider::OpenAi => EmbeddingProviderKind::OpenAi,
+        SemanticRuntimeProvider::OpenAiCompat => EmbeddingProviderKind::OpenAiCompat,
         SemanticRuntimeProvider::Google => EmbeddingProviderKind::Google,
         SemanticRuntimeProvider::Local => EmbeddingProviderKind::Local,
     }
+}
+
+fn require_openai_compat_endpoint(endpoint: Option<&str>) -> EmbeddingResult<String> {
+    let Some(raw) = endpoint else {
+        return Err(EmbeddingError::Provider(ProviderFailure::non_retryable(
+            EmbeddingProviderKind::OpenAiCompat,
+            "semantic runtime provider 'openai_compat' requires an embeddings endpoint before provider construction",
+            Some("missing_openai_compat_endpoint".to_owned()),
+            None,
+            None,
+        )));
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(EmbeddingError::Provider(ProviderFailure::non_retryable(
+            EmbeddingProviderKind::OpenAiCompat,
+            "semantic runtime provider 'openai_compat' requires a non-empty embeddings endpoint",
+            Some("blank_openai_compat_endpoint".to_owned()),
+            None,
+            None,
+        )));
+    }
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err(EmbeddingError::Provider(ProviderFailure::non_retryable(
+            EmbeddingProviderKind::OpenAiCompat,
+            format!(
+                "semantic runtime provider 'openai_compat' endpoint must be an absolute http(s) URL (received: {trimmed})"
+            ),
+            Some("invalid_openai_compat_endpoint".to_owned()),
+            None,
+            None,
+        )));
+    }
+    Ok(trimmed.to_owned())
 }
 
 #[cfg(test)]
@@ -429,6 +489,7 @@ mod tests {
             model: "all-MiniLM-L6-v2",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("canonical local model key should build");
         let fastembed_alias = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
@@ -436,6 +497,7 @@ mod tests {
             model: "AllMiniLML6V2",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("fastembed local model alias key should build");
         let repository_alias = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
@@ -443,6 +505,7 @@ mod tests {
             model: "Qdrant/all-MiniLM-L6-v2-onnx",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("repository local model alias key should build");
 
@@ -471,12 +534,14 @@ mod tests {
         let credentials = SemanticRuntimeCredentials {
             openai_api_key: Some("test-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         };
         let first_key = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
             provider: SemanticRuntimeProvider::OpenAi,
             model: "text-embedding-3-small",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("remote provider key should build");
         let matching_key = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
@@ -484,6 +549,7 @@ mod tests {
             model: " text-embedding-3-small ",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("normalized remote provider key should build");
         let different_key = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
@@ -491,6 +557,7 @@ mod tests {
             model: "text-embedding-3-large",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("different remote provider key should build");
 
@@ -514,6 +581,7 @@ mod tests {
         let credentials = SemanticRuntimeCredentials {
             openai_api_key: Some("test-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         };
 
         let first = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
@@ -521,6 +589,7 @@ mod tests {
             model: "text-embedding-3-small",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("first provider should build");
         let second = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
@@ -528,6 +597,7 @@ mod tests {
             model: " text-embedding-3-small ",
             credentials: &credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("second provider should reuse cache");
 
@@ -543,10 +613,12 @@ mod tests {
         let first_credentials = SemanticRuntimeCredentials {
             openai_api_key: Some("first-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         };
         let second_credentials = SemanticRuntimeCredentials {
             openai_api_key: Some("second-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         };
 
         let first = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
@@ -554,6 +626,7 @@ mod tests {
             model: "text-embedding-3-small",
             credentials: &first_credentials,
             local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+            endpoint: None,
         })
         .expect("first provider should build");
         let different_credentials =
@@ -562,6 +635,7 @@ mod tests {
                 model: "text-embedding-3-small",
                 credentials: &second_credentials,
                 local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+                endpoint: None,
             })
             .expect("different credentials should build a separate provider");
         let different_model =
@@ -570,6 +644,7 @@ mod tests {
                 model: "text-embedding-3-large",
                 credentials: &first_credentials,
                 local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+                endpoint: None,
             })
             .expect("different model should build a separate provider");
 

@@ -48,11 +48,18 @@ const SQLITE_VEC_KNN_MAX_K: usize = 4_096;
 #[derive(Debug, Default)]
 pub(super) struct RuntimeSemanticQueryEmbeddingExecutor {
     credentials: SemanticRuntimeCredentials,
+    endpoint: Option<String>,
 }
 
 impl RuntimeSemanticQueryEmbeddingExecutor {
-    pub(super) fn new(credentials: SemanticRuntimeCredentials) -> Self {
-        Self { credentials }
+    pub(super) fn with_endpoint(
+        credentials: SemanticRuntimeCredentials,
+        endpoint: Option<String>,
+    ) -> Self {
+        Self {
+            credentials,
+            endpoint,
+        }
     }
 }
 
@@ -78,6 +85,7 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
                     model: &request.model,
                     credentials: &self.credentials,
                     local_artifact_policy: LocalArtifactPolicy::AllowPreparation,
+                    endpoint: self.endpoint.as_deref(),
                 })
                 .map_err(|err| {
                     FriggError::Internal(format!(

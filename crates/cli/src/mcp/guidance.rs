@@ -11,8 +11,9 @@ use serde_json::{Map, Value, json};
 use crate::languages::{LanguageSupportCapability, SymbolLanguage};
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::settings::{
-    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL,
-    GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
+    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL,
+    DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL, GEMINI_API_KEY_ENV_VAR,
+    OPENAI_API_KEY_ENV_VAR, OPENAI_COMPAT_API_KEY_ENV_VAR, OPENAI_COMPAT_ENDPOINT_ENV_VAR,
 };
 use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
 
@@ -183,6 +184,27 @@ fn semantic_models_json() -> String {
                     "native_dimensions is the width Frigg requests (output_dimensionality), not a padded value",
                     "API catalog default may be 3072; Frigg requests native_dimensions — no storage pad when equal to projection"
                 ]
+            },
+            {
+                "id": "openai-compat-protocol",
+                "provider": "openai_compat",
+                "model": DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL,
+                "role": "experimental",
+                "offline": false,
+                // Protocol default assumes OpenAI-small width; operator model may differ — reindex + match dims.
+                "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
+                "pad_to_projection": OPENAI_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
+                "credential_env": OPENAI_COMPAT_API_KEY_ENV_VAR,
+                "endpoint_env": OPENAI_COMPAT_ENDPOINT_ENV_VAR,
+                "reindex_on_change": true,
+                "quality": "unbenchmarked",
+                "known_limits": [
+                    "Requires FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT (full embeddings POST URL)",
+                    "Requires FRIGG_OPENAI_COMPAT_API_KEY (or OPENAI_API_KEY fallback) as Bearer token",
+                    "Same OpenAI HTTP wire format; backend quality/dims are operator-owned",
+                    "Storage partition is provider=openai_compat + model string — not openai",
+                    "Set FRIGG_SEMANTIC_RUNTIME_MODEL to the backend model id when it is not text-embedding-3-small"
+                ]
             }
         ],
         "presets": [
@@ -263,15 +285,44 @@ fn semantic_models_json() -> String {
                     "Frigg requests output_dimensionality = projection_dimensions for this model",
                     "Changing model later requires frigg index semantic pass (reindex_on_change)"
                 ]
+            },
+            {
+                "id": "openai-compat-selfhost",
+                "intent": "OpenAI-protocol embeddings at a configured endpoint (vLLM, LM Studio, Azure-compatible, gateways)",
+                "provider": "openai_compat",
+                "model": DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL,
+                "model_id": "openai-compat-protocol",
+                "quality": "unbenchmarked",
+                "cli_alias": false,
+                "expands_to": {
+                    "FRIGG_SEMANTIC_RUNTIME_ENABLED": "true",
+                    "FRIGG_SEMANTIC_RUNTIME_PROVIDER": "openai_compat",
+                    "FRIGG_SEMANTIC_RUNTIME_MODEL": DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL,
+                    "FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT": "<full embeddings POST URL>"
+                },
+                "required_credential_env": OPENAI_COMPAT_API_KEY_ENV_VAR,
+                "required_endpoint_env": OPENAI_COMPAT_ENDPOINT_ENV_VAR,
+                "storage_keys": {
+                    "provider": "openai_compat",
+                    "model": DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL,
+                    "note": "Partition identity is always provider+model strings — never the preset id alone; endpoint is not part of the storage key"
+                },
+                "failure_modes": [
+                    "Missing/blank/invalid openai_compat endpoint URL (fail-fast at semantic startup)",
+                    "Missing FRIGG_OPENAI_COMPAT_API_KEY (OPENAI_API_KEY is accepted as fallback Bearer)",
+                    "Backend model id mismatch — set FRIGG_SEMANTIC_RUNTIME_MODEL explicitly",
+                    "Native vector width may differ from 1536 — pad/reject follows store contract; reindex on model change"
+                ]
             }
         ],
-        "presets_note": "Soft intent aliases over models[] only (EXP-code-presets C). Not CLI flags (B deferred). Not new providers (D deferred). Not auto local-vs-cloud by key presence (E rejected). Set provider+model env/config explicitly; preset id is documentation only.",
+        "presets_note": "Soft intent aliases over models[] (EXP-code-presets C + openai_compat self-host). Not CLI flags (B deferred). Not brand embedding vendors (Voyage/Cohere deferred). Not auto local-vs-cloud by key presence (E rejected). Set provider+model (+ endpoint for openai_compat) env/config explicitly; preset id is documentation only.",
         "guidance": [
             "Semantic is optional acceleration — never the sole grounding layer for code claims",
             "After hybrid, pivot to exact search_text / search_symbol before answering",
             "After changing provider or model, run frigg index for a semantic pass",
             "Do not invent unlisted providers or treat preset id as a storage partition key",
-            "Prefer presets for intent (offline vs cloud); always apply expands_to provider+model strings"
+            "Prefer presets for intent (offline vs cloud vs openai_compat); always apply expands_to provider+model strings",
+            "openai_compat requires a full embeddings POST URL; storage partition is openai_compat+model, not openai"
         ]
     }))
     .expect("semantic models JSON should serialize")
@@ -731,7 +782,9 @@ mod tests {
     use crate::mcp::tool_surface::ToolSurfaceProfile;
     use crate::settings::{
         DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL,
-        DEFAULT_OPENAI_EMBEDDING_MODEL, GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
+        DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL,
+        GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR, OPENAI_COMPAT_API_KEY_ENV_VAR,
+        OPENAI_COMPAT_ENDPOINT_ENV_VAR,
     };
     use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
     use rmcp::model::ResourceContents;
@@ -775,7 +828,11 @@ mod tests {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        assert_eq!(models.len(), 3, "curated defaults only — not a model zoo");
+        assert_eq!(
+            models.len(),
+            4,
+            "curated defaults + openai_compat protocol — not a brand model zoo"
+        );
         let models_by_id: std::collections::BTreeMap<&str, &Value> = models
             .iter()
             .filter_map(|row| row["id"].as_str().map(|id| (id, row)))
@@ -840,6 +897,25 @@ mod tests {
         );
         assert_eq!(google["quality"], json!("unbenchmarked"));
 
+        let openai_compat = models
+            .iter()
+            .find(|row| row["provider"] == "openai_compat")
+            .expect("openai_compat row");
+        assert_eq!(
+            openai_compat["model"],
+            json!(DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL)
+        );
+        assert_eq!(
+            openai_compat["credential_env"],
+            json!(OPENAI_COMPAT_API_KEY_ENV_VAR)
+        );
+        assert_eq!(
+            openai_compat["endpoint_env"],
+            json!(OPENAI_COMPAT_ENDPOINT_ENV_VAR)
+        );
+        assert_eq!(openai_compat["role"], json!("experimental"));
+        assert_eq!(openai_compat["quality"], json!("unbenchmarked"));
+
         // No fake leaderboard fields; no padded length masquerading as model dims.
         for row in &models {
             assert!(row.get("score").is_none());
@@ -868,8 +944,8 @@ mod tests {
             .expect("presets array (EXP-code-presets C)");
         assert_eq!(
             presets.len(),
-            3,
-            "soft presets over existing models only — not a brand zoo"
+            4,
+            "soft presets over existing models + openai_compat self-host — not a brand zoo"
         );
         assert!(
             parsed["presets_note"]
@@ -896,6 +972,12 @@ mod tests {
                 "google",
                 DEFAULT_GOOGLE_EMBEDDING_MODEL,
                 "google-gemini-embedding-001",
+            ),
+            (
+                "openai-compat-selfhost",
+                "openai_compat",
+                DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL,
+                "openai-compat-protocol",
             ),
         ];
         for (id, provider, model, model_id) in expected_presets {

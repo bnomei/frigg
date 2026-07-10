@@ -1806,6 +1806,7 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+        openai_compat_endpoint: None,
     };
     let server = server_for_config_with_semantic_runtime_credentials(
         config,
@@ -1930,6 +1931,7 @@ async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unava
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+        openai_compat_endpoint: None,
     };
     let server = server_for_config(config);
     attach_session_repositories(&server).await;
@@ -2018,6 +2020,7 @@ async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: true,
+        openai_compat_endpoint: None,
     };
     // Force empty process credentials so ambient OPENAI_API_KEY cannot satisfy startup.
     let server = server_for_config_with_semantic_runtime_credentials(

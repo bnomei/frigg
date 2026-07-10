@@ -44,11 +44,34 @@ Curated embedding-model defaults and storage contract facts live on the MCP poli
 | `offline-small` | `local` + `all-MiniLM-L6-v2` | Zero-cloud; still need `FRIGG_SEMANTIC_RUNTIME_ENABLED=true` |
 | `cloud-openai` | `openai` + `text-embedding-3-small` | Requires `OPENAI_API_KEY` |
 | `cloud-google` | `google` + `gemini-embedding-001` | Requires `GEMINI_API_KEY` |
+| `openai-compat-selfhost` | `openai_compat` + endpoint + model | Requires full embeddings URL + `FRIGG_OPENAI_COMPAT_API_KEY` |
 
 - Preset `id` is **documentation** (`cli_alias: false`). Set provider+model env/config from `expands_to`. Storage partition identity remains **provider + model strings**, never the preset id alone.
-- **Not** CLI flags (B deferred). **Not** new embedding brands (D deferred). **Not** auto local-vs-cloud by key presence (E rejected).
+- **Not** CLI flags (B deferred). **Not** brand embedding vendors like Voyage/Cohere (deferred). **Not** auto local-vs-cloud by key presence (E rejected).
 - **`quality_scores: unbenchmarked`** — not a CI leaderboard
 - Semantic runtime stays **off by default**; when enabled without a cloud provider, Frigg uses local MiniLM
+
+### OpenAI-compatible endpoints (`provider=openai_compat`)
+
+Use when embeddings speak the OpenAI HTTP protocol but are **not** official OpenAI (vLLM, LM Studio, Azure-compatible deployments, internal gateways).
+
+```bash
+export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
+export FRIGG_SEMANTIC_RUNTIME_PROVIDER=openai_compat
+export FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT=http://127.0.0.1:1234/v1/embeddings
+export FRIGG_OPENAI_COMPAT_API_KEY=<token-or-dummy>
+export FRIGG_SEMANTIC_RUNTIME_MODEL=<backend-model-id>   # when not text-embedding-3-small
+frigg index
+```
+
+| Setting | Role |
+| --- | --- |
+| Endpoint | **Required** full embeddings **POST** URL (not a bare host) |
+| API key | Bearer: `FRIGG_OPENAI_COMPAT_API_KEY`, else `OPENAI_API_KEY` |
+| Model | Free string; defaults to `text-embedding-3-small` protocol default — set to the backend id |
+| Storage partition | `provider=openai_compat` + model (distinct from `openai`) |
+
+Endpoint is **not** part of the storage key: two different URLs with the same model string share one partition. Reindex after changing model (and treat endpoint swaps carefully if vector spaces differ).
 
 After changing provider or model, run `frigg index` for a semantic pass.
 

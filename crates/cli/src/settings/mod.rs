@@ -17,10 +17,12 @@ pub use frigg_config::{
 pub use lexical_runtime::{LexicalBackendMode, LexicalRuntimeConfig};
 pub use runtime_profile::{RuntimeProfile, RuntimeTransportKind, runtime_profile_for_transport};
 pub use semantic_runtime::{
-    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL,
-    GEMINI_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR, SEMANTIC_RUNTIME_INVALID_PARAMS_CODE,
-    SemanticRuntimeConfig, SemanticRuntimeConfigError, SemanticRuntimeCredentialError,
-    SemanticRuntimeCredentials, SemanticRuntimeProvider, SemanticRuntimeStartupError,
+    DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_LOCAL_EMBEDDING_MODEL,
+    DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL, GEMINI_API_KEY_ENV_VAR,
+    OPENAI_API_KEY_ENV_VAR, OPENAI_COMPAT_API_KEY_ENV_VAR, OPENAI_COMPAT_ENDPOINT_ENV_VAR,
+    SEMANTIC_RUNTIME_INVALID_PARAMS_CODE, SemanticRuntimeConfig, SemanticRuntimeConfigError,
+    SemanticRuntimeCredentialError, SemanticRuntimeCredentials, SemanticRuntimeProvider,
+    SemanticRuntimeStartupError,
 };
 pub use watch::{
     DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY, DEFAULT_WATCH_RETRY_MS,
@@ -167,6 +169,7 @@ mod tests {
             provider: None,
             model: Some("text-embedding-3-small".to_owned()),
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
         let err = missing_provider
             .validate()
@@ -182,6 +185,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: Some("   ".to_owned()),
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
         let err = blank_model
             .validate()
@@ -200,6 +204,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
         openai
             .validate()
@@ -214,6 +219,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::Google),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
         google
             .validate()
@@ -231,6 +237,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
 
         let missing_key = runtime
@@ -246,6 +253,7 @@ mod tests {
             .validate_startup(&SemanticRuntimeCredentials {
                 openai_api_key: Some("   ".to_owned()),
                 gemini_api_key: None,
+                openai_compat_api_key: None,
             })
             .expect_err("startup validation should reject blank provider api key");
         assert_eq!(blank_key.code(), SEMANTIC_RUNTIME_INVALID_PARAMS_CODE);
@@ -258,8 +266,95 @@ mod tests {
             .validate_startup(&SemanticRuntimeCredentials {
                 openai_api_key: Some("test-openai-key".to_owned()),
                 gemini_api_key: None,
+                openai_compat_api_key: None,
             })
             .expect("startup validation should pass with non-empty openai key");
+    }
+
+    #[test]
+    fn semantic_runtime_openai_compat_requires_endpoint_and_key() {
+        assert_eq!(
+            "openai_compat"
+                .parse::<SemanticRuntimeProvider>()
+                .expect("parse openai_compat"),
+            SemanticRuntimeProvider::OpenAiCompat
+        );
+        assert_eq!(
+            "openai-compat"
+                .parse::<SemanticRuntimeProvider>()
+                .expect("parse openai-compat alias"),
+            SemanticRuntimeProvider::OpenAiCompat
+        );
+        assert_eq!(
+            SemanticRuntimeProvider::OpenAiCompat.as_str(),
+            "openai_compat"
+        );
+        assert_eq!(
+            SemanticRuntimeProvider::OpenAiCompat.api_key_env_var(),
+            Some(OPENAI_COMPAT_API_KEY_ENV_VAR)
+        );
+
+        let missing_endpoint = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAiCompat),
+            model: None,
+            strict_mode: false,
+            openai_compat_endpoint: None,
+        };
+        let err = missing_endpoint
+            .validate()
+            .expect_err("openai_compat requires endpoint");
+        assert_eq!(err.code(), SEMANTIC_RUNTIME_INVALID_PARAMS_CODE);
+        assert!(err.to_string().contains("openai_compat_endpoint"));
+
+        let invalid_endpoint = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAiCompat),
+            model: None,
+            strict_mode: false,
+            openai_compat_endpoint: Some("not-a-url".to_owned()),
+        };
+        let err = invalid_endpoint
+            .validate()
+            .expect_err("openai_compat rejects non-http endpoints");
+        assert!(err.to_string().contains("http(s)"));
+
+        let runtime = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAiCompat),
+            model: Some("nomic-embed-text".to_owned()),
+            strict_mode: false,
+            openai_compat_endpoint: Some("http://127.0.0.1:1234/v1/embeddings".to_owned()),
+        };
+        runtime
+            .validate()
+            .expect("valid openai_compat endpoint should pass config validation");
+        assert_eq!(runtime.normalized_model(), Some("nomic-embed-text"));
+        assert_eq!(
+            runtime.normalized_openai_compat_endpoint(),
+            Some("http://127.0.0.1:1234/v1/embeddings")
+        );
+
+        let missing_key = runtime
+            .validate_startup(&SemanticRuntimeCredentials::default())
+            .expect_err("openai_compat requires an API key");
+        assert!(missing_key.to_string().contains(OPENAI_COMPAT_API_KEY_ENV_VAR));
+
+        runtime
+            .validate_startup(&SemanticRuntimeCredentials {
+                openai_api_key: None,
+                openai_compat_api_key: Some("compat-key".to_owned()),
+                gemini_api_key: None,
+            })
+            .expect("dedicated openai_compat key should pass");
+
+        runtime
+            .validate_startup(&SemanticRuntimeCredentials {
+                openai_api_key: Some("fallback-openai-key".to_owned()),
+                openai_compat_api_key: None,
+                gemini_api_key: None,
+            })
+            .expect("OPENAI_API_KEY fallback should pass for openai_compat");
     }
 
     #[test]
@@ -276,6 +371,7 @@ mod tests {
                 provider: None,
                 model: Some("text-embedding-3-small".to_owned()),
                 strict_mode: false,
+            openai_compat_endpoint: None,
             },
         };
 

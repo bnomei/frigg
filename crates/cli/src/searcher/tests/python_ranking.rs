@@ -159,6 +159,7 @@ fn hybrid_ranking_python_entrypoint_queries_keep_python_witnesses_above_frontend
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -425,6 +426,7 @@ fn hybrid_ranking_python_entrypoint_queries_prefer_canonical_entrypoints_over_ba
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -568,6 +570,7 @@ fn hybrid_ranking_python_config_queries_prefer_runtime_manifests_over_readmes() 
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -696,6 +699,7 @@ fn hybrid_ranking_python_test_queries_prefer_backend_tests_over_frontend_docs() 
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -815,6 +819,7 @@ fn hybrid_ranking_python_runtime_entrypoint_test_queries_keep_packet_backend_tes
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;
@@ -970,6 +975,7 @@ fn hybrid_ranking_python_entrypoint_test_queries_prefer_package_scoped_tests_ove
             &SemanticRuntimeCredentials {
                 openai_api_key: Some("test-openai-key".to_owned()),
                 gemini_api_key: None,
+                openai_compat_api_key: None,
             },
             &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
         )?;

@@ -153,6 +153,7 @@ mod tests {
             semantic_runtime_provider: None,
             semantic_runtime_model: None,
             semantic_runtime_strict_mode: None,
+            semantic_runtime_openai_compat_endpoint: None,
             watch_mode: None,
             lexical_backend: None,
             ripgrep_executable: None,
@@ -1155,6 +1156,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: Some("text-embedding-3-small".to_owned()),
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
 
         let error = run_semantic_runtime_startup_gate_with_credentials(
@@ -1162,6 +1164,7 @@ mod tests {
             &SemanticRuntimeCredentials {
                 openai_api_key: Some("   ".to_owned()),
                 gemini_api_key: None,
+                openai_compat_api_key: None,
             },
         )
         .expect_err("semantic gate must fail when provider credentials are blank");
@@ -1186,6 +1189,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: Some("text-embedding-3-small".to_owned()),
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
 
         let error = run_semantic_runtime_startup_gate_with_credentials(
@@ -1214,6 +1218,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::Local),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
 
         run_semantic_runtime_startup_gate_with_credentials(
@@ -1232,6 +1237,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::Google),
             model: None,
             strict_mode: false,
+            openai_compat_endpoint: None,
         };
 
         let error = run_semantic_runtime_startup_gate_with_credentials(
@@ -1249,6 +1255,7 @@ mod tests {
             &SemanticRuntimeCredentials {
                 openai_api_key: None,
                 gemini_api_key: Some("test-gemini-key".to_owned()),
+                openai_compat_api_key: None,
             },
         )
         .expect("google semantic runtime should accept a valid Gemini credential");
@@ -1263,6 +1270,7 @@ mod tests {
             provider: Some(SemanticRuntimeProvider::OpenAi),
             model: None,
             strict_mode: true,
+            openai_compat_endpoint: None,
         };
 
         run_semantic_runtime_startup_gate_with_credentials(
@@ -1270,6 +1278,7 @@ mod tests {
             &SemanticRuntimeCredentials {
                 openai_api_key: Some("test-openai-key".to_owned()),
                 gemini_api_key: None,
+                openai_compat_api_key: None,
             },
         )
         .expect("semantic gate should pass with a valid provider key");

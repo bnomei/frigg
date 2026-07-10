@@ -14,10 +14,21 @@ pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 pub const DEFAULT_GOOGLE_EMBEDDING_MODEL: &str = "gemini-embedding-001";
 /// Default local embedding model when semantic runtime omits an explicit model.
 pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
+/// Protocol-default model string for OpenAI-compatible endpoints when unset.
+///
+/// Operators should set `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` to the
+/// backend's actual model id; this default only matches common OpenAI-protocol proxies.
+pub const DEFAULT_OPENAI_COMPAT_EMBEDDING_MODEL: &str = DEFAULT_OPENAI_EMBEDDING_MODEL;
 /// Environment variable holding the OpenAI API key for semantic runtime startup.
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 /// Environment variable holding the Gemini API key for semantic runtime startup.
 pub const GEMINI_API_KEY_ENV_VAR: &str = "GEMINI_API_KEY";
+/// Environment variable holding the API key for `openai_compat` (Bearer token).
+///
+/// Local OpenAI-protocol servers often accept any non-empty value.
+pub const OPENAI_COMPAT_API_KEY_ENV_VAR: &str = "FRIGG_OPENAI_COMPAT_API_KEY";
+/// Environment variable for the full embeddings POST URL used by `openai_compat`.
+pub const OPENAI_COMPAT_ENDPOINT_ENV_VAR: &str = "FRIGG_SEMANTIC_RUNTIME_OPENAI_COMPAT_ENDPOINT";
 /// MCP error code returned for invalid semantic runtime configuration.
 pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
 
@@ -26,6 +37,11 @@ pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
 #[serde(rename_all = "snake_case")]
 pub enum SemanticRuntimeProvider {
     OpenAi,
+    /// OpenAI-compatible HTTP embeddings (Azure-compatible, vLLM, LM Studio, gateways).
+    ///
+    /// Same wire protocol as [`Self::OpenAi`], but requires an explicit endpoint and uses a
+    /// distinct provider identity for storage partitions and credentials.
+    OpenAiCompat,
     Google,
     Local,
 }
@@ -34,6 +50,7 @@ impl SemanticRuntimeProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::OpenAiCompat => "openai_compat",
             Self::Google => "google",
             Self::Local => "local",
         }
@@ -42,6 +59,7 @@ impl SemanticRuntimeProvider {
     pub fn api_key_env_var(self) -> Option<&'static str> {
         match self {
             Self::OpenAi => Some(OPENAI_API_KEY_ENV_VAR),
+            Self::OpenAiCompat => Some(OPENAI_COMPAT_API_KEY_ENV_VAR),
             Self::Google => Some(GEMINI_API_KEY_ENV_VAR),
             Self::Local => None,
         }
@@ -49,10 +67,14 @@ impl SemanticRuntimeProvider {
 
     pub fn default_model(self) -> &'static str {
         match self {
-            Self::OpenAi => DEFAULT_OPENAI_EMBEDDING_MODEL,
+            Self::OpenAi | Self::OpenAiCompat => DEFAULT_OPENAI_EMBEDDING_MODEL,
             Self::Google => DEFAULT_GOOGLE_EMBEDDING_MODEL,
             Self::Local => DEFAULT_LOCAL_EMBEDDING_MODEL,
         }
+    }
+
+    pub fn requires_endpoint(self) -> bool {
+        matches!(self, Self::OpenAiCompat)
     }
 }
 
@@ -69,10 +91,11 @@ impl FromStr for SemanticRuntimeProvider {
         let normalized = raw.trim().to_ascii_lowercase();
         match normalized.as_str() {
             "openai" => Ok(Self::OpenAi),
+            "openai_compat" | "openai-compat" | "openai_compatible" => Ok(Self::OpenAiCompat),
             "google" => Ok(Self::Google),
             "local" => Ok(Self::Local),
             _ => Err(format!(
-                "semantic runtime provider must be one of: openai, google, local (received: {normalized})"
+                "semantic runtime provider must be one of: openai, openai_compat, google, local (received: {normalized})"
             )),
         }
     }
@@ -85,12 +108,18 @@ pub struct SemanticRuntimeConfig {
     pub provider: Option<SemanticRuntimeProvider>,
     pub model: Option<String>,
     pub strict_mode: bool,
+    /// Full embeddings HTTP URL for [`SemanticRuntimeProvider::OpenAiCompat`].
+    ///
+    /// Example: `http://127.0.0.1:1234/v1/embeddings` or an Azure-compatible deployment URL.
+    /// Required when `provider=openai_compat`. Ignored for other providers.
+    pub openai_compat_endpoint: Option<String>,
 }
 
 /// Process-environment API keys consumed during semantic runtime startup.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemanticRuntimeCredentials {
     pub openai_api_key: Option<String>,
+    pub openai_compat_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
 }
 
@@ -98,6 +127,7 @@ impl SemanticRuntimeCredentials {
     pub fn from_process_env() -> Self {
         Self {
             openai_api_key: std::env::var(OPENAI_API_KEY_ENV_VAR).ok(),
+            openai_compat_api_key: std::env::var(OPENAI_COMPAT_API_KEY_ENV_VAR).ok(),
             gemini_api_key: std::env::var(GEMINI_API_KEY_ENV_VAR).ok(),
         }
     }
@@ -105,6 +135,11 @@ impl SemanticRuntimeCredentials {
     pub fn api_key_for(&self, provider: SemanticRuntimeProvider) -> Option<&str> {
         match provider {
             SemanticRuntimeProvider::OpenAi => self.openai_api_key.as_deref(),
+            // Prefer the dedicated env; fall back to OPENAI_API_KEY for shared gateways.
+            SemanticRuntimeProvider::OpenAiCompat => self
+                .openai_compat_api_key
+                .as_deref()
+                .or(self.openai_api_key.as_deref()),
             SemanticRuntimeProvider::Google => self.gemini_api_key.as_deref(),
             SemanticRuntimeProvider::Local => None,
         }
@@ -118,6 +153,18 @@ pub enum SemanticRuntimeConfigError {
     MissingProvider,
     #[error("semantic_runtime.model must not be blank when semantic_runtime.enabled=true")]
     BlankModel,
+    #[error(
+        "semantic_runtime.openai_compat_endpoint is required when provider=openai_compat (set --semantic-runtime-openai-compat-endpoint or {OPENAI_COMPAT_ENDPOINT_ENV_VAR})"
+    )]
+    MissingOpenAiCompatEndpoint,
+    #[error(
+        "semantic_runtime.openai_compat_endpoint must not be blank when provider=openai_compat"
+    )]
+    BlankOpenAiCompatEndpoint,
+    #[error(
+        "semantic_runtime.openai_compat_endpoint must be an absolute http(s) URL (received: {endpoint})"
+    )]
+    InvalidOpenAiCompatEndpoint { endpoint: String },
 }
 
 impl SemanticRuntimeConfigError {
@@ -168,7 +215,8 @@ impl SemanticRuntimeConfig {
             return Ok(());
         }
 
-        self.provider
+        let provider = self
+            .provider
             .ok_or(SemanticRuntimeConfigError::MissingProvider)?;
 
         if self
@@ -177,6 +225,10 @@ impl SemanticRuntimeConfig {
             .is_some_and(|model| model.trim().is_empty())
         {
             return Err(SemanticRuntimeConfigError::BlankModel);
+        }
+
+        if provider.requires_endpoint() {
+            self.validate_openai_compat_endpoint()?;
         }
 
         Ok(())
@@ -194,6 +246,30 @@ impl SemanticRuntimeConfig {
             }
             None => self.provider.map(SemanticRuntimeProvider::default_model),
         }
+    }
+
+    /// Normalized full embeddings URL for `openai_compat`, when configured.
+    pub fn normalized_openai_compat_endpoint(&self) -> Option<&str> {
+        self.openai_compat_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn validate_openai_compat_endpoint(&self) -> Result<(), SemanticRuntimeConfigError> {
+        let Some(raw) = self.openai_compat_endpoint.as_deref() else {
+            return Err(SemanticRuntimeConfigError::MissingOpenAiCompatEndpoint);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(SemanticRuntimeConfigError::BlankOpenAiCompatEndpoint);
+        }
+        if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+            return Err(SemanticRuntimeConfigError::InvalidOpenAiCompatEndpoint {
+                endpoint: trimmed.to_owned(),
+            });
+        }
+        Ok(())
     }
 
     pub fn validate_startup(

@@ -144,6 +144,7 @@ fn semantic_runtime_enabled(strict_mode: bool) -> SemanticRuntimeConfig {
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode,
+        openai_compat_endpoint: None,
     }
 }
 
@@ -153,6 +154,7 @@ fn semantic_runtime_enabled_local(strict_mode: bool) -> SemanticRuntimeConfig {
         provider: Some(SemanticRuntimeProvider::Local),
         model: Some("all-MiniLM-L6-v2".to_owned()),
         strict_mode,
+        openai_compat_endpoint: None,
     }
 }
 

@@ -681,6 +681,7 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semanti
         &SemanticRuntimeCredentials {
             openai_api_key: Some("test-openai-key".to_owned()),
             gemini_api_key: None,
+            openai_compat_api_key: None,
         },
         &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
     )?;

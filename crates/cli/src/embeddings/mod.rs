@@ -17,6 +17,8 @@ pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingProviderKind {
     OpenAi,
+    /// OpenAI-compatible HTTP embeddings (custom endpoint; distinct from official OpenAI).
+    OpenAiCompat,
     Google,
     Local,
     VectorStore,
@@ -26,6 +28,7 @@ impl EmbeddingProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::OpenAiCompat => "openai_compat",
             Self::Google => "google",
             Self::Local => "local",
             Self::VectorStore => "vector_store",
