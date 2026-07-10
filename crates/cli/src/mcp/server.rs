@@ -2154,7 +2154,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "go_to_definition",
-        description = "Find likely definitions for a symbol or cursor. Prefer symbol=; path+line without column can be ambiguous. Read proof separately.",
+        description = "Default agent route for body/definition anchors. Prefer symbol= after search_symbol; path+line without symbol can be ambiguous (check ambiguous_location). Do not call find_declarations first for ordinary 'where is this implemented?' questions. Read proof separately.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2170,7 +2170,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_declarations",
-        description = "Find declaration anchors for a symbol or cursor location. Prefer symbol= when the name is known.",
+        description = "Secondary to go_to_definition for agents. Use only when declaration vs definition matters (headers, interfaces, re-exports, ambient decls) or IDE/LSP parity. Prefer symbol=. Do not call serially with go_to_definition by default.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

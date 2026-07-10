@@ -53,6 +53,16 @@ Use `include_definition=false` when you want caller or usage sites without the d
 
 Use these when you have a concrete symbol or a concrete cursor location.
 
+### Agent routing (definition-first)
+
+| Need | Tool |
+| --- | --- |
+| Where is this **implemented** / body anchor? | **`go_to_definition(symbol=…)`** (default after `search_symbol`) |
+| True **declaration** vs definition matters (C/C++ headers, TS ambient, PHP interface, re-exports)? | `find_declarations(symbol=…)` **only then** |
+| Trait/interface **impls**? | `find_implementations` |
+
+Both def and decl tools remain for **IDE/LSP parity** and future precise declaration edges. Agents should **not** call them serially by default or treat near-duplicate rows as two independent anchors. Shared resolution stack; product posture is definition-first.
+
 Common inputs:
 - `symbol`
 - `repository_id`

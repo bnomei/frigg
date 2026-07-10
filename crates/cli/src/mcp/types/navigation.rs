@@ -84,7 +84,7 @@ pub struct FindReferencesResponse {
     pub recovery: super::RecoveryFields,
 }
 
-/// Parameters for `go_to_definition`.
+/// Parameters for `go_to_definition` (default agent route for definition/body anchors).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionParams {
     /// Recommended: symbol name to resolve. Prefer this over path+line alone on dense lines.
@@ -156,9 +156,13 @@ pub struct GoToDefinitionResponse {
     pub recovery: super::RecoveryFields,
 }
 
-/// Parameters for `find_declarations`.
+/// Parameters for `find_declarations` (secondary to `go_to_definition` for agents).
+///
+/// Prefer `go_to_definition(symbol=…)` for ordinary body anchors. Use this tool when the
+/// language model of declaration vs definition matters (headers, interfaces, re-exports).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsParams {
+    /// Preferred when the name is known (same as go_to_definition).
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
     pub path: Option<String>,

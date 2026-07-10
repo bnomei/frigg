@@ -30,7 +30,7 @@ Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is at
 ## Technical Review
 
 1. `search_text` for the contract phrase, API name, or narrative anchor
-2. `search_symbol` / `go_to_definition` / `find_declarations` for the implementation anchor
+2. `search_symbol` → `go_to_definition(symbol=…)` for the implementation anchor (`find_declarations` only when decl≠def matters)
 3. `find_references` and `incoming_calls` for propagation and entry paths
 4. `read_match` or `read_file` for final source proof; attach path/line witnesses (evidence packet when multi-claim)
 5. `search_structural` only for cross-cutting AST proof that is too awkward in plain text (tier-3)

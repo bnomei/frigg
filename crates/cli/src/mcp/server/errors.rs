@@ -347,6 +347,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn definition_first_tool_descriptions_steer_agents_away_from_serial_decl_default() {
+        // EXP-nav-decl-vs-def B: public tool descriptions encode definition-first routing.
+        let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Extended);
+        let go_to = router
+            .get("go_to_definition")
+            .expect("go_to_definition registered");
+        let decls = router
+            .get("find_declarations")
+            .expect("find_declarations registered");
+        let go_desc = go_to.description.as_deref().unwrap_or("");
+        let decl_desc = decls.description.as_deref().unwrap_or("");
+        assert!(
+            go_desc.to_ascii_lowercase().contains("default")
+                || go_desc.contains("Do not call find_declarations first"),
+            "go_to_definition description should claim default agent route: {go_desc}"
+        );
+        assert!(
+            decl_desc.to_ascii_lowercase().contains("secondary")
+                || decl_desc.contains("Do not call serially"),
+            "find_declarations description should be secondary / non-serial: {decl_desc}"
+        );
+        assert!(
+            go_desc.contains("symbol"),
+            "go_to_definition should still prefer symbol=: {go_desc}"
+        );
+    }
+
+    #[test]
     fn tools_with_metadata_publish_object_schemas() {
         let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Extended);
         let metadata_tools = [

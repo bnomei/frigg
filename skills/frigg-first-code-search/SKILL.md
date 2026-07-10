@@ -94,6 +94,7 @@ BAD: unscoped zero-hit conclusion
 BAD: document_symbols for a known name
 BAD: go_to_definition(path, line) without symbol on dense lines
 BAD: ignore ambiguous_location=true / location_warning and edit from path+line defs
+BAD: find_declarations then go_to_definition (or both) as the default known-symbol loop
 BAD: read_match with a match_id from another result_handle
 BAD: repo-wide shell rg to "confirm" an explainable Frigg zero
 BAD: throwaway shell rg on indexed src when Frigg is attached
@@ -241,17 +242,22 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 | --- | --- |
 | **Trigger** | Known or strongly guessed function/type/API/class/trait/module name |
 | **Habit** | `rg -n "fn name"` or IDE go-to-def |
-| **Frigg path** | `search_symbol(name, path_class=runtime)` → `go_to_definition(symbol=name)` → proof |
-| **Fallback** | No hybrid or unscoped grep when name is known |
+| **Frigg path** | `search_symbol(name, path_class=runtime)` → **`go_to_definition(symbol=name)`** → proof |
+| **Fallback** | No hybrid or unscoped grep when name is known. Do **not** call `find_declarations` first (or serially by default) |
 | **Proof** | `read_match` or `read_file` (json/citation if citing) |
-| **Done** | Starts at `search_symbol`; navigates with `symbol`, not path+line alone |
-| **Product support** | Runtime-first defaults, `column`/`excerpt`, empty-`{}` rejection |
+| **Done** | Starts at `search_symbol`; definition-first navigation with `symbol`, not path+line alone |
+| **Product support** | Runtime-first defaults, `column`/`excerpt`, empty-`{}` rejection; both def/decl tools kept for LSP parity |
 
 ```text
 1. search_symbol(name, path_class=runtime)  # prefer symbol + column from hit when present
-2. go_to_definition(symbol=name)            # always pass symbol; never path+line alone
-3. If path+line only was used: check ambiguous_location / location_warning before editing
-4. read_match OR read_file
+2. go_to_definition(symbol=name)            # DEFAULT agent route for "where is this implemented?"
+3. find_declarations(symbol=name)           # ONLY when decl≠def matters (headers, interfaces,
+                                            # re-exports, ambient decls) — not a second default
+4. If path+line only was used: check ambiguous_location / location_warning before editing
+5. read_match OR read_file
+
+BAD: go_to_definition + find_declarations every time and treat both rows as two anchors
+GOOD: go_to_definition(symbol=…) for body anchors; declarations only when language model needs it
 ```
 
 ### Impact
@@ -612,7 +618,8 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 | References / callers | `find_references`, `incoming_calls` |
 | Callees | `outgoing_calls` (`trust=provisional`; confirm with read) |
 | Trait / interface impls | `find_implementations` |
-| Definition | `go_to_definition(symbol=...)` (not path+line alone; trust `ambiguous_location`) |
+| Definition / body anchor | `go_to_definition(symbol=...)` (default; not path+line alone; trust `ambiguous_location`) |
+| Declaration-only need | `find_declarations` only when decl≠def matters — not a serial default with go_to_definition |
 | AST shape | `inspect_syntax_tree` + `search_structural` (tier-3) |
 | In-file zoom (extended) | `explore` — not a substitute for `search_text` |
 | Repo health / adoption | `workspace` gate |
