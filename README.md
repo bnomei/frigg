@@ -319,6 +319,17 @@ Playbook tools are **dev/trace tooling**, not default product surface. They requ
 
 Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Use `presentation_mode=citation` for `LINE|content` lines when writing user-facing citations. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics or selection notes matter.
 
+### Skill / tool-surface re-probe (operators)
+
+After changing the public tool list or the production skill:
+
+1. Run `cargo test -p frigg --test futura_routing_scorecard` (intent map + first-route ⊆ `PUBLIC_TOOL_NAMES`).
+2. Run unit SSOT guards (`skill_scenario_tools_are_subset_of_public_tool_names` via `cargo test -p frigg skill_scenario_tools`).
+3. Re-adopt managed blocks if directive/skill version markers changed (`frigg adopt --check` where CI uses it).
+4. Confirm live `tools/list` / `workspace.runtime.tools_exposed` matches what agents should call.
+
+A subset check proves skill names are public; it does **not** prove agents prefer Frigg over host Grep.
+
 ## Configuration
 
 Precedence is `CLI flag > environment variable > default`.

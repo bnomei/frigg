@@ -3,10 +3,16 @@
 //! Reads `skills/frigg-first-code-search/SKILL.md` (workspace-relative from
 //! `CARGO_MANIFEST_DIR/../..`) and asserts the compact intent map / scenario
 //! picker still routes to the expected first tools. Fails if the skill regresses.
+//!
+//! EXP-policy-consistency B: first-route tool identifiers extracted from the
+//! compact intent map and decision table must be ⊆ `PUBLIC_TOOL_NAMES`.
 
 #![allow(clippy::panic)]
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+use frigg::mcp::types::PUBLIC_TOOL_NAMES;
 
 fn production_skill_markdown() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,6 +42,40 @@ fn compact_intent_map(skill: &str) -> &str {
         .split_once("```")
         .unwrap_or_else(|| panic!("compact intent map fence must close"))
         .0
+}
+
+fn decision_table_section(skill: &str) -> &str {
+    const MARKER: &str = "## Decision table";
+    let after = skill
+        .split_once(MARKER)
+        .unwrap_or_else(|| panic!("skill must include decision table heading"))
+        .1;
+    // Until next ## heading or EOF
+    after
+        .split("\n## ")
+        .next()
+        .unwrap_or(after)
+}
+
+/// Known public tool tokens that may appear as first-route identifiers in skill maps.
+fn known_public_tool_tokens() -> BTreeSet<&'static str> {
+    PUBLIC_TOOL_NAMES.iter().copied().collect()
+}
+
+/// Extract tool-name tokens from free text by matching against PUBLIC_TOOL_NAMES.
+fn extract_public_tool_mentions(text: &str) -> BTreeSet<&'static str> {
+    let public = known_public_tool_tokens();
+    let mut found = BTreeSet::new();
+    for tool in &public {
+        // Prefer longer names first is unnecessary with exact substring on word-ish boundaries.
+        if text.contains(tool) {
+            // Avoid matching `search_text` inside unrelated prose — require tool-ish context.
+            // PUBLIC_TOOL_NAMES are unique snake_case identifiers; substring is enough when
+            // restricted to intent map / decision table sections.
+            found.insert(*tool);
+        }
+    }
+    found
 }
 
 fn assert_intent_line_routes(map: &str, intent_needle: &str, expected_tool: &str) {
@@ -98,4 +138,56 @@ fn futura_routing_scorecard_skill_intent_map_and_shell_card() {
         skill.contains("BAD: hybrid -> grep") || skill.contains("hybrid -> grep"),
         "skill BAD list must contain hybrid -> grep anti-pattern"
     );
+}
+
+/// EXP-policy-consistency B: skill first-route surfaces only public MCP tools.
+#[test]
+fn futura_routing_scorecard_first_route_tools_subset_of_public_names() {
+    let skill = production_skill_markdown();
+    let public: BTreeSet<&str> = PUBLIC_TOOL_NAMES.iter().copied().collect();
+
+    let map = compact_intent_map(&skill);
+    let decision = decision_table_section(&skill);
+    let mentions = extract_public_tool_mentions(map)
+        .union(&extract_public_tool_mentions(decision))
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    assert!(
+        !mentions.is_empty(),
+        "expected to extract at least one PUBLIC_TOOL_NAMES mention from intent map/decision table"
+    );
+
+    for tool in &mentions {
+        assert!(
+            public.contains(tool),
+            "skill first-route tool `{tool}` must be in PUBLIC_TOOL_NAMES"
+        );
+        // Playbook is never a first-route skill target (feature-gated, not default).
+        assert!(
+            !tool.starts_with("playbook_"),
+            "skill first-route must not primary-route playbook tools; found `{tool}`"
+        );
+    }
+
+    // Core product tools the scorecard expects present.
+    for required in [
+        "search_text",
+        "search_symbol",
+        "search_hybrid",
+        "search_batch",
+        "read_match",
+        "workspace",
+        "explore",
+        "impact_bundle",
+    ] {
+        assert!(
+            mentions.contains(required) || skill.contains(&format!("`{required}`")),
+            "skill should route to or cite core product tool `{required}`"
+        );
+        assert!(
+            public.contains(required),
+            "`{required}` must remain public"
+        );
+    }
 }

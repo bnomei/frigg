@@ -225,6 +225,7 @@ mod tests {
             "search_structural",
             "impact_bundle",
             "explore",
+            "find_declarations",
         ];
 
         for tool_name in SCENARIO_TOOLS {

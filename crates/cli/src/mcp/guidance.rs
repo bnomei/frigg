@@ -799,14 +799,32 @@ mod tests {
         assert_eq!(parsed["schema_id"], json!("frigg.policy.evidence_packet.v1"));
         assert_eq!(parsed["not_a_tool"], json!(true));
         assert_eq!(parsed["product_role"], json!("skill_composition_template"));
-        assert!(
-            parsed["claim_fields"]["path"].is_object(),
-            "claim_fields.path must be documented"
-        );
+        for field in [
+            "claim",
+            "tool",
+            "path",
+            "start_line",
+            "end_line",
+            "match_id",
+            "result_handle",
+        ] {
+            assert!(
+                parsed["claim_fields"][field].is_object(),
+                "claim_fields.{field} must be documented"
+            );
+        }
         assert!(
             parsed["envelope"]["claims"].is_object(),
             "envelope.claims must be documented"
         );
+        // Example must deserialize as the typed skill/product shape.
+        let example = parsed
+            .get("example")
+            .cloned()
+            .expect("policy must include example packet");
+        let packet: crate::mcp::types::EvidencePacket = serde_json::from_value(example)
+            .expect("policy example must deserialize as EvidencePacket");
+        assert!(!packet.claims.is_empty());
     }
 
     #[test]
