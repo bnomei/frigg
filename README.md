@@ -41,7 +41,7 @@ The narrow promise is source-backed context for AI agents: repository-aware sear
 - Bounded source reads with `read_file` and `read_match` (including citation mode).
 - Multi-probe search with `search_batch` and combined impact navigation with `impact_bundle`.
 - Definitions, declarations, references, implementations, incoming calls, and outgoing calls.
-- Optional semantic indexing with local, OpenAI, or Google embedding providers.
+- Optional semantic indexing with local, OpenAI, Google, or OpenAI-compatible embedding providers.
 - Optional SCIP artifact ingestion and generator assistance for more precise navigation.
 - Built-in watch refreshes behind `frigg serve`.
 
@@ -160,32 +160,28 @@ Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a 
 ```bash
 frigg adopt --target agents-md --target mcp-project --dry-run
 frigg adopt --target agents-md --target mcp-project
-frigg adopt --target agents-md --policy expanded
-# Best-effort skill copy (additive on normal adopt target selection; never creates …/skills):
-frigg adopt --target agents-md --skill-provider claude
-frigg adopt --skill-provider copilot   # prefers .github/skills when present (CI)
-# Skill removal also requires --skill-provider (plain --uninstall does not delete skill trees).
 ```
 
 Useful targets include `agents-md`, `claude-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and opt-in `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
 
-Managed markdown defaults to a **lightweight** Frigg-first pointer to the `frigg-first-code-search` skill. Pass `--policy expanded` for a compact routing policy (scenario picker + shell→Frigg one-liners) when you want more detail in-repo without loading the skill.
+Managed markdown defaults to a lightweight Frigg-first pointer to the `frigg-first-code-search` skill. To embed a compact routing policy instead, run:
 
-Skill install (`--skill-provider`) is **additive**: it still runs normal adopt target selection (defaults / markers / explicit `--target`) and also best-effort copies the workspace skill tree when the provider’s parent skills directory already exists (`~/.claude/skills`, `~/.codex/skills`, `.cursor/skills` / `~/.cursor/skills`, `.github/skills` / `~/.copilot/skills`). It does **not** create those parents. Pass explicit `--target` if you want to limit managed markdown/MCP writes while installing skills.
+```bash
+frigg adopt --target agents-md --policy expanded
+```
+
+Frigg can also copy the skill into an existing Claude, Codex, Cursor, or Copilot skill directory:
+
+```bash
+frigg adopt --target agents-md --skill-provider claude
+frigg adopt --target agents-md --skill-provider codex
+```
+
+`--skill-provider` is additive: Frigg still applies the selected adopt targets, then copies the skill when the provider's parent skill directory already exists. It never creates that parent directory. Uninstalling a copied skill also requires the matching `--skill-provider`; plain `--uninstall` removes only managed docs and MCP entries.
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 
-### Policy surfaces after install (avoid drift)
-
-| Surface | Role |
-| --- | --- |
-| Production skill (`frigg-first-code-search`) | **SSOT** for scenario routing |
-| Live MCP `tools/list` | **SSOT** for tool existence this process |
-| Repo `AGENTS.md` / managed directive | Lightweight pointer via adopt (not a second skill) |
-| Host skill path (`--skill-provider`) | Best-effort copy into existing host skills dirs |
-| Research `docs/ideas/` / policy-pack hosts | Not production routing; optional paste |
-
-Checklist: skill version / managed marker version → `frigg adopt --check` in CI for managed blocks → confirm host reloaded skill → `tools/list`. Do **not** default adopt to expanded policy (context bloat).
+Use `frigg adopt --check` in CI to detect managed-file drift. After updating Frigg or its skill, re-run adoption, reload the client, and confirm the live MCP `tools/list` before relying on a newly added tool.
 
 Manual HTTP configuration for clients that accept JSON:
 
@@ -282,22 +278,46 @@ Example prompts:
 
 For agent-facing usage guidance, use [skills/frigg-first-code-search](skills/frigg-first-code-search/). For runtime diagnosis, use the [Frigg Operator Runbook](docs/operator-runbook.md).
 
-### Agent evidence contracts (0.8)
+### Build an evidence trail
 
-0.8 strengthens the Frigg-first path agents use for code search:
+Frigg returns handles, recovery hints, and citation-ready source windows so an agent can move from discovery to proof without reconstructing file coordinates by hand:
 
 - Multi-hypothesis probes: `search_batch` (concurrent merge of several search probes).
 - Impact navigation: `impact_bundle` when one symbol needs defs/refs/calls together.
-- Structured zero-hit / recovery fields and workspace freshness gates (dirty paths, path-scoped live-disk when needed).
+- Structured zero-hit / recovery fields, scoped result handles, explicit stale or mixed-handle failures, and workspace freshness gates (dirty paths, path-scoped live-disk when needed).
 - Citation-friendly reads: `presentation_mode=citation` on `read_file` / `read_match` (`LINE|content`).
-- Local routing stats: `FRIGG_ROUTING_STATS=1`, then `frigg stats` (or MCP resource `frigg://stats/routing`).
+- Local routing stats: start the HTTP service with `FRIGG_ROUTING_STATS=1 frigg serve`, then run `frigg stats` or read `frigg://stats/routing`.
 
-Proof and optional policy:
+Use `search_batch` when several independent hypotheses should run together. It accepts two to eight text, symbol, or hybrid probes, executes them concurrently, and returns deduplicated matches plus a result handle when matches exist:
+
+```json
+{
+  "probes": [
+    { "id": "type", "kind": "symbol", "query": "PaymentService" },
+    { "id": "config", "kind": "text", "query": "payment.provider" },
+    { "id": "flow", "kind": "hybrid", "query": "where payment processing starts" }
+  ],
+  "limit": 20
+}
+```
+
+Use `impact_bundle` when you already know the symbol and need its references, callers, and implementations in one response:
+
+```json
+{
+  "symbol": "PaymentService",
+  "path_class": "runtime",
+  "include_implementations": true
+}
+```
+
+Follow either result with `read_match` and request `presentation_mode=citation` when the final answer needs `LINE|content` evidence.
+
+Related contracts and operator guidance:
 
 - Skill: [skills/frigg-first-code-search](skills/frigg-first-code-search/)
-- Test contracts: `cargo test -p frigg --all-targets`
-- Release latency gate: CI runs the opt-in search-latency bench against local `rg`
 - Optional harness templates: [policy-pack/frigg-harness](policy-pack/frigg-harness/)
+- Runtime and policy diagnostics: [docs/operator-runbook.md](docs/operator-runbook.md)
 
 ## CLI reference
 
@@ -337,16 +357,7 @@ Playbook tools are **dev/trace tooling**, not default product surface. They requ
 
 Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Use `presentation_mode=citation` for `LINE|content` lines when writing user-facing citations. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics or selection notes matter.
 
-### Skill / tool-surface re-probe (operators)
-
-After changing the public tool list or the production skill:
-
-1. Run `cargo test -p frigg --test futura_routing_scorecard` (intent map + first-route ⊆ `PUBLIC_TOOL_NAMES`).
-2. Run unit SSOT guards (`skill_scenario_tools_are_subset_of_public_tool_names` via `cargo test -p frigg skill_scenario_tools`).
-3. Re-adopt managed blocks if directive/skill version markers changed (`frigg adopt --check` where CI uses it).
-4. Confirm live `tools/list` / `workspace.runtime.tools_exposed` matches what agents should call.
-
-A subset check proves skill names are public; it does **not** prove agents prefer Frigg over host Grep.
+Hybrid results report which ranking channels contributed. `graph_mode` describes graph-derived ranking evidence; it does not claim precise navigation or call edges. Compact `ranking_note` output also states when ranking is lexical-only because semantic search is disabled or returned no candidates. Use definitions, references, and call tools when you need navigation proof.
 
 ## Configuration
 
@@ -371,6 +382,7 @@ Precedence is `CLI flag > environment variable > default`.
 | `FRIGG_MCP_TOOL_SURFACE_PROFILE` | `extended` | MCP surface profile: `extended` or `core`. |
 | `FRIGG_SQLITE_BUSY_TIMEOUT_MS` | `30000` | SQLite wait timeout for transient writer contention. |
 | `FRIGG_CONTEXT_EFFICIENCY_LOG` | `false` | Append compact context-efficiency rows to `.frigg/context.jsonl`. |
+| `FRIGG_ROUTING_STATS` | `false` | Record process-local MCP tool, zero-hit, recovery, handle-failure, and workspace-gate counters. No cloud telemetry. |
 | `--semantic-runtime-enabled` / `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enable semantic indexing and recall. |
 | `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `openai_compat`, `google`, or `local`. |
 | `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Embedding model override. |
@@ -573,7 +585,7 @@ Treat `.frigg/` as cacheable runtime state, not as source and not as a secret st
 - Normal indexing does not edit project source files.
 - `workspace` may refresh lexical and semantic state under `.frigg/` and waits up to the attach timeout when adopting a target.
 - Explicit maintenance remains available through CLI commands such as `frigg init` and `frigg index`.
-- Optional OpenAI and Google semantic providers call their external embedding APIs. The local provider does not require an API key.
+- Optional OpenAI, OpenAI-compatible, and Google semantic providers call their configured external embedding APIs. The local provider does not require an API key.
 - Optional precise generators may execute repo-local or PATH-discovered tools and write `.frigg/scip/` artifacts. Inspect `workspace` runtime status or CLI output for generator progress and failures.
 - Non-loopback HTTP serving requires `--allow-remote-http` and `--mcp-http-auth-token`.
 
@@ -589,7 +601,7 @@ Frigg's product boundary is intentionally narrow: local code evidence over MCP. 
 | [crates/cli/src/searcher](crates/cli/src/searcher) | Lexical, hybrid, semantic, ranking, projection, and policy code. |
 | [crates/cli/src/storage](crates/cli/src/storage) | SQLite schema, manifests, semantic rows, vectors, and provenance. |
 | [crates/cli/src/languages](crates/cli/src/languages) | Language registry, Tree-sitter support, and language-specific heuristics. |
-| [crates/cli/src/embeddings](crates/cli/src/embeddings) | Local, OpenAI, and Google embedding providers. |
+| [crates/cli/src/embeddings](crates/cli/src/embeddings) | Local, OpenAI, OpenAI-compatible, and Google embedding providers. |
 | [crates/cli/src/watch](crates/cli/src/watch) | Built-in watch runtime. |
 | [crates/cli/tests](crates/cli/tests) | Integration and MCP tool-handler tests. |
 | [crates/cli/benches](crates/cli/benches) | Criterion benchmark harnesses. |
@@ -654,7 +666,7 @@ Search misses a recent change:
 Semantic recall is unavailable or weak:
 
 1. Confirm `FRIGG_SEMANTIC_RUNTIME_ENABLED=true`.
-2. Confirm the provider and credentials for `openai` or `google`.
+2. Confirm the provider and credentials for `openai`, `openai_compat`, or `google`. For `openai_compat`, also confirm the full embeddings POST URL.
 3. For `local`, check `FRIGG_SEMANTIC_MODEL_CACHE` and unset `HF_HOME` if model loading reports a cache mismatch.
 4. Run a full `frigg index` after provider or model changes.
 
