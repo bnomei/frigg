@@ -114,6 +114,7 @@ BAD: invent workspace_index / workspace_reindex / deep_search from source or hos
 BAD: treat search_batch as one cheap multi-pattern scan / expect early-exit across probes
 BAD: blame ranking/hybrid for staleness when watch is mode_off (often default stdio WatchMode::Off) without checking watch_status/profile
 BAD: spawn multiple stdio Frigg processes against one repo and expect shared HTTP-style freshness
+BAD: invent compose_evidence_packet / sealed evidence MCP tools — packets are skill-assembled
 ```
 
 ---
@@ -527,9 +528,9 @@ OR:
 | **Habit** | Diff skim, grep symbols, manual callers/tests |
 | **Frigg path** | Behavioral anchors + changed APIs → refs/callers → proof clusters → tests pass |
 | **Fallback** | `git diff` and build/test stay shell; source impact returns to Frigg |
-| **Proof** | Every finding has path/line witness; prefer evidence packets |
+| **Proof** | Every finding has path/line witness; prefer skill-assembled evidence packets |
 | **Done** | Findings grounded in Frigg evidence, not shell grep transcripts |
-| **Product support** | Citation reads, evidence packets, ref filters, explainable zeros |
+| **Product support** | Citation reads; skill-side evidence packet shape (+ `frigg://policy/evidence-packet.json`); types `EvidencePacket*` are **not** a tool |
 
 ```text
 search_text(behavioral anchors, path_regex='^src/')
@@ -546,6 +547,12 @@ Trust order for review:
 3. `search_structural` — awkward AST evidence (tier-3)  
 4. `incoming_calls` — call-flow hint  
 5. `outgoing_calls` — always `trust=provisional` + `trust_note` on the wire; confirm edges with body reads (does not upgrade wire trust to verified)
+
+**Evidence packets are skill composition, not an MCP tool.** Frigg supplies witnesses
+(search/nav/read). Agents assemble multi-claim JSON for review/security reports.
+There is no `compose_evidence_packet` (or sealed server packet) on the public surface.
+Machine schema: MCP resource `frigg://policy/evidence-packet.json`. Rust types
+`EvidencePacket` / `EvidencePacketClaim` mirror the shape for hosts only.
 
 Evidence packet shape (multi-claim answers) — every review/security finding needs path/line witnesses:
 
@@ -684,3 +691,4 @@ Parameter exhaustiveness and extended surfaces — open only after routing:
 - [references/workspace-and-runtime.md](references/workspace-and-runtime.md) — `workspace`, adoption, runtime
 - [references/extended-tools.md](references/extended-tools.md) — only after verifying live `tools/list` / `runtime.tools_exposed`
 - Live machine surface (not inventory freezes): MCP `frigg://policy/tool-surface.json`
+- Evidence packet schema (skill composition only): MCP `frigg://policy/evidence-packet.json`

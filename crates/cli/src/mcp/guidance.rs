@@ -15,6 +15,8 @@ pub(crate) const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-mat
 pub(crate) const TOOL_SURFACE_RESOURCE_URI: &str = "frigg://policy/tool-surface.json";
 pub(crate) const SHELL_REPLACEMENT_MAP_RESOURCE_URI: &str =
     "frigg://policy/shell-replacement-map.json";
+/// Machine schema for skill-composed multi-claim review packets (not a callable MCP tool).
+pub(crate) const EVIDENCE_PACKET_RESOURCE_URI: &str = "frigg://policy/evidence-packet.json";
 pub(crate) const SHELL_GUIDANCE_RESOURCE_URI: &str = "frigg://guidance/shell-vs-frigg.md";
 pub(crate) const ROUTING_STATS_RESOURCE_URI: &str =
     crate::mcp::routing_stats::ROUTING_STATS_RESOURCE_URI;
@@ -74,6 +76,55 @@ fn support_matrix_json() -> String {
         "languages": languages
     }))
     .expect("support matrix JSON should serialize")
+}
+
+/// JSON Schema-shaped policy resource for agent-assembled evidence packets (EXP-evidence-packet A+D).
+///
+/// Composition stays in the skill; this resource is machine documentation only — not an MCP tool.
+fn evidence_packet_json() -> String {
+    serde_json::to_string_pretty(&json!({
+        "schema_id": "frigg.policy.evidence_packet.v1",
+        "live": true,
+        "product_role": "skill_composition_template",
+        "not_a_tool": true,
+        "not_a_tool_note": "There is no compose_evidence_packet (or similar) public MCP tool. Agents assemble multi-claim packets from search/nav/read witnesses using the skill Technical review / security cards. Rust types EvidencePacket / EvidencePacketClaim mirror this shape for hosts.",
+        "source_of_truth": {
+            "skill": "skills/frigg-first-code-search/SKILL.md (Technical review evidence packet)",
+            "types": "crates/cli/src/mcp/types/navigation.rs::EvidencePacketClaim / EvidencePacket"
+        },
+        "claim_fields": {
+            "claim": { "type": "string", "required": true, "description": "Human claim text" },
+            "tool": { "type": "string", "required": true, "description": "Frigg tool that produced the witness" },
+            "path": { "type": "string", "required": true, "description": "Repository-relative path" },
+            "start_line": { "type": "integer", "required": true, "minimum": 1 },
+            "end_line": { "type": "integer", "required": true, "minimum": 1 },
+            "match_id": { "type": "string", "required": false, "description": "Scoped match_id from the same call as result_handle" },
+            "result_handle": { "type": "string", "required": false, "description": "Session result_handle from the same call" }
+        },
+        "envelope": {
+            "claims": { "type": "array", "items": "claim", "minItems": 1 }
+        },
+        "example": {
+            "claims": [
+                {
+                    "claim": "catalog_entries registers callable operations",
+                    "tool": "search_symbol",
+                    "path": "src/catalog/mod.rs",
+                    "start_line": 40,
+                    "end_line": 72,
+                    "match_id": "symbols:m1",
+                    "result_handle": "..."
+                }
+            ]
+        },
+        "guidance": [
+            "Assemble packets after Frigg search/nav/read; do not invent path/line witnesses.",
+            "Prefer citation presentation_mode for user-facing fences; packets are multi-claim internal/report structure.",
+            "match_id is valid only with its own result_handle from the same tool call.",
+            "Do not treat packet assembly as a server-sealed authority; nav mode (heuristic vs precise) still applies."
+        ]
+    }))
+    .expect("evidence packet policy JSON should serialize")
 }
 
 fn shell_replacement_map_json() -> String {
@@ -333,6 +384,14 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
         )
         .with_description("Machine-readable shell-to-Frigg replacement table.")
         .with_mime_type("application/json"),
+        Resource::new(
+            EVIDENCE_PACKET_RESOURCE_URI,
+            "FRIGG Evidence Packet Schema",
+        )
+        .with_description(
+            "Skill-composed multi-claim evidence packet shape (schema only; not a callable MCP tool).",
+        )
+        .with_mime_type("application/json"),
         Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
             .with_description(
                 "Guidance for when to use shell tools versus repo-aware Frigg surfaces.",
@@ -354,6 +413,7 @@ pub(crate) fn read_policy_resource(
         SUPPORT_MATRIX_RESOURCE_URI => (support_matrix_json(), "application/json"),
         TOOL_SURFACE_RESOURCE_URI => (tool_surface_json(active_profile), "application/json"),
         SHELL_REPLACEMENT_MAP_RESOURCE_URI => (shell_replacement_map_json(), "application/json"),
+        EVIDENCE_PACKET_RESOURCE_URI => (evidence_packet_json(), "application/json"),
         SHELL_GUIDANCE_RESOURCE_URI => (shell_vs_frigg_markdown(active_profile), "text/markdown"),
         ROUTING_STATS_RESOURCE_URI => (
             crate::mcp::routing_stats::snapshot_json(),
@@ -447,9 +507,9 @@ pub(crate) fn read_guidance_prompt(
 #[cfg(test)]
 mod tests {
     use super::{
-        ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SHELL_REPLACEMENT_MAP_RESOURCE_URI,
-        SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI, read_guidance_prompt,
-        read_policy_resource,
+        EVIDENCE_PACKET_RESOURCE_URI, ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI,
+        SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI,
+        read_guidance_prompt, read_policy_resource,
     };
     use crate::languages::{LanguageSupportCapability, SymbolLanguage};
     use crate::mcp::tool_surface::ToolSurfaceProfile;
@@ -728,6 +788,24 @@ mod tests {
                 .iter()
                 .any(|entry| entry.as_str().is_some_and(|s| s.starts_with("playbook_"))),
             "core active_tools must omit playbook tools"
+        );
+    }
+
+    #[test]
+    fn evidence_packet_policy_is_schema_only_not_a_tool() {
+        let json = resource_text(EVIDENCE_PACKET_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("evidence packet policy should parse");
+        assert_eq!(parsed["schema_id"], json!("frigg.policy.evidence_packet.v1"));
+        assert_eq!(parsed["not_a_tool"], json!(true));
+        assert_eq!(parsed["product_role"], json!("skill_composition_template"));
+        assert!(
+            parsed["claim_fields"]["path"].is_object(),
+            "claim_fields.path must be documented"
+        );
+        assert!(
+            parsed["envelope"]["claims"].is_object(),
+            "envelope.claims must be documented"
         );
     }
 
