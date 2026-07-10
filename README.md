@@ -161,16 +161,17 @@ Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a 
 frigg adopt --target agents-md --target mcp-project --dry-run
 frigg adopt --target agents-md --target mcp-project
 frigg adopt --target agents-md --policy expanded
-# Best-effort skill copy into an existing host skills dir (never creates …/skills):
-frigg adopt --skill-provider claude
+# Best-effort skill copy (additive on normal adopt target selection; never creates …/skills):
+frigg adopt --target agents-md --skill-provider claude
 frigg adopt --skill-provider copilot   # prefers .github/skills when present (CI)
+# Skill removal also requires --skill-provider (plain --uninstall does not delete skill trees).
 ```
 
 Useful targets include `agents-md`, `claude-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and opt-in `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
 
 Managed markdown defaults to a **lightweight** Frigg-first pointer to the `frigg-first-code-search` skill. Pass `--policy expanded` for a compact routing policy (scenario picker + shell→Frigg one-liners) when you want more detail in-repo without loading the skill.
 
-Skill install (`--skill-provider`) is separate best-effort plumbing: it copies the workspace skill tree only when the provider’s parent skills directory already exists (`~/.claude/skills`, `~/.codex/skills`, `.cursor/skills` / `~/.cursor/skills`, `.github/skills` / `~/.copilot/skills`). It does **not** create those parents.
+Skill install (`--skill-provider`) is **additive**: it still runs normal adopt target selection (defaults / markers / explicit `--target`) and also best-effort copies the workspace skill tree when the provider’s parent skills directory already exists (`~/.claude/skills`, `~/.codex/skills`, `.cursor/skills` / `~/.cursor/skills`, `.github/skills` / `~/.copilot/skills`). It does **not** create those parents. Pass explicit `--target` if you want to limit managed markdown/MCP writes while installing skills.
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 

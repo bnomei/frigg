@@ -174,7 +174,7 @@ pub(crate) fn run_adopt_command_with_output(
     }
 
     let writes = apply_plan_entries(&plan, policy, uninstall, force, mcp_server_url)?;
-    let skill_writes = apply_skill_plans(config, &skill_plans, uninstall)?;
+    let skill_writes = apply_skill_plans(&skill_plans)?;
     output.summary_event(
         adopt_level_for_status(status),
         "adopt",
@@ -280,11 +280,7 @@ fn build_skill_plans(
     plans
 }
 
-fn apply_skill_plans(
-    config: &FriggConfig,
-    skill_plans: &[SkillInstallPlan],
-    uninstall: bool,
-) -> Result<usize, Box<dyn Error>> {
+fn apply_skill_plans(skill_plans: &[SkillInstallPlan]) -> Result<usize, Box<dyn Error>> {
     let mut writes = 0;
     for plan in skill_plans {
         if !matches!(
@@ -293,27 +289,10 @@ fn apply_skill_plans(
         ) {
             continue;
         }
-        // Re-resolve source per dest: prefer any workspace root that has the skill tree.
-        let source = if uninstall {
-            None
-        } else {
-            resolve_source_for_skill_apply(config)
-        };
-        apply_skill_install(plan, source.as_deref())?;
+        apply_skill_install(plan)?;
         writes += 1;
     }
     Ok(writes)
-}
-
-fn resolve_source_for_skill_apply(config: &FriggConfig) -> Option<PathBuf> {
-    for repo in config.repositories() {
-        if let Some(root) = config.root_by_repository_id(&repo.repository_id.0)
-            && let Ok(source) = resolve_skill_source(root)
-        {
-            return Some(source);
-        }
-    }
-    None
 }
 
 fn agents_policy_label(policy: AgentsPolicy) -> &'static str {

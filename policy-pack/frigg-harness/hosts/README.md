@@ -45,6 +45,8 @@ frigg adopt --skill-provider copilot --skill-provider cursor
 
 **Never creates a missing parent `…/skills` directory.** If the parent is missing, adopt skips skill copy with `skills-parent-missing`. Source is workspace `skills/frigg-first-code-search` or `FRIGG_SKILL_SOURCE`.
 
+`--skill-provider` is **additive** on normal adopt target selection (defaults/markers still run unless you pass explicit `--target`). Skill **removal** requires the same `--skill-provider` flags with `--uninstall` — plain uninstall does not delete host skill trees.
+
 ## Host overview
 
 | Host | Typical policy surface | Suggestion |

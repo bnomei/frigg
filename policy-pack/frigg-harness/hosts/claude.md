@@ -32,7 +32,7 @@ frigg adopt --skill-provider claude
 
 Frigg **does not** create `~/.claude/skills` or `.claude/skills`. Create the parent once (Claude skill tooling / manual), then re-run adopt. Source: workspace `skills/frigg-first-code-search` or `FRIGG_SKILL_SOURCE`.
 
-`frigg adopt` without `--skill-provider` only writes managed markdown/MCP/hook — it does **not** copy the skill tree.
+`frigg adopt` without `--skill-provider` only writes managed markdown/MCP/hook — it does **not** copy the skill tree. `--skill-provider` is additive (normal targets still run). Skill uninstall requires `frigg adopt --uninstall --skill-provider claude`.
 
 ## Soft policy
 
