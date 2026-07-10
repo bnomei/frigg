@@ -40,4 +40,4 @@ Git/build/generated/unindexed/Frigg missing -> shell fallback
 
 Do not run parallel shell grep on indexed source in the same turn as Frigg search.
 
-**Transport:** managed adopt uses loopback **HTTP** (`frigg serve`, `http://127.0.0.1:37444/mcp`). Full watch/post-edit freshness assumes HTTP + watch leases. **Stdio** is valid for one local client that owns the process — a different contract, not broken Frigg; do not blame ranking when watch is `mode_off` on stdio.
+**Transport:** managed adopt writes loopback **HTTP** (`frigg serve`, `http://127.0.0.1:37444/mcp`). Full watch/post-edit freshness assumes HTTP + watch leases. **Stdio** is valid for one local client — a different contract (default watch Off, often `mode_off`), not broken Frigg; do not blame ranking for stdio-without-watch staleness.

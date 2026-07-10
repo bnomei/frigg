@@ -21,7 +21,7 @@ Harness-specific MCP registration or tool-order flukes (for example one-off Grok
 | Mode | When | Freshness contract |
 | --- | --- | --- |
 | **Loopback HTTP** (`frigg serve`, default adopt MCP URL) | Shared / long-running / multi-client / subagents | **Full freshness** assumes HTTP + watch leases: adoption, hot-path refresh, shared caches |
-| **Stdio** (client spawns `frigg`) | One local client that owns the process | **Valid, different contract** — often watch off / no multi-session; not “broken Frigg” |
+| **Stdio** (client spawns `frigg`) | One local client that owns the process | **Valid, different contract** — default `WatchMode::Off` (not Auto); often `mode_off`; not “broken Frigg” |
 
 - Managed adopt configs emit **HTTP** (`type: http`, `http://127.0.0.1:37444/mcp`). Keep `frigg serve` running for those clients.
 - Do **not** claim full post-edit watch freshness on stdio when `runtime.watch_status.reason=mode_off` / `no_lease`. Use path-scoped live-disk or wait only if watch is actually on.
@@ -112,7 +112,7 @@ BAD: throwaway shell rg on indexed src when Frigg is attached
 BAD: calling tools only in a stale schema cache, not in live tools/list
 BAD: invent workspace_index / workspace_reindex / deep_search from source or host descriptors
 BAD: treat search_batch as one cheap multi-pattern scan / expect early-exit across probes
-BAD: blame ranking/hybrid for staleness when watch is mode_off (often stdio Auto) without checking transport/watch
+BAD: blame ranking/hybrid for staleness when watch is mode_off (often default stdio WatchMode::Off) without checking watch_status/profile
 BAD: spawn multiple stdio Frigg processes against one repo and expect shared HTTP-style freshness
 ```
 
@@ -399,7 +399,8 @@ Agent health decision tree (branch here only — not full scorecards):
   3. optional lexical_ready / semantic_ready — never promote SCIP generator install mid-task
   4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / debouncing / refreshing / active);
      optional refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms (dual-class only — no third queue)
-  5. Transport: mode_off / no_lease on stdio is a **different contract**, not a ranking bug —
+  5. Transport: read `runtime.profile` + `watch_status.reason` — default stdio is often `mode_off`
+     (watch Off); `no_lease` means watch is on but no session lease. Either way: not a ranking bug —
      path-scoped live-disk or switch to HTTP+serve for shared freshness; do not invent reindex tools
 
 recommended_action=reindex means index substrate not Ready:
