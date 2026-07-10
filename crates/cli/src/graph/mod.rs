@@ -240,6 +240,7 @@ pub struct PreciseRelationshipRecord {
     pub kind: PreciseRelationshipKind,
 }
 
+/// Extract the terminal identifier token from a SCIP/display symbol string for navigation matching.
 pub(crate) fn precise_navigation_identifier(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

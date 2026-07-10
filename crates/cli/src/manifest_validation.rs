@@ -27,6 +27,7 @@ pub(crate) fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> 
         .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
 }
 
+/// Re-walk live metadata for `root` and return digests only when they still match the snapshot.
 pub(crate) fn validate_manifest_digests_for_root(
     root: &Path,
     file_digests: &[FileMetadataDigest],
@@ -325,6 +326,7 @@ pub(crate) struct SharedValidatedManifestSnapshot {
     pub digests: Arc<Vec<FileMetadataDigest>>,
 }
 
+/// Load the latest storage snapshot and return it only when live digests still validate.
 pub(crate) fn latest_validated_manifest_snapshot(
     storage: &Storage,
     repository_id: &str,
@@ -342,6 +344,7 @@ pub(crate) fn latest_validated_manifest_snapshot(
     }))
 }
 
+/// Shared-arc variant of [`latest_validated_manifest_snapshot`] for cache-friendly callers.
 pub(crate) fn latest_validated_manifest_snapshot_shared(
     storage: &Storage,
     repository_id: &str,
@@ -533,6 +536,7 @@ fn file_digest_order(left: &FileDigest, right: &FileDigest) -> std::cmp::Orderin
         .then(left.hash_blake3_hex.cmp(&right.hash_blake3_hex))
 }
 
+/// Validate a full repository manifest snapshot against live root metadata.
 pub(crate) fn validate_manifest_snapshot_for_root(
     root: &Path,
     snapshot: &RepositoryManifestSnapshot,
@@ -541,6 +545,7 @@ pub(crate) fn validate_manifest_snapshot_for_root(
     validate_manifest_digests_for_root(root, &digests)
 }
 
+/// Compute manifest and semantic freshness for one repository relative to the live tree.
 pub(crate) fn repository_freshness_status<F>(
     storage: &Storage,
     repository_id: &str,
@@ -930,8 +935,6 @@ mod tests {
 
         fs::write(workspace_root.join("new_file.rs"), "fn uncached() {}\n")
             .expect("new fixture file should be writable");
-        // Watch/index marks Dirty when files change; warm-path Ready hits trust digests
-        // without a full live rewalk. Without Dirty, Ready cache still returns.
         cache
             .write()
             .expect("validated manifest candidate cache should not be poisoned")

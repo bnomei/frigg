@@ -177,12 +177,7 @@ pub struct SearchTextParams {
     pub include_context_efficiency: Option<bool>,
 }
 
-/// Response from `search_text` with optional `result_handle` for `read_match`.
-///
-/// Empty results may include flattened recovery fields (`error_code`,
-/// `correction_hint`, `related_tools`, `suggested_next`, optional
-/// `zero_hit_reason`, `scope`, `index`) for compact-mode re-planning
-///.
+/// Response from `search_text` with optional `result_handle` for `read_match`. Empty results may include flattened recovery fields.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
     pub total_matches: usize,
@@ -333,13 +328,7 @@ pub struct SearchHybridMatch {
     pub lexical_sources: Vec<String>,
     pub graph_sources: Vec<String>,
     pub semantic_sources: Vec<String>,
-    /// Hybrid graph-channel pipeline for this match when `graph_score` / `graph_sources` contributed.
-    ///
-    /// Values: `projection` (durable path relations), `heuristic_symbol_graph` (ephemeral
-    /// SymbolGraph expansion), `heuristic_implementation` (PHP/heuristic impl edges),
-    /// `unknown` (graph_sources present but no recognized provenance prefix).
-    /// This is **not** MCP navigation precision (`incoming_calls` / SCIP mode) — hybrid graph
-    /// is a ranking signal only (EXP-nav-hybrid-graph-channel).
+    /// Hybrid graph pipeline when graph_score/sources contributed: projection | heuristic_symbol_graph | heuristic_implementation | unknown. Ranking signal only, not MCP nav precision.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub graph_mode: Option<String>,
     /// Path-class hint.

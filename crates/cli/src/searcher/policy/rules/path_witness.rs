@@ -15,7 +15,6 @@ mod laravel;
 mod runtime_config;
 mod source;
 
-// Witness paths must match at least one structural or overlap signal before scoring rules run.
 const PATH_WITNESS_ELIGIBILITY_ANY: &[super::super::dsl::PredicateLeaf<PathWitnessFacts>] = &[
     pred::path_overlap_leaf(),
     pred::specific_path_overlap_leaf(),

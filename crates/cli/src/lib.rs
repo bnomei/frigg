@@ -4,7 +4,16 @@
 //! long-lived agent-facing service.
 //!
 //! Semantic map:
+//! - `domain` — shared error, evidence, path-class, and workload vocabulary across layers.
+//! - `settings` — runtime profile, semantic provider, lexical backend, and watch switches.
+//! - `indexer` — manifests, symbol extraction, semantic chunks, and index planning.
+//! - `storage` — durable SQLite state for manifests, projections, vectors, and provenance.
+//! - `searcher` — lexical, path-witness, graph, and semantic hybrid retrieval + ranking policy.
+//! - `graph` — heuristic and SCIP-backed precise navigation substrate.
+//! - `embeddings` — local and remote embedding providers behind one readiness boundary.
+//! - `mcp` — agent-facing tool surface, session adoption, recovery, and runtime caches.
 //! - `watch` — lease-gated filesystem supervisor and debounced index scheduler.
+//! - `agent_directive` / `context_efficiency` — Frigg-first policy text and savings telemetry.
 //! - `test_support` — lightweight config helpers for integration tests.
 
 /// Canonical agent directive text and rendering helpers reused across MCP, hooks, and docs checks.

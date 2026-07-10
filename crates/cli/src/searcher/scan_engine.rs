@@ -32,7 +32,6 @@ where
         return Ok(SearchExecutionOutput::default());
     }
 
-    // Small limits use a heap so scanning can stop early once enough matches are retained.
     let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
     let mut matches = BoundedTextMatches::with_limit(query.limit, use_bounded_retention);
     let mut total_matches = 0usize;

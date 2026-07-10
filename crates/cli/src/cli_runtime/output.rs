@@ -84,6 +84,7 @@ impl OutputLevel {
     }
 }
 
+/// One structured `key=value` field on a CLI machine-readable event line.
 #[derive(Debug, Clone)]
 pub(crate) struct OutputField {
     key: &'static str,
@@ -342,6 +343,7 @@ fn format_event_line(
     format_output_event_line(level, area, event, fields, path)
 }
 
+/// Marker error indicating the CLI already printed the failure (avoids double-reporting).
 #[derive(Debug)]
 pub(crate) struct ReportedCliError {
     message: String,

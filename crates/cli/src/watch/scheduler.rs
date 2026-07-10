@@ -435,7 +435,6 @@ impl WatchSchedulerState {
         }
     }
 
-    // Scheduler prefers manifest-fast work before semantic-followup when both are ready.
     pub(super) fn next_ready_refresh(&self, now: Instant) -> Option<ScheduledRefresh> {
         if self.in_flight_manifest_fast.len() < self.manifest_fast_concurrency_limit
             && let Some(repository_id) =
@@ -573,7 +572,6 @@ impl WatchSchedulerState {
                 None => first,
             });
         }
-        // Unique path set — dirty hints, inflight, and semantic follow-up paths often overlap.
         let mut unique_dirty = BTreeSet::new();
         unique_dirty.extend(state.dirty_path_hints.iter().cloned());
         unique_dirty.extend(state.manifest_fast_inflight_paths.iter().cloned());

@@ -38,6 +38,7 @@ pub(crate) enum McpJsonEdit {
     Skipped,
 }
 
+/// JSON adopt-target failure: parse error, unexpected shape, or serialize failure.
 #[derive(Debug)]
 pub(crate) enum McpJsonError {
     Parse(serde_json::Error),
@@ -131,6 +132,7 @@ pub(crate) fn classify_mcp_entry_for_uninstall(
     }
 }
 
+/// Desired `.mcp.json` fragment: HTTP Frigg entry only (never stdio command shape).
 pub(crate) fn desired_mcp_config(mcp_server_url: &str) -> Value {
     let mut servers = Map::new();
     servers.insert(
@@ -458,7 +460,6 @@ mod tests {
     fn adopt_json_merge_defaults_to_loopback_http() {
         assert_eq!(MCP_SERVER_KEY, "frigg");
         assert_eq!(DEFAULT_MCP_SERVER_URL, "http://127.0.0.1:37444/mcp");
-        // EXP-http-stdio B: managed adopt always emits HTTP, never stdio command shape.
         let desired = desired_mcp_server(DEFAULT_MCP_SERVER_URL);
         assert_eq!(desired.get("type").and_then(Value::as_str), Some("http"));
         assert_eq!(

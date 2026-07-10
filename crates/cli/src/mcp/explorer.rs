@@ -14,6 +14,7 @@ pub(crate) const DEFAULT_CONTEXT_LINES: usize = 3;
 pub(crate) const MAX_CONTEXT_LINES: usize = 32;
 pub(crate) const DEFAULT_MAX_MATCHES: usize = 8;
 
+/// Explore window failure: I/O error or a line_start outside the file's total line count.
 #[derive(Debug)]
 pub(crate) enum LossyLineSliceError {
     Io(io::Error),

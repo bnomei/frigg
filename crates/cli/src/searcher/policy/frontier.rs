@@ -33,7 +33,6 @@ pub(crate) fn plan_path_witness_frontier(
     } else {
         limit.saturating_mul(2).max(16)
     };
-    // Surface-heavy intents materialize the full frontier so guardrails can repair later.
     let materialized_limit = if widen_runtime_config_witness_pool || widen_surface_witness_pool {
         top_k
     } else {

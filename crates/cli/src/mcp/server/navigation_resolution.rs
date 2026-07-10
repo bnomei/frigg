@@ -130,6 +130,8 @@ impl FriggMcpServer {
             .unwrap_or((None, None))
     }
 
+    /// Rank one corpus symbol for navigation/search. `column` is set only for real 1-based spans
+    /// (`start_column > 0`); never invents column 1 as a dense-line disambiguator.
     pub(in crate::mcp::server) fn build_ranked_symbol_match(
         corpus: &RepositorySymbolCorpus,
         symbol_index: usize,
@@ -161,8 +163,6 @@ impl FriggMcpServer {
         }
         let path_class = Self::navigation_path_class(&path);
         let (container, signature) = Self::symbol_context_for_index(corpus, symbol_index);
-        // Ship column when the index has a real 1-based span (EXP-nav-path-line-trap handoff).
-        // Unknown/zero spans stay None — do not invent column 1 as a dense-line disambiguator.
         let column = (symbol.span.start_column > 0).then_some(symbol.span.start_column);
         let excerpt = signature
             .clone()
@@ -358,9 +358,6 @@ impl FriggMcpServer {
             .iter()
             .take_while(|resolved| resolved.rank == candidate.rank)
             .count();
-        // Multi-repo HTTP: when no repository_id hint, do not silently pick the first
-        // repo among same-rank ties (EXP-nav-cross-repo B). Location resolution with
-        // require_disambiguation=false still prefers unique path context winners.
         let multi_repo_same_rank = repository_id_hint.is_none()
             && require_disambiguation
             && selected_rank_candidate_count > 1

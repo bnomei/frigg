@@ -1,4 +1,8 @@
-//! Language adapter facade: symbol extraction, PHP graph evidence, and capability routing.
+//! Language adapter facade: tree-sitter symbol extraction, graph evidence, and capability routing.
+//!
+//! Each language module owns AST-shaped facts (Rust impls, PHP targets, Blade/Flux relations).
+//! Callers should enter through `registry` path/capability helpers rather than importing parser
+//! internals, so unsupported extensions stay a typed capability miss instead of ad-hoc parsing.
 
 mod blade;
 mod go;

@@ -263,10 +263,7 @@ pub struct ZeroHitInput<'a> {
     pub reason_override: Option<ZeroHitReason>,
 }
 
-/// Embeddable recovery grammar shared by empty/failed search, navigation, and read paths.
-///
-/// Prefer flattening onto tool responses so compact JSON exposes recovery fields at the top
-/// level without a nested envelope. All fields are optional / omit-empty for additive clients.
+/// Embeddable recovery grammar for empty/failed search, nav, and read paths. Flatten onto responses; all fields optional.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct RecoveryFields {
     /// Stable machine code (SCREAMING_SNAKE), for example `ZERO_HIT_SCOPE_TOO_TIGHT`.
@@ -383,7 +380,6 @@ impl RecoveryFields {
         if q.contains('^') || q.contains('$') {
             return true;
         }
-        // Character class `[...]` with at least one interior character.
         if let Some(open) = q.find('[')
             && let Some(close_rel) = q[open + 1..].find(']')
             && close_rel > 0
@@ -950,8 +946,6 @@ impl RecoveryFields {
         let tokens = hybrid_pivot_candidate_tokens(query, matches);
         let mut suggested_next = Vec::new();
 
-        // Symbol pivots require shaped identifiers (snake/camel/Pascal). Text may use a
-        // weaker secondary token only when shaped tokens exist.
         let symbol_tokens: Vec<&String> = shaped_pivot_tokens(&tokens);
         if let Some(primary) = symbol_tokens.first() {
             suggested_next.push(
@@ -970,7 +964,6 @@ impl RecoveryFields {
                     .with_reason("exact text pivot after hybrid discovery"),
             );
         } else if let Some(primary) = tokens.first() {
-            // Shaped-less tokens are text-only (never search_symbol).
             suggested_next.push(
                 SuggestedNext::tool("search_text")
                     .with_query(primary.clone())
@@ -986,9 +979,6 @@ impl RecoveryFields {
             );
         }
 
-        // Last-resort when no tokens: path read may already exist; otherwise multi-word NL
-        // becomes search_text only (never search_symbol). Code-shaped full queries are
-        // already collected inside hybrid_pivot_candidate_tokens.
         if suggested_next.is_empty() && !query.is_empty() {
             suggested_next.push(
                 SuggestedNext::tool("search_text")
@@ -1282,7 +1272,6 @@ fn broaden_path_regex_hint(path_regex: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    // Common tight runtime roots → one level broader.
     if let Some(stripped) = trimmed.strip_prefix('^')
         && let Some((head, _)) = stripped.split_once('/')
         && !head.is_empty()
@@ -1305,7 +1294,6 @@ pub(crate) fn hybrid_pivot_candidate_tokens(
     query: &str,
     matches: &[HybridPivotMatchSource<'_>],
 ) -> Vec<String> {
-    // key (lowercase) -> (score, display token)
     let mut best: std::collections::BTreeMap<String, (i32, String)> =
         std::collections::BTreeMap::new();
 
@@ -1328,20 +1316,16 @@ pub(crate) fn hybrid_pivot_candidate_tokens(
             .or_insert((score, token));
     };
 
-    // Keep original hybrid rank order for the scan window; boost exact rows instead of
-    // reordering them ahead of higher-ranked discovery hits.
     for matched in matches.iter().take(HYBRID_PIVOT_TOP_MATCHES) {
         let row_boost = if matched.prefers_exact { 2 } else { 0 };
         if let Some(stem) = path_file_stem(matched.path) {
             push_token(stem, row_boost);
         }
         for token in extract_code_like_tokens(matched.excerpt) {
-            // Excerpt identifiers usually beat path stems for exact tools.
             push_token(&token, row_boost + 1);
         }
     }
 
-    // Code-shaped full query is a strong signal when present.
     if is_shaped_code_identifier(query.trim()) {
         push_token(query.trim(), 4);
     }
@@ -1391,8 +1375,6 @@ fn normalize_pivot_token(raw: &str) -> Option<String> {
     if is_reserved_pivot_keyword(candidate) {
         return None;
     }
-    // Accept shaped identifiers for symbol-quality tokens; also keep weaker bare
-    // lowercase tokens for possible search_text use (callers filter for symbol).
     if !is_shaped_code_identifier(candidate) && !is_weak_text_pivot_token(candidate) {
         return None;
     }
@@ -1455,8 +1437,6 @@ fn pivot_token_quality(token: &str) -> i32 {
     } else if token.len() >= 6 {
         score += 1;
     }
-    // Bare lowercase path stems / weak tokens score low but non-negative so they can
-    // still fill search_text when nothing shaped exists.
     if is_shaped_code_identifier(token) {
         score += 2;
     } else if is_weak_text_pivot_token(token) {
@@ -1544,7 +1524,6 @@ fn extract_code_like_tokens(excerpt: &str) -> Vec<String> {
         if current.is_empty() {
             return;
         }
-        // Keep raw buffers that look like identifiers after normalization.
         if is_ascii_identifier(current) || current.contains("::") {
             tokens.push(std::mem::take(current));
         } else {

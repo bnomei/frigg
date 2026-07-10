@@ -217,7 +217,6 @@ impl RepositoryEpochs {
         self.epochs.entry(repository_id.to_owned()).or_insert(0);
     }
 
-    // Epoch bump invalidates in-flight index completions after lease release.
     fn bump(&mut self, repository_id: &str) {
         self.epochs
             .entry(repository_id.to_owned())
@@ -665,7 +664,6 @@ async fn run_supervisor(
                         );
                     }
                     SupervisorCommand::LeaseReleased { repository_id } => {
-                        // Lease released: advance epoch before dropping scheduler state.
                         repository_epochs
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -682,7 +680,6 @@ async fn run_supervisor(
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .current(&repository_id);
-                        // Epoch mismatch: ignore stale scheduler follow-up from a prior lease.
                         if epoch != current_epoch {
                             warn!(
                                 repository_id = %repository_id,
@@ -786,12 +783,10 @@ async fn run_supervisor(
                     continue;
                 }
             };
-            // EXP-hotpath-queue A: measure debounce→dispatch before clearing first_pending_at.
             let debounce_to_start_ms =
                 scheduler.pending_age_ms(&repository.repository_id, class, now);
             let recent_paths = scheduler.mark_started(&repository_id, class);
             publish_scheduler_queue_snapshots(&scheduler, &queue_snapshots);
-            // Capture dispatch epoch so worker side effects and completions can detect lease churn.
             let dispatch_epoch = repository_epochs
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -984,10 +979,8 @@ async fn run_supervisor(
                         Ok(summary) => {
                             let mut paths = summary.changed_paths.clone();
                             paths.extend(summary.deleted_paths.iter().cloned());
-                            // Known set (may be empty noop) — do not whole-wipe handles.
                             Some(paths)
                         }
-                        // Unknown dirty set on failure → whole-repo handle invalidation.
                         Err(_) => None,
                     };
                     callback(
@@ -1097,7 +1090,6 @@ fn handle_notify_event(
         return;
     }
 
-    // Collect dirty relative paths per repo, then one invalidation callback per repo.
     let mut dirty_paths_by_repo: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for path in event.paths {
         let repository = {
@@ -1186,7 +1178,6 @@ fn handle_notify_dropped(
             .expect("validated manifest candidate cache poisoned")
             .mark_dirty_root(&repository.root);
         if let Some(callback) = repository_cache_invalidation_callback {
-            // Unknown path set after notify drop → whole-repo handle invalidation.
             callback(&repository.repository_id, None);
         }
         info!(
@@ -1288,7 +1279,6 @@ fn handle_index_completed(
                 files_changed = summary.files_changed,
                 files_deleted = summary.files_deleted,
                 duration_ms = summary.duration_ms,
-                // Pair with debounce_to_start_ms on start for p95 debounce→Ready (EXP-hotpath-queue A).
                 "built-in watch mode refresh succeeded"
             );
             report_watch_event(

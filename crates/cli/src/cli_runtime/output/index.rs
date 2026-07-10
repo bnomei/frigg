@@ -26,6 +26,7 @@ use super::{CliOutput, OutputField, OutputLevel, field};
 
 const MAX_VERBOSE_PATH_LINES: usize = 50;
 
+/// Whether a path-delta event belongs to the index walk or semantic refresh channel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PathEventKind {
     Index,
@@ -55,6 +56,7 @@ impl PathEventKind {
     }
 }
 
+/// Path-level action label shown in verbose index/semantic progress lines.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PathAction {
     Modified,

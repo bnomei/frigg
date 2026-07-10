@@ -194,7 +194,6 @@ fn hybrid_lexical_expansion_repeated_runs_retain_runtime_docs_and_tests_under_cr
                 "tests/runtime_helper_tests.rs",
                 "#[test]\n\
                  fn invalid_params_runtime_helper_tests() {\n\
-                 // invalid_params typed error runtime helper tests\n\
                  }\n",
             ),
             (

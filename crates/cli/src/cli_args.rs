@@ -222,6 +222,7 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Command>,
 }
 
+/// Hidden argv surface for Claude Code hook entrypoints (`frigg hook …`), not shown in normal help.
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
 pub(crate) struct HiddenHookCli {
@@ -229,6 +230,7 @@ pub(crate) struct HiddenHookCli {
     pub(crate) command: HiddenHookCommand,
 }
 
+/// Hidden hook subcommands installed for host PreToolUse wiring.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum HiddenHookCommand {
     #[command(hide = true)]
@@ -238,6 +240,7 @@ pub(crate) enum HiddenHookCommand {
     },
 }
 
+/// Hook lifecycle event names accepted by the hidden hook CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub(crate) enum HookEvent {
     #[command(name = "pretooluse")]

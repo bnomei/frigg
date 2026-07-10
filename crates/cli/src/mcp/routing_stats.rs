@@ -182,7 +182,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    // Serialize tests that mutate the shared process counters.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -194,7 +193,6 @@ mod tests {
         record_handle_failure();
         record_workspace_gate_use();
         let snap = snapshot();
-        // Without FRIGG_ROUTING_STATS in the ambient env, force flag is off.
         if !snap.enabled {
             assert!(snap.tool_calls.is_empty());
             assert_eq!(snap.zero_hit_count, 0);
@@ -222,7 +220,6 @@ mod tests {
         assert_eq!(snap.tool_calls.get("workspace"), Some(&1));
         assert_eq!(snap.total_tool_calls(), 3);
         assert_eq!(snap.zero_hit_count, 1);
-        // zero_hit also increments recovery_issued, plus explicit recovery
         assert_eq!(snap.recovery_issued, 2);
         assert_eq!(snap.handle_failures, 1);
         assert_eq!(snap.workspace_gate_uses, 1);

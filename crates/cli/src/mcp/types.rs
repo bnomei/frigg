@@ -117,11 +117,7 @@ pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 /// Stable MCP error code returned when a write-capable tool lacks required confirmation.
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
 
-/// Object-only metadata payload used by several MCP read responses.
-///
-/// Frigg emits structured JSON objects here at runtime, and the explicit wrapper keeps the
-/// generated tool `outputSchema` compatible with strict MCP clients that reject boolean
-/// subschemas for `properties.metadata`.
+/// Object-only metadata payload for MCP read responses (keeps outputSchema object-typed for strict clients).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct MetadataObject(Value);

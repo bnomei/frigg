@@ -955,7 +955,6 @@ impl FriggMcpServer {
             &precise_config.generation_excludes,
         );
         if changed_paths.is_empty() && deleted_paths.is_empty() {
-            // Cold-start paths (`init`, first attach): rerun when prior generation failed or the artifact file is gone.
             let expected_artifact =
                 Self::precise_generator_expected_output_path(&workspace.root, spec);
             return match self.scip_cached_workspace_precise_generation(
@@ -1805,8 +1804,6 @@ impl FriggMcpServer {
                     .expect("runtime task registry poisoned")
                     .update_task_detail(&spawn_task_id, Some(detail.clone()));
             }
-            // Preserve dirty-path handoff: re-queue this call's paths (and keep any
-            // concurrent pending already recorded) so a later successful generation can drain.
             {
                 let mut pending = self
                     .runtime_state

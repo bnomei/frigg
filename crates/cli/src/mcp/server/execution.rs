@@ -152,6 +152,8 @@ impl FriggMcpServer {
         )
     }
 
+    /// Run CPU/IO work off the async path. Multi-thread runtimes use `block_in_place` so short
+    /// exact-search tools avoid spawn_blocking pool hops that dominate small-repo latency.
     pub(super) async fn run_blocking_task<T, F>(
         operation: &'static str,
         task_fn: F,
@@ -160,8 +162,6 @@ impl FriggMcpServer {
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
-        // Prefer `block_in_place` on multi-thread runtimes for short read tools:
-        // spawn_blocking thread-pool hops dominate small-repo exact-search latency vs shell `rg`.
         match tokio::runtime::Handle::current().runtime_flavor() {
             tokio::runtime::RuntimeFlavor::MultiThread => Ok(tokio::task::block_in_place(task_fn)),
             _ => task::spawn_blocking(task_fn).await.map_err(|err| {

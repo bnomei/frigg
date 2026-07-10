@@ -15,6 +15,7 @@ use super::human_block::{
 };
 use super::{OutputField, OutputLevel};
 
+/// Structured CLI event classification used to choose the human presentation component.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HumanEventKind {
     Error,

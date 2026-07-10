@@ -40,7 +40,6 @@ fn runtime_status_watch_status_mode_off_when_watch_disabled() {
     let watch_status = status
         .watch_status
         .expect("watch_status should always be present on runtime summary");
-    // Fixture servers do not enable watch for the MCP unit-test constructor.
     assert_eq!(watch_status.reason, WatchStatusReason::ModeOff);
     assert_eq!(watch_status.lease_count, 0);
 }
@@ -60,7 +59,6 @@ fn watch_status_refreshing_matches_runtime_repository_id_alias() {
         Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
     );
 
-    // Dual-id workspace: stable public id differs from watch/task runtime id.
     let workspace = AttachedWorkspace {
         repository_id: "myrepo-deadbeef".to_owned(),
         runtime_repository_id: "repo-001".to_owned(),
@@ -74,7 +72,7 @@ fn watch_status_refreshing_matches_runtime_repository_id_alias() {
         .expect("task registry lock")
         .start_task(
             RuntimeTaskKind::ChangedIndex,
-            "repo-001", // registered under runtime id only
+            "repo-001",
             "refresh",
             None,
         );
@@ -222,7 +220,6 @@ fn watch_status_includes_gate_dirty_path_count_when_pending() {
         &[],
     );
     let status = server.watch_status_summary(Some(&workspace), &[]);
-    // No watch runtime → no_lease, but dirty count from gate oracle still surfaces (D).
     assert_eq!(status.reason, WatchStatusReason::NoLease);
     assert_eq!(status.pending_dirty_path_count, Some(2));
 }
@@ -256,11 +253,22 @@ fn runtime_status_tools_exposed_matches_filtered_router() {
         "core tools_exposed should include workspace"
     );
     assert!(
-        !core_status.tools_exposed.contains(&"explore".to_owned()),
-        "core tools_exposed must omit extended-only tools"
+        core_status.tools_exposed.contains(&"explore".to_owned()),
+        "explore is product core tooling (not extended-only)"
     );
+    #[cfg(feature = "playbook")]
+    {
+        for playbook in ["playbook_start", "playbook_step", "playbook_finish"] {
+            assert!(
+                !core_status
+                    .tools_exposed
+                    .iter()
+                    .any(|name| name == playbook),
+                "core tools_exposed must omit playbook tool {playbook}"
+            );
+        }
+    }
 
-    // Non-public / lifecycle / legacy names that must never appear on the public surface.
     for phantom in [
         "workspace_index",
         "workspace_attach",
@@ -296,7 +304,6 @@ fn runtime_status_tools_exposed_matches_filtered_router() {
         "extended tools_exposed should include explore"
     );
 
-    // Always-serialize contract: empty vs missing must not collapse for clients.
     let value = serde_json::to_value(&core_status).expect("runtime status should serialize");
     assert!(
         value.get("tools_exposed").and_then(|v| v.as_array()).is_some(),

@@ -348,7 +348,6 @@ mod tests {
 
     #[test]
     fn definition_first_tool_descriptions_steer_agents_away_from_serial_decl_default() {
-        // EXP-nav-decl-vs-def B: public tool descriptions encode definition-first routing.
         let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Extended);
         let go_to = router
             .get("go_to_definition")

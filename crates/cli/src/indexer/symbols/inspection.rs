@@ -188,6 +188,7 @@ pub fn inspect_syntax_tree_with_follow_up_in_source(
     )
 }
 
+/// Test helper: build structural follow-up queries from a focus node and its ancestors.
 #[cfg(test)]
 pub fn generated_follow_up_structural_for_focus(
     language: SymbolLanguage,
@@ -223,6 +224,7 @@ pub fn generated_follow_up_structural_for_focus(
     )
 }
 
+/// Test helper: build structural follow-ups for a line/column cursor inside an in-memory source buffer.
 #[cfg(test)]
 pub fn generated_follow_up_structural_for_location_in_source(
     language: SymbolLanguage,

@@ -286,7 +286,6 @@ impl FriggMcpServer {
         let public_repo_id = workspace.map(|ws| ws.repository_id.as_str());
         let runtime_repo_id = workspace.map(|ws| ws.runtime_repository_id.as_str());
 
-        // Single lock: lease + dual-class queue snapshot (EXP-hotpath-queue D).
         let (
             lease_count,
             has_runtime,
@@ -328,7 +327,6 @@ impl FriggMcpServer {
             }
         };
 
-        // Gate dirty oracle (precise pending) supplements scheduler dirty hints.
         let dirty_from_gate = public_repo_id.map(|id| {
             self.changed_paths_since_snapshot_for_gate(id).len()
         });
@@ -367,7 +365,6 @@ impl FriggMcpServer {
                 || runtime_repo_id.is_some_and(|id| id == task_repo)
         };
 
-        // Prefer in-flight refresh signal over lease absence (tasks may use runtime ids).
         let refresh_running = active_tasks.iter().any(|task| {
             task.status == RuntimeTaskStatus::Running
                 && matches!(
@@ -392,7 +389,6 @@ impl FriggMcpServer {
         }
 
         if !has_runtime {
-            // Watch enabled for profile but supervisor handle not attached yet.
             return queue_fields(
                 WatchStatusReason::NoLease,
                 0,
@@ -408,7 +404,6 @@ impl FriggMcpServer {
             );
         }
 
-        // Dual-class pending work, no in-flight task → debouncing/queued (not a third class).
         if queue_pending {
             return queue_fields(
                 WatchStatusReason::Debouncing,

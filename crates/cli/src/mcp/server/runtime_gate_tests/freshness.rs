@@ -1263,7 +1263,6 @@ async fn failed_index_completion_invalidation_recomputes_response_freshness() {
         )
         .expect("failed-after-write fixture should persist semantic rows");
     let callback = server.repository_cache_invalidation_callback();
-    // None dirty_paths → whole-repo cache/handle invalidation (failed/unknown set).
     callback(&workspace.repository_id, None);
 
     let ready = server

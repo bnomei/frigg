@@ -199,7 +199,6 @@ fn search_walk_builder(root: &Path) -> WalkBuilder {
     builder
 }
 
-// Parallel walk workers append through a mutex; results are sorted and deduped before return.
 fn collect_candidate_files_parallel(
     repository_id: &str,
     root: &Path,

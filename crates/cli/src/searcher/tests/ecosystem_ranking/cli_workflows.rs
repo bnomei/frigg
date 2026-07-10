@@ -545,7 +545,6 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semanti
             (
                 "src-tauri/src/main.rs",
                 "fn main() {\n\
-                     // entry point bootstrap build flow command runner main config\n\
                      let config = load_config();\n\
                      run_build_flow(config);\n\
                      }\n",

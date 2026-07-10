@@ -26,6 +26,7 @@ use crate::storage::{
     Storage, StorageSession,
 };
 
+/// One embeddable semantic chunk before vector write: identity, envelope text, and content hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticChunkCandidate {
     pub(crate) chunk_id: blake3::Hash,
@@ -568,14 +569,19 @@ fn build_semantic_embedding_records_with_runtime(
     Ok(output)
 }
 
+/// Embedding-stage output: durable chunk embedding records ready for vector store write.
 pub(crate) struct SemanticEmbeddingBuild {
     pub(crate) records: Vec<SemanticChunkEmbeddingRecord>,
 }
 
+/// Chunking-stage output: candidates before provider embed and storage persistence.
 pub(crate) struct SemanticChunkBuild {
     pub(crate) candidates: Vec<SemanticChunkCandidate>,
 }
 
+/// Build semantic chunk candidates for every language-supported path in the current manifest.
+///
+/// Reads each file once, skips unsupported languages, and sorts candidates by path then chunk index.
 pub(crate) fn build_semantic_chunk_candidates(
     repository_id: &str,
     workspace_root: &Path,
@@ -633,6 +639,7 @@ pub(crate) fn build_semantic_chunk_candidates(
     Ok(SemanticChunkBuild { candidates: output })
 }
 
+/// Chunk a single source buffer into semantic candidates with path/language embed envelope fields.
 pub(crate) fn build_file_semantic_chunks(
     repository_id: impl Into<Arc<str>>,
     snapshot_id: impl Into<Arc<str>>,
@@ -907,9 +914,6 @@ fn build_semantic_chunk_candidate(
     end_line: usize,
     content_text: String,
 ) -> SemanticChunkCandidate {
-    // Hash is of the path-centered embed envelope (path + language + body) so index rows
-    // re-embed when the template or body changes (EXP-minilm-quality E), without rewriting
-    // stored excerpt body text.
     let content_hash = semantic_chunk_content_hash(
         &file_context.path,
         &file_context.language,
@@ -962,6 +966,7 @@ pub(crate) fn semantic_embed_document_text(path: &str, language: &str, content_t
     out
 }
 
+/// Content identity for embed reindex: hashes the path/language envelope text, not body alone.
 fn semantic_chunk_content_hash(path: &str, language: &str, content_text: &str) -> blake3::Hash {
     blake3::hash(semantic_embed_document_text(path, language, content_text).as_bytes())
 }
@@ -1078,7 +1083,6 @@ mod embed_envelope_tests {
         assert_ne!(base, other_lang);
         assert_ne!(base, other_body);
         assert_eq!(base, semantic_chunk_content_hash("a.rs", "rust", "fn a() {}"));
-        // Hash is of the formatted embed envelope (not body alone).
         assert_eq!(
             base,
             blake3::hash(semantic_embed_document_text("a.rs", "rust", "fn a() {}").as_bytes())

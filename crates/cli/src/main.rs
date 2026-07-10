@@ -545,7 +545,7 @@ mod tests {
             .expect_err("unknown semantic provider must be rejected");
 
         assert!(
-            error.contains("openai, google, local"),
+            error.contains("openai, openai_compat, google, local"),
             "unexpected provider parse error: {error}"
         );
         assert!(
@@ -571,10 +571,13 @@ mod tests {
         let readme = include_str!("../../../README.md");
 
         assert!(readme.contains(
-            "| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `google`, or `local`. |"
+            "| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `openai_compat`, `google`, or `local`. |"
         ));
         assert!(readme.contains("export FRIGG_SEMANTIC_RUNTIME_PROVIDER=local"));
         assert!(readme.contains("`local` -> `all-MiniLM-L6-v2`"));
+        assert!(readme.contains(
+            "The local provider uses `all-MiniLM-L6-v2` by default and does not require an API key"
+        ));
         assert!(readme.contains(
             "When `provider=local`, Frigg prepares missing local model artifacts automatically during startup"
         ));
@@ -593,6 +596,7 @@ mod tests {
                 "OpenAI and Google semantic providers call their external embedding APIs"
             )
         );
+        assert!(readme.contains("openai_compat"));
     }
 
     #[test]

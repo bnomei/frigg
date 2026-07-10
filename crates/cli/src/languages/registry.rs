@@ -213,6 +213,7 @@ impl ParserPoolKey {
     }
 }
 
+/// Thread-local tree-sitter parser lease that returns the parser to the idle pool on drop.
 pub(crate) struct PooledParser {
     key: ParserPoolKey,
     parser: Option<Parser>,
@@ -297,6 +298,7 @@ impl LanguageCapability {
     }
 }
 
+/// Operator-facing support tier for a language/capability pair (core, optional, unsupported).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LanguageCapabilityTier {
     Core,

@@ -24,7 +24,6 @@ use super::super::trace::PolicyEvaluation;
 
 type SelectionStageApply = fn(&mut PolicyProgram, &SelectionFacts);
 
-// Stages run in order; later stages see scores already adjusted by earlier multipliers.
 const PIPELINE: &[SelectionStageApply] = &[
     base::apply,
     contracts::apply,

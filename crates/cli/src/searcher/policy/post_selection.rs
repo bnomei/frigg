@@ -89,7 +89,6 @@ impl PostSelectionRule {
     }
 }
 
-// Guardrails run in declaration order; each rule may replace or insert into the result set.
 const RULES: &[PostSelectionRule] = &[
     PostSelectionRule::new(
         "post_selection.runtime_config",

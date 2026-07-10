@@ -813,7 +813,6 @@ mod tests {
         .map_err(|err| {
             FriggError::Internal(format!("failed to seed metadata empty snapshot: {err}"))
         })?;
-        // no manifest rows for snapshot-empty
 
         let loaded = load_latest_manifest_metadata_snapshot_for_repository(&conn, "repo-1")?
             .expect("expected metadata snapshot helper to preserve repository snapshot id");

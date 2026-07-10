@@ -8,6 +8,10 @@ use std::path::Path;
 use crate::domain::PathClass;
 use crate::languages::{LanguageCapability, supported_language_for_path};
 
+/// Classify a repository-relative path into runtime / project / support for ranking and witnesses.
+///
+/// Prefers support for tests/examples/vendor-like boundaries, runtime for `src/`, app/routes,
+/// and first-party language roots, and project for remaining non-support surfaces.
 pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
     let normalized = relative_path.trim_start_matches("./");
     let components = normalized
@@ -70,10 +74,12 @@ fn is_roc_platform_source_path(relative_path: &str) -> bool {
         && (relative_path.starts_with("platform/") || relative_path.contains("/platform/"))
 }
 
+/// Snake-case path-class label for wire payloads and diagnostics.
 pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
     classify_repository_path(relative_path).as_str()
 }
 
+/// Rank for path-class labels; unknown labels sort after support (`3`).
 pub(crate) fn repository_path_class_rank(path_class: &str) -> u8 {
     PathClass::from_label(path_class)
         .map(PathClass::rank)

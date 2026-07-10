@@ -756,7 +756,11 @@ fn semantic_changed_only_reuses_unchanged_chunks_inside_changed_file() -> FriggR
     )?;
     assert_eq!(
         first_executor.observed_inputs(),
-        vec![stable_chunk.clone(), original_tail]
+        vec![
+            format!("path: src/main.rs\nlanguage: rust\n\n{stable_chunk}"),
+            format!("path: src/main.rs\nlanguage: rust\n\n{original_tail}"),
+        ],
+        "embed batch uses path+language envelope; stored body remains pure source"
     );
 
     fs::write(
@@ -777,8 +781,10 @@ fn semantic_changed_only_reuses_unchanged_chunks_inside_changed_file() -> FriggR
     assert_ne!(second.snapshot_id, first.snapshot_id);
     assert_eq!(
         second_executor.observed_inputs(),
-        vec![changed_tail.clone()],
-        "only the modified tail chunk should be embedded"
+        vec![format!(
+            "path: src/main.rs\nlanguage: rust\n\n{changed_tail}"
+        )],
+        "only the modified tail chunk should be embedded (with envelope)"
     );
 
     let storage = Storage::new(&db_path);

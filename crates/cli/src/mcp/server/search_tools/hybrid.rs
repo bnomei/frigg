@@ -347,8 +347,6 @@ impl FriggMcpServer {
                         result_handle: None,
                         handle_scope: None,
                         handle_expires: None,
-                        // ranking_note is set in present_search_hybrid_response from
-                        // lexical_only_mode (semantic-default honesty) before compact strip.
                         ranking_note: None,
                         best_pivot_path,
                         latency_class: None,
@@ -1689,8 +1687,6 @@ mod tests {
 
     #[test]
     fn search_hybrid_exact_pivot_probe_uses_shaped_token_for_broad_nl_with_match_excerpt() {
-        // Production probe runs before guardrails fill rank_reasons; rely on lexical sources
-        // for prefers_exact (strong non-witness lexical), not pre-seeded rank_reasons.
         let matches = [hybrid_match_fixture(
             "crates/cli/src/mcp/server/content.rs",
             10,

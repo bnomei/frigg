@@ -145,10 +145,7 @@ pub struct GoToDefinitionResponse {
     /// Soft warning when path+line was used without `symbol` (generic or density-specific copy).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location_warning: Option<String>,
-    /// Machine-obvious flag: path+line without `symbol` may have resolved the wrong target.
-    ///
-    /// Always check this (or `location_warning`) before trusting definition matches for edits.
-    /// Prefer retrying with `symbol=<name>` from `search_symbol` (pass `column` when the hit includes one).
+    /// True when path+line without symbol may be wrong. Check this or location_warning before edits; prefer symbol= from search_symbol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambiguous_location: Option<bool>,
     /// Flattened recovery fields on empty definition results (and soft re-plan on ambiguous hits).
@@ -156,10 +153,7 @@ pub struct GoToDefinitionResponse {
     pub recovery: super::RecoveryFields,
 }
 
-/// Parameters for `find_declarations` (secondary to `go_to_definition` for agents).
-///
-/// Prefer `go_to_definition(symbol=…)` for ordinary body anchors. Use this tool when
-/// declaration vs definition matters (headers, interfaces, re-exports, ambient decls).
+/// Parameters for `find_declarations` (secondary to go_to_definition; use when decl vs def matters).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsParams {
     /// Preferred when the name is known (same as go_to_definition).
@@ -336,10 +330,7 @@ pub struct IncomingCallsResponse {
     pub recovery: super::RecoveryFields,
 }
 
-/// Trust tier for navigation edges that may over- or under-claim structure.
-///
-/// Used by `outgoing_calls` (always `provisional` today). `verified` is reserved for a
-/// future body-proven path; agents must not invent verified without product support.
+/// Trust tier for nav edges. Outgoing_calls is always provisional today; do not invent verified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigationEdgeTrust {
@@ -546,16 +537,7 @@ pub struct ImpactBundlePathTally {
     pub count: usize,
 }
 
-/// Always-on compact cardinality summary for `impact_bundle`.
-///
-/// Agents should plan from `summary` first, then open handles/lists for proof.
-/// Does not replace match arrays; tests/outgoing stay opt-in / sequential.
-///
-/// **Semantics:** `*_count` fields mirror the returned list lengths. References,
-/// incoming_calls, and implementations are composed from the **first** symbol hit;
-/// `symbols_count` may be >1 when the name is ambiguous. `top_paths` is a **global**
-/// cap of highest path×role tallies (not top-N within each role). Full lists remain
-/// SSOT for complete path coverage when `top_paths_truncated` is true.
+/// Always-on cardinality summary for `impact_bundle`. Plan from summary first; lists/handles for proof. Counts mirror returned lists; composition uses the first symbol hit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleSummary {
     pub symbols_count: usize,
@@ -574,16 +556,7 @@ pub struct ImpactBundleSummary {
     pub top_paths_truncated: bool,
 }
 
-/// Composed impact response: symbol hits + references + callers (+ optional impls).
-///
-/// **One next-step channel:** follow-ups live only in flattened
-/// [`RecoveryFields::suggested_next`] (same pattern as `search_batch`). There is no
-/// second top-level `suggested_next` field — dual channels caused serde ambiguity and
-/// agents reading full mode for “more next steps” found nothing extra.
-///
-/// Compact (default) keeps: `summary`, composed match arrays, handles, modes, and recovery/next.
-/// Full `response_mode` is forwarded to child search/nav calls for diagnostics only;
-/// it does not add a second recovery channel on the bundle itself.
+/// Composed impact: hits + refs + callers (+ optional impls). One next-step channel via flattened suggested_next only.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleResponse {
     pub symbol: String,
@@ -629,8 +602,6 @@ impl ImpactBundleResponse {
         use std::collections::BTreeMap;
 
         let mut tallies: BTreeMap<(String, ImpactBundlePathRole), usize> = BTreeMap::new();
-        // Path tally for symbol role: selected/first hit only (nav composition anchor).
-        // symbols_count still reports full hit set length for ambiguity awareness.
         if let Some(m) = symbols.first() {
             *tallies
                 .entry((m.path.clone(), ImpactBundlePathRole::Symbol))
@@ -696,10 +667,7 @@ impl ImpactBundleResponse {
     }
 }
 
-/// Optional evidence-packet claim witness shape for review/security.
-///
-/// Agents may assemble multi-claim packets from search/nav/read results using this shape.
-/// Not a live MCP tool response — documentation and optional typing helper only.
+/// Optional evidence-packet claim shape for review/security (not a live MCP tool response).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EvidencePacketClaim {
     pub claim: String,
@@ -836,7 +804,7 @@ mod tests {
             target_selection: None,
             metadata: None,
             note: Some("full diagnostic only".to_owned()),
-            trust: NavigationEdgeTrust::Verified, // present overwrites to provisional
+            trust: NavigationEdgeTrust::Verified,
             trust_note: String::new(),
             recovery: RecoveryFields::default(),
         }
@@ -897,7 +865,6 @@ mod tests {
 
     #[test]
     fn impact_bundle_response_single_suggested_next_channel() {
-        // Success-shaped: next steps only via flattened recovery (no dual top-level field).
         let success = ImpactBundleResponse {
             symbol: "catalog_entries".to_owned(),
             path_class: "runtime".to_owned(),
@@ -934,7 +901,6 @@ mod tests {
             next[0]["tool"], "read_match",
             "success next steps serialize from recovery.suggested_next"
         );
-        // Compact-relevant fields stay present on success; no nested recovery envelope.
         assert_eq!(value["symbol"], "catalog_entries");
         assert_eq!(value["symbols_result_handle"], "symbols:h1");
         assert_eq!(value["references_result_handle"], "refs:h1");
@@ -943,7 +909,6 @@ mod tests {
         assert!(value.get("error_code").is_none());
         assert!(value.get("recovery").is_none());
 
-        // Zero-hit shaped recovery still single-channel.
         let zero = ImpactBundleResponse {
             symbol: "missing_sym".to_owned(),
             path_class: "runtime".to_owned(),
@@ -981,14 +946,12 @@ mod tests {
             1
         );
         assert_eq!(zero_value["error_code"], "ZERO_HIT");
-        // Round-trip: deserializing must not invent a second channel field.
         assert!(zero_value.get("recovery").is_none());
         let back: ImpactBundleResponse =
             serde_json::from_value(zero_value).expect("deserialize impact");
         assert_eq!(back.recovery.suggested_next.len(), 1);
         assert_eq!(back.recovery.error_code.as_deref(), Some("ZERO_HIT"));
 
-        // Flattened recovery: suggested_next appears at top level JSON, not nested under recovery.
         assert!(value.get("recovery").is_none());
     }
 
@@ -1103,7 +1066,6 @@ mod tests {
             summary.incoming_calls_mode,
             NavigationMode::HeuristicNoPrecise
         );
-        // src/a.rs appears as reference x2 and incoming_call x1 — separate role rows.
         assert!(
             summary.top_paths.iter().any(|p| {
                 p.path == "src/a.rs"
@@ -1133,7 +1095,6 @@ mod tests {
         assert_eq!(value["references_mode"], "precise");
         assert_eq!(value["top_paths_truncated"], false);
 
-        // Cap honesty: >8 path×role tallies truncate with flag.
         let many_refs: Vec<ReferenceMatch> = (0..10)
             .map(|i| ReferenceMatch {
                 match_id: None,
@@ -1217,7 +1178,6 @@ mod tests {
 
     #[test]
     fn evidence_packet_skill_shaped_multi_claim_json_deserializes() {
-        // Skill-documented multi-claim envelope.
         let skill_json = r#"{
           "claims": [
             {

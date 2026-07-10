@@ -21,8 +21,12 @@ mod rules;
 #[path = "intent/tests.rs"]
 mod tests;
 
+/// Alias used by hybrid ranking and path-witness stages for the inferred query intent.
 pub(crate) type HybridRankingIntent = SearchIntent;
 
+/// Inferred hybrid ranking intent: witness goals, framework hints, and applied rule ids.
+///
+/// Built once from ordered phrase rules; policy stages read flags rather than re-parsing the query.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct SearchIntent {

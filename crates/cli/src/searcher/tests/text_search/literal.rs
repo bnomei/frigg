@@ -548,9 +548,6 @@ fn literal_search_reuses_validated_manifest_candidates_across_repeated_queries()
 
     assert_eq!(first.matches, second.matches);
     assert_eq!(first.matches.len(), 1);
-    // Functional contract: repeated warm queries return identical matches without Dirty
-    // bypass (Ready digests may be served from cache; exact hit counters depend on how
-    // many internal lookups the searcher performs per call).
     let stats = cache
         .read()
         .expect("validated manifest candidate cache should not be poisoned")

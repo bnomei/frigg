@@ -645,7 +645,6 @@ pub(super) fn retain_semantic_hits_for_query(
         return (Vec::new(), 0);
     }
 
-    // Relative floor drops distant vector hits unless overlap or runtime-witness rules preserve them.
     let retain_floor = best_raw_score * HYBRID_SEMANTIC_RETAIN_RELATIVE_FLOOR;
     let query_exact_terms = hybrid_query_exact_terms(query_text);
     let retained_document_limit = limit

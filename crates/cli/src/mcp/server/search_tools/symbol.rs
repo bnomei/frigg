@@ -41,7 +41,6 @@ impl FriggMcpServer {
                         })?),
                         None => None,
                     };
-                    // Runtime-first default when path_class is omitted.
                     let path_class_filter = Some(
                         params_for_blocking
                             .path_class

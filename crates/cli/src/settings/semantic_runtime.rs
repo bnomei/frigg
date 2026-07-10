@@ -132,10 +132,11 @@ impl SemanticRuntimeCredentials {
         }
     }
 
+    /// Credential for `provider`. `OpenAiCompat` uses its dedicated key, then falls back to
+    /// `OPENAI_API_KEY` for shared OpenAI-compatible gateways.
     pub fn api_key_for(&self, provider: SemanticRuntimeProvider) -> Option<&str> {
         match provider {
             SemanticRuntimeProvider::OpenAi => self.openai_api_key.as_deref(),
-            // Prefer the dedicated env; fall back to OPENAI_API_KEY for shared gateways.
             SemanticRuntimeProvider::OpenAiCompat => self
                 .openai_compat_api_key
                 .as_deref()

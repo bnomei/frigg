@@ -186,6 +186,7 @@ fn manifest_metadata_cache() -> &'static Mutex<ManifestMetadataCache> {
     MANIFEST_METADATA_CACHE.get_or_init(|| Mutex::new(ManifestMetadataCache::default()))
 }
 
+/// Process-local cache lookup for previously computed manifest metadata summaries.
 pub(crate) fn cached_manifest_metadata_summary(
     key: &ManifestMetadataCacheKey,
 ) -> Option<ManifestMetadataSummary> {
@@ -195,6 +196,7 @@ pub(crate) fn cached_manifest_metadata_summary(
         .get(key)
 }
 
+/// Insert or refresh a bounded process-local manifest metadata summary cache entry.
 pub(crate) fn store_manifest_metadata_summary(
     key: ManifestMetadataCacheKey,
     value: ManifestMetadataSummary,
@@ -205,17 +207,20 @@ pub(crate) fn store_manifest_metadata_summary(
         .insert(key, value);
 }
 
+/// Truthy env parsing: empty/`0`/`false`/`no`/`off` are false; any other non-empty value is true.
 pub(crate) fn is_truthy_env_value(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     !matches!(normalized.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
+/// Whether `FRIGG_CONTEXT_EFFICIENCY_LOG` enables optional JSONL savings logging.
 pub(crate) fn context_efficiency_log_enabled() -> bool {
     std::env::var(CONTEXT_EFFICIENCY_LOG_ENV)
         .map(|value| is_truthy_env_value(&value))
         .unwrap_or(false)
 }
 
+/// True when the caller opted into response metadata or env logging is enabled.
 pub(crate) fn need_context_efficiency(include_context_efficiency: Option<bool>) -> bool {
     need_context_efficiency_with_log_state(
         include_context_efficiency,
@@ -223,6 +228,7 @@ pub(crate) fn need_context_efficiency(include_context_efficiency: Option<bool>) 
     )
 }
 
+/// Same gate as [`need_context_efficiency`] with an injected log-enabled flag for tests.
 pub(crate) fn need_context_efficiency_with_log_state(
     include_context_efficiency: Option<bool>,
     context_efficiency_log_enabled: bool,

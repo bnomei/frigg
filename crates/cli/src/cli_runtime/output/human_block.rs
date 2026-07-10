@@ -28,6 +28,7 @@ const HUMAN_SERVER_BADGE: &str = "SRV";
 const HUMAN_INTRO_MARKER: &str = "◆";
 const HUMAN_INTRO_TAGLINE: &str = "Local, source-backed code search and navigation for AI agents.";
 
+/// Glyph/style family for human-mode component markers (metadata, progress, checkpoint, tool).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HumanMarkerKind {
     Metadata,

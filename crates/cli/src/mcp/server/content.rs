@@ -1242,9 +1242,8 @@ impl FriggMcpServer {
         Ok(())
     }
 
+    /// Text/citation modes return raw selected bytes only — no path headers or structuredContent.
     fn text_read_surface_result(content: String) -> CallToolResult {
-        // Text mode is intentionally just the selected source bytes. Do not prepend path/line
-        // headers or attach `structuredContent`: callers that need metadata must use JSON mode.
         CallToolResult::success(vec![ContentBlock::text(content)])
     }
 

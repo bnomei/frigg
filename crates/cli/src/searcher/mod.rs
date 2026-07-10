@@ -830,6 +830,8 @@ impl TextSearcher {
         self.search_with_ripgrep_if_available(query, candidate_universe, RipgrepPatternMode::Regex)
     }
 
+    /// Prefer in-process native search for small Auto universes (≤256 candidates); spawn rg only
+    /// when Auto sees a larger set or the backend is forced to Ripgrep.
     fn search_with_ripgrep_if_available(
         &self,
         query: &SearchTextQuery,
@@ -842,9 +844,6 @@ impl TextSearcher {
             | crate::settings::LexicalBackendMode::Ripgrep => {}
         }
 
-        // Small-repo / tight-scope fast path: spawning ripgrep loses to both shell
-        // `rg` and in-process native Aho-Corasick when the candidate set is tiny. Keep Auto on
-        // native for small universes; explicit `Ripgrep` backend still forces the accelerator.
         if matches!(
             self.config.lexical_runtime.backend,
             crate::settings::LexicalBackendMode::Auto
@@ -854,7 +853,6 @@ impl TextSearcher {
                 .iter()
                 .map(|repository| repository.candidates.len())
                 .sum::<usize>();
-            // 256 files: well above toy fixtures, still below monorepo sizes where rg wins.
             if candidate_count <= 256 {
                 return Ok(None);
             }

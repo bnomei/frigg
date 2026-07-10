@@ -180,6 +180,8 @@ impl FriggMcpServer {
         matches
     }
 
+    /// Resolve definition anchors. Path+line without `symbol` always sets `ambiguous_location`
+    /// and a soft warning; prefer `symbol=` (column only when the hit includes a real span).
     pub(in crate::mcp::server) async fn go_to_definition_impl(
         &self,
         params: GoToDefinitionParams,
@@ -199,7 +201,6 @@ impl FriggMcpServer {
             .is_some_and(|path| !path.trim().is_empty())
             && params.line.is_some();
         if !has_symbol && !has_location {
-            // Quick recovery for empty `{}` / missing symbol+path.
             let response = GoToDefinitionResponse {
                 matches: Vec::new(),
                 result_handle: None,
@@ -1342,10 +1343,6 @@ impl FriggMcpServer {
 
         let result = execution.result.map(|Json(mut response)| {
             if !has_symbol && has_location {
-                // Machine-obvious path+line trap signal (EXP-nav-path-line-trap A+E).
-                // Soft warning stays; agents must also branch on ambiguous_location=true.
-                // Do not rewrite target_selection: leave real DisambiguationRequired / Resolved
-                // summaries intact for presentation + multi-candidate recovery.
                 let dense = self.dense_location_warning_for_params(&params);
                 if response.location_warning.is_none() {
                     response.location_warning = dense.or_else(|| {
@@ -1356,8 +1353,6 @@ impl FriggMcpServer {
                     });
                 }
                 response.ambiguous_location = Some(true);
-                // Soft recovery replan only when matches are non-empty so empty-result
-                // presentation can still install DISAMBIGUATION_REQUIRED / zero-hit recovery.
                 if !response.matches.is_empty() {
                     if response.recovery.correction_hint.is_none() {
                         response.recovery.correction_hint = Some(

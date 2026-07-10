@@ -86,7 +86,6 @@ pub(super) struct StartupRefreshStatus {
     pub refresh_class: Option<WatchRefreshClass>,
 }
 
-// Startup probe: decide whether a leased repository needs manifest-fast or semantic-followup index.
 pub(super) fn startup_refresh_status(
     repository: &WatchedRepository,
     semantic_runtime: &SemanticRuntimeConfig,

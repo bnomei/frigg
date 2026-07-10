@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::mcp::server::FriggMcpServer;
 
+/// Allowed tool names that may appear as steps inside deep-search / playbook traces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeepSearchStepTool {
     Workspace,

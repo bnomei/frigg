@@ -46,7 +46,6 @@ fn relation_traversal_registers_symbols_and_relations_deterministically() {
             .expect("refers_to insertion should succeed")
     );
 
-    // Duplicate edges with same relation are rejected deterministically.
     assert!(
         !graph
             .add_relation(
@@ -922,7 +921,6 @@ fn scip_incremental_update_replaces_only_target_file_and_preserves_unaffected_da
         .ingest_scip_json("repo-001", "fixture:incremental.json", incremental)
         .expect("incremental payload should ingest");
 
-    // Updated file replaced.
     assert!(
         graph
             .precise_symbol("repo-001", "scip-rust pkg a#User")
@@ -945,7 +943,6 @@ fn scip_incremental_update_replaces_only_target_file_and_preserves_unaffected_da
         "updated file relationships should reflect replacement payload"
     );
 
-    // Unaffected file preserved exactly.
     assert_eq!(
         graph.precise_occurrences_for_file("repo-001", "src/b.rs"),
         before_b_occurrences

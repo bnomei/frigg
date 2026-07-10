@@ -76,7 +76,6 @@ impl FriggMcpServer {
             .max(1);
         let resume_from = params.resume_from.unwrap_or(0);
         let response_mode = params.response_mode;
-        // Only one merge mode today; accept and apply explicitly so the field is live.
         let _merge = params
             .merge
             .unwrap_or(SearchBatchMergeMode::RankByProbeHitStrength);
@@ -134,7 +133,6 @@ impl FriggMcpServer {
             probe_summaries.push(summary);
         }
 
-        // RankByProbeHitStrength: score desc, then kind (symbol > text > hybrid), path, line.
         let _ = _merge;
         merged.sort_by(|left, right| {
             right
@@ -255,6 +253,8 @@ impl FriggMcpServer {
         })
     }
 
+    /// Run one batch probe. Nested search tools mint session handles that the batch response does
+    /// not return — drop them immediately so they cannot thrash the session handle budget.
     async fn search_batch_run_probe(
         &self,
         probe: &SearchBatchProbe,
@@ -281,8 +281,6 @@ impl FriggMcpServer {
                 };
                 let result = self.search_text_impl(text_params).await?;
                 let body = result.0;
-                // Nested full search tools mint session handles the batch response does not
-                // return; drop them so they cannot thrash the session handle budget.
                 if let Some(handle) = body.result_handle.as_deref() {
                     self.drop_session_result_handle(handle);
                 }
@@ -453,7 +451,6 @@ fn hybrid_score(blended: f32) -> f32 {
 
 /// Echo only filters actually applied by the probe kind (not raw request fields).
 fn strongest_batch_zero_reason(summaries: &[SearchBatchProbeSummary]) -> Option<ZeroHitReason> {
-    // Prefer actionable structural reasons over generic query miss.
     const PRIORITY: &[ZeroHitReason] = &[
         ZeroHitReason::IndexStalePossible,
         ZeroHitReason::NoIndexCoverage,
@@ -481,7 +478,6 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
     let mut scope = ZeroHitScope::default();
     match probe.kind {
         SearchBatchProbeKind::Text => {
-            // Text maps path_regex + glob; path_class is not a SearchTextParams field.
             if let Some(path_regex) = probe.path_regex.as_ref() {
                 scope = scope.with_path_regex(path_regex.clone());
             }
@@ -490,7 +486,6 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
             }
         }
         SearchBatchProbeKind::Symbol => {
-            // Symbol maps path_regex + path_class (default runtime); glob is unused.
             if let Some(path_regex) = probe.path_regex.as_ref() {
                 scope = scope.with_path_regex(path_regex.clone());
             }
@@ -498,7 +493,6 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
             scope = scope.with_path_class(path_class.as_str());
         }
         SearchBatchProbeKind::Hybrid => {
-            // Hybrid has no path_regex/glob/path_class params; only repository scope applies.
         }
     }
     if let Some(repository_id) = probe.repository_id.as_ref() {

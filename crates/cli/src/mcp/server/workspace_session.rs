@@ -35,10 +35,11 @@ impl FriggMcpServer {
         }
     }
 
-    /// Builds the watch-runtime callback that invalidates all repository-scoped MCP cache families.
+    /// Builds the watch-runtime callback that invalidates repository-scoped MCP cache families.
     ///
-    /// The callback accepts either stable or runtime repository ids, normalizes to the canonical
-    /// `repository_id`, and also clears runtime-id projection entries when both ids differ.
+    /// Accepts stable or runtime repository ids and normalizes to the canonical id. Handle drop is
+    /// path-scoped: `None` drops whole-repo session handles; `Some([])` is a known-empty noop;
+    /// `Some(paths)` drops only dirty-path anchors.
     pub fn repository_cache_invalidation_callback(
         &self,
     ) -> crate::watch::RepositoryCacheInvalidationCallback {
@@ -71,9 +72,6 @@ impl FriggMcpServer {
             server.scip_invalidate_repository_precise_generation_cache(repository_id);
             server.invalidate_repository_precise_graph_caches(repository_id);
             server.invalidate_repository_navigation_caches(repository_id);
-            // EXP-handle-inval D: path-scoped session handle drop after watch refresh.
-            // None → whole-repo handles (unknown set). Some([]) → skip (known noop).
-            // Some(paths) → drop only dirty-path anchors across all live sessions.
             let aliases: Vec<String> = workspace
                 .as_ref()
                 .map(|ws| {

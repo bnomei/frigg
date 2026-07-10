@@ -199,7 +199,6 @@ pub(super) fn search_with_ripgrep_in_universe(
     })
 }
 
-// Ripgrep argv size limits require batching; oversized batches are split before spawn.
 fn batch_candidate_paths(paths: &[String]) -> FriggResult<Vec<Vec<String>>> {
     let mut batches = Vec::new();
     let mut current = Vec::new();

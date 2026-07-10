@@ -18,6 +18,7 @@ pub(crate) enum ManagedBlockEdit {
     Unchanged,
 }
 
+/// Managed-block parse failure when start/end markers are malformed or unpaired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ManagedBlockError {
     InvalidMarkers(String),
@@ -38,13 +39,15 @@ pub(crate) fn desired_markdown(policy: AgentsPolicy) -> String {
     agent_directive::render_managed_block_for_policy(policy)
 }
 
+/// True when markdown already contains a current or legacy Frigg managed directive block.
 pub(crate) fn has_managed_block(contents: &str) -> bool {
     locate_managed_block(contents)
         .map(|span| span.is_some())
         .unwrap_or(false)
 }
 
-/// Inserts or replaces the managed block in markdown contents without touching surrounding text.
+/// Inserts or replaces the managed block without touching surrounding text.
+/// Recognizes current and legacy start/end markers so version bumps still replace in place.
 pub(crate) fn upsert_managed_block(
     contents: &str,
     desired_block: &str,
@@ -145,8 +148,6 @@ fn marker_positions(contents: &str, kind: MarkerKind) -> Vec<Span> {
         let trimmed = line.trim();
         let matched = match kind {
             MarkerKind::Start => {
-                // Accept any versioned HTML start marker so adopt can replace
-                // older managed blocks after a directive version bump.
                 trimmed == MANAGED_BLOCK_START
                     || trimmed.starts_with(MANAGED_BLOCK_START_PREFIX)
                     || trimmed.starts_with(LEGACY_MANAGED_BLOCK_START_PREFIX)

@@ -63,7 +63,6 @@ impl FriggMcpServer {
                     implementations_result_handle: None,
                     implementations_mode: None,
                     implementations_included: false,
-                    // Single channel: recovery.suggested_next only (flattened).
                     recovery,
                 }
                 .with_computed_summary(),
@@ -237,7 +236,6 @@ impl FriggMcpServer {
                 (Vec::new(), None, None)
             };
 
-        // Success path: still one channel — next steps live in recovery.suggested_next only.
         let mut suggested_next = vec![
             SuggestedNext::tool("search_text")
                 .with_query(symbol.clone())

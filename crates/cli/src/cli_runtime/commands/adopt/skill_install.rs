@@ -30,6 +30,7 @@ pub(crate) struct SkillInstallPlan {
     pub(crate) reason: String,
 }
 
+/// Planned or applied skill-tree install action for host skill directories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SkillInstallAction {
     Create,
@@ -300,7 +301,6 @@ pub(crate) fn apply_skill_install(plan: &SkillInstallPlan) -> io::Result<()> {
                 .skills_parent
                 .as_ref()
                 .ok_or_else(|| io::Error::other("skill install missing skills parent"))?;
-            // Parent skills dir must already exist; never recreate it.
             if !parent.is_dir() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -378,7 +378,6 @@ fn collect_relative_files_rec(
                 .to_path_buf();
             files.push(rel);
         }
-        // Skip symlinks and special files for safety.
     }
     Ok(())
 }
@@ -391,7 +390,6 @@ fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> i
         std::process::id()
     );
     let staging = skills_parent.join(&staging_name);
-    // Clean leftover staging from a previous crash if present.
     if staging.exists() {
         if staging.is_dir() {
             fs::remove_dir_all(&staging)?;
@@ -400,7 +398,6 @@ fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> i
         }
     }
 
-    // Create only the staging leaf under the existing parent (not parent itself).
     fs::create_dir(&staging).map_err(|err| {
         io::Error::new(
             err.kind(),
@@ -436,7 +433,6 @@ fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> i
     }
 
     if let Err(err) = fs::rename(&staging, dest) {
-        // Best-effort restore previous tree.
         if backup.exists() {
             let _ = fs::rename(&backup, dest);
         }
@@ -465,7 +461,6 @@ fn copy_dir_recursive(source: &Path, dest: &Path) -> io::Result<()> {
         } else if file_type.is_file() {
             fs::copy(&from, &to)?;
         }
-        // Skip symlinks and special files for safety.
     }
     Ok(())
 }
@@ -527,7 +522,6 @@ mod tests {
         assert!(dest.join("SKILL.md").is_file());
         assert!(dest.join("references/a.md").is_file());
 
-        // Unchanged on second plan with same full tree.
         let plan2 = plan_skill_install(
             SkillProvider::Claude,
             &root,
@@ -537,7 +531,6 @@ mod tests {
         );
         assert_eq!(plan2.action, SkillInstallAction::Unchanged);
 
-        // Reference drift forces update even when SKILL.md matches.
         fs::write(source.join("references/a.md"), "ref-changed\n").expect("change ref");
         let plan3 = plan_skill_install(
             SkillProvider::Claude,
@@ -578,7 +571,6 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let home = temp_dir("skill-no-mkdir-home");
         fs::create_dir_all(&home).expect("home");
-        // No .claude/skills created.
         let plan = plan_skill_install(SkillProvider::Claude, &root, Some(&home), None, false);
         assert_eq!(plan.action, SkillInstallAction::Skipped);
         apply_skill_install(&plan).expect("skip is ok");

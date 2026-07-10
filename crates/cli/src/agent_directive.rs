@@ -1,4 +1,7 @@
-//! Canonical agent-facing Frigg directive text and render helpers.
+//! Canonical Frigg-first agent directive text, managed-block markers, and hook nudge copy.
+//!
+//! Shared by `frigg adopt`, MCP `instructions`, Claude PreToolUse soft context, and docs
+//! consistency checks so every host surface ships the same versioned routing policy.
 
 /// Version of the canonical Frigg-first directive contract.
 pub const FRIGG_DIRECTIVE_VERSION: &str = "2026-07-08";
@@ -173,13 +176,10 @@ mod tests {
             HOOK_NUDGE.contains("Shell still OK"),
             "hook must keep positive shell fallback boundary"
         );
-        // Soft wording may say "does not … deny"; forbid hard-decision product fields.
         assert!(
             !HOOK_NUDGE.contains("permissionDecision"),
             "hook nudge must not reference permissionDecision"
         );
-        // Cap noise: hosts ignore over-long additionalContext the way they ignore long skills.
-        // Current text is ~0.7k; fail if it bloats toward skill-length context.
         assert!(
             HOOK_NUDGE.len() < 800,
             "hook nudge should stay compact (got {} chars)",
@@ -261,8 +261,6 @@ mod tests {
         let skill = workspace_file("skills/frigg-first-code-search/SKILL.md")
             .expect("bundled skill skills/frigg-first-code-search/SKILL.md must exist for SSOT guard");
 
-        // Scenario tools the skill actually routes to (must stay ⊆ public SSOT).
-        // Not every PUBLIC_TOOL_NAMES entry is required to appear in the skill prose.
         const SCENARIO_TOOLS: &[&str] = &[
             "workspace",
             "list_files",
@@ -286,9 +284,6 @@ mod tests {
         ];
 
         for tool_name in SCENARIO_TOOLS {
-            // Prefer code-span citations so prose like "code exploration" or phantom
-            // names like workspace_index cannot satisfy the SSOT guard. Accept either
-            // a bare `` `tool` `` span or a call form `` `tool(...)` ``.
             let cited = skill.contains(&format!("`{tool_name}`"))
                 || skill.contains(&format!("`{tool_name}("));
             assert!(
@@ -314,7 +309,6 @@ mod tests {
                 "phantom `{phantom}` must stay off PUBLIC_TOOL_NAMES"
             );
         }
-        // Registration-bridge inventions must stay named in skill BAD/harness prose.
         for bridge_phantom in ["bridge_health", "subagent_mcp_status"] {
             assert!(
                 skill.contains(bridge_phantom),

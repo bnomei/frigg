@@ -226,6 +226,7 @@ pub struct ToolCallDisplayEvent {
 /// Callback used by CLI transports to mirror completed MCP tool calls in human progress output.
 pub type ToolCallDisplaySink = Arc<dyn Fn(ToolCallDisplayEvent) + Send + Sync + 'static>;
 
+/// Benchmark helper: build symbol corpora for an already-constructed MCP server.
 #[doc(hidden)]
 pub fn benchmark_build_symbol_corpora_for_server(
     server: &FriggMcpServer,
@@ -260,6 +261,7 @@ pub fn benchmark_build_symbol_corpora_for_server(
     Ok(summary)
 }
 
+/// Benchmark helper: adopt workspace roots from config, then build symbol corpora.
 #[doc(hidden)]
 pub fn benchmark_build_symbol_corpora(
     config: FriggConfig,
@@ -287,6 +289,7 @@ pub fn benchmark_build_symbol_corpora(
     benchmark_build_symbol_corpora_for_server(&server, repository_id)
 }
 
+/// Benchmark helper: load or build the precise graph for one attached repository.
 #[doc(hidden)]
 pub fn benchmark_precise_graph_for_server(
     server: &FriggMcpServer,
@@ -396,8 +399,6 @@ struct FriggMcpSessionState {
     inner: Arc<FriggMcpSessionStateInner>,
 }
 
-// Session adoption boundary: per-transport session tracks adopted repository_ids separately
-// from the process-wide workspace registry and watch lease refcounts.
 struct FriggMcpSessionStateInner {
     display_session_id: String,
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
@@ -679,7 +680,6 @@ impl FriggMcpServer {
             lexical.state,
             WorkspaceIndexComponentState::Ready
         ));
-        // Disabled semantic is not a freshness failure — treat as non-blocking ready.
         let semantic_ready = Some(matches!(
             semantic.state,
             WorkspaceIndexComponentState::Ready | WorkspaceIndexComponentState::Disabled
@@ -687,7 +687,8 @@ impl FriggMcpServer {
         (lexical_ready, semantic_ready)
     }
 
-    /// Computes workspace gate fields.
+    /// Session gate action from attach state, storage readiness, watch, and dirty paths.
+    /// Empty/detached sessions get `AdoptRepo` (attach is still possible); reindex is CLI-only.
     fn workspace_gate_fields(
         &self,
         current_workspace: Option<&AttachedWorkspace>,
@@ -695,14 +696,10 @@ impl FriggMcpServer {
         watch_active: bool,
     ) -> (WorkspaceGateAction, bool, Vec<String>, Option<Vec<String>>) {
         if repositories.is_empty() && current_workspace.is_none() {
-            // Prefer `adopt_repo` over `frigg_unavailable`: agents can still attach via
-            // `workspace` with `path` / `repository_id`. `FriggUnavailable` would only fit a
-            // hard runtime failure that blocks adoption entirely (not modeled here).
             return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
         }
 
         let Some(workspace) = current_workspace else {
-            // Visible repos exist but no session default/adoption.
             return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
         };
 
@@ -727,7 +724,6 @@ impl FriggMcpServer {
                 .runtime_profile
                 .persistent_state_available()
         {
-            // Persistent runtime expects a watch; without it, prefer waiting over stale trust.
             if working_tree_dirty {
                 return (
                     WorkspaceGateAction::UseLiveDiskForTouchedFiles,
@@ -783,7 +779,6 @@ impl FriggMcpServer {
             return None;
         }
 
-        // Prefer session default when it is among the targets; else first known target.
         let primary = self
             .current_workspace()
             .and_then(|current| {
@@ -838,8 +833,6 @@ impl FriggMcpServer {
             None
         };
 
-        // `last_index_success_at` is omitted: snapshot `created_at` is not exposed cheaply
-        // without a dedicated storage accessor / full manifest load.
         let index = ZeroHitIndex {
             index_state,
             last_index_success_at: None,
@@ -2136,7 +2129,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_batch",
-        description = "Run 2-8 independent text/symbol/hybrid probes concurrently, then dedupe/merge hits. Each probe is a full search (not one shared index walk). Prefer for multi-hypothesis guesses; use search_text/search_symbol/search_hybrid alone for a single probe.",
+        description = "Run 2-8 independent text/symbol/hybrid probes concurrently; merge hits. Prefer multi-hypothesis; single tools for one probe.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2168,7 +2161,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "go_to_definition",
-        description = "Default agent route for body/definition anchors. Prefer symbol= after search_symbol; path+line without symbol can be ambiguous (check ambiguous_location). Do not call find_declarations first for ordinary 'where is this implemented?' questions. Read proof separately.",
+        description = "Default agent route for definitions. Prefer symbol=. Do not call find_declarations first for ordinary where-implemented questions.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2184,7 +2177,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_declarations",
-        description = "Secondary to go_to_definition for agents. Use only when declaration vs definition matters (headers, interfaces, re-exports, ambient decls) or IDE/LSP parity. Prefer symbol=. Do not call serially with go_to_definition by default.",
+        description = "Secondary to go_to_definition when decl vs def matters. Prefer symbol=. Do not call serially with go_to_definition by default.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2296,7 +2289,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "impact_bundle",
-        description = "Compose symbol hits, references, callers, and optional implementations. Always-on summary (counts/modes/top_paths) for planning; lists and handles for proof; single suggested_next channel. Convenience bundle — navigation tools remain source of truth. Default omits outgoing_calls and tests.",
+        description = "Bundle hits/refs/callers/impls for planning+proof. Nav tools remain source of truth. Default omits outgoing_calls and tests.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

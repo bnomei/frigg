@@ -32,6 +32,8 @@ impl FriggMcpServer {
         matches!(Self::response_mode(mode), ResponseMode::Full)
     }
 
+    /// Hybrid pivot rows for recovery. Exact preference uses post-guardrail `rank_reasons` when
+    /// present, else strong lexical sources (production probe runs before rank_reasons are filled).
     pub(super) fn hybrid_pivot_match_sources(
         matches: &[SearchHybridMatch],
     ) -> Vec<HybridPivotMatchSource<'_>> {
@@ -40,9 +42,6 @@ impl FriggMcpServer {
             .map(|matched| HybridPivotMatchSource {
                 path: matched.path.as_str(),
                 excerpt: matched.excerpt.as_str(),
-                // Prefer post-guardrail exact/strong rank_reasons when present; otherwise use
-                // live lexical sources so pre-guardrail exact-pivot probe selection still
-                // boosts strong-lexical rows (rank_reasons are empty until after assist).
                 prefers_exact: matched.rank_reasons.iter().any(|reason| {
                     matches!(
                         reason,
@@ -250,6 +249,8 @@ impl FriggMcpServer {
 
     /// True when the anchor path is the dirty path, under a dirty directory, or when an
     /// absolute dirty path ends with `/{repo-relative-anchor}` (absolute must have a `/`).
+    /// Match dirty paths against anchors: exact, directory prefix, or absolute suffix.
+    /// Bare basenames never match nested `*/basename` paths.
     fn handle_path_is_dirty(anchor_path: &str, dirty: &BTreeSet<String>) -> bool {
         if dirty.contains(anchor_path) {
             return true;
@@ -258,12 +259,9 @@ impl FriggMcpServer {
             if dirty_path == anchor_path {
                 return true;
             }
-            // Directory dirty path invalidates all anchors under it.
             if !dirty_path.is_empty() && anchor_path.starts_with(&format!("{dirty_path}/")) {
                 return true;
             }
-            // Absolute dirty path → match repo-relative anchor as a full suffix path.
-            // Require a `/` in dirty so bare basenames never over-match nested files.
             dirty_path.contains('/')
                 && dirty_path.starts_with('/')
                 && dirty_path.ends_with(&format!("/{anchor_path}"))
@@ -723,11 +721,9 @@ impl FriggMcpServer {
                 }
                 crate::mcp::routing_stats::record_zero_hit();
             } else {
-                // Live search paths may have composed recovery before index was available.
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
         } else if response.recovery.scope.is_none() {
-            // Scope echo on non-empty hits when filters were applied.
             let mut scope = ZeroHitScope::default();
             if let Some(path_regex) = params.path_regex.as_ref() {
                 scope = scope.with_path_regex(path_regex.clone());
@@ -780,19 +776,12 @@ impl FriggMcpServer {
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
         if response.latency_class.is_none() {
-            // Hybrid is discovery-oriented and allowed slower than exact search.
             response.latency_class = Some(if response.matches.is_empty() {
                 crate::mcp::types::LatencyClass::Warm
             } else {
                 crate::mcp::types::LatencyClass::Cold
             });
         }
-        // Always-on discovery contract (compact + full). EXP-semantic-default A:
-        // product default is semantic-off; compact strips readiness dumps but must
-        // not hide lexical-only mode. Encode the cliff in short ranking_note only —
-        // do not re-open long metadata.warning / semantic_status in compact.
-        // EXP-nav-hybrid-graph-channel A+D: when hybrid graph contributed, state
-        // that graph channel is ranking signal ≠ MCP nav call edges (still compact).
         let lexical_only = response
             .metadata
             .as_ref()
@@ -863,10 +852,6 @@ impl FriggMcpServer {
             crate::mcp::routing_stats::record_recovery_issued();
         }
         if !Self::should_return_full_response(response_mode) {
-            // Agent compact must not dump semantic readiness telemetry (status, hit
-            // counts, long warnings). Mode cliff is already in ranking_note above.
-            // Full mode keeps warnings and channel health for operators/debug.
-            // Compact keeps metadata only when context_efficiency was explicitly requested.
             response.metadata = response.metadata.and_then(|mut metadata| {
                 let context_efficiency = metadata.context_efficiency.take();
                 if context_efficiency.is_none() {
@@ -918,7 +903,6 @@ impl FriggMcpServer {
         response.handle_scope = handle_scope;
         response.handle_expires = handle_expires;
         if response.latency_class.is_none() {
-            // Runtime-first known-name lookup is the hot symbol path.
             let scoped = params.is_some_and(|params| {
                 params.path_regex.is_some()
                     || params.repository_id.is_some()
@@ -955,7 +939,6 @@ impl FriggMcpServer {
                 } else {
                     scope = scope.with_path_class(effective_path_class.as_str());
                 }
-                // Runtime-first empty recovery for known names.
                 let scope = Some(scope).filter(|scope| !scope.is_empty());
                 response.recovery = if effective_path_class == SearchSymbolPathClass::Runtime {
                     if let Some(name) = query {
@@ -1182,7 +1165,6 @@ impl FriggMcpServer {
             "outgoing_calls",
             &mut response.matches,
         );
-        // EXP-nav-outgoing-honesty B: always-on machine honesty (not stripped in compact).
         response = response.with_provisional_honesty();
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
@@ -1199,7 +1181,6 @@ impl FriggMcpServer {
         }
         if !Self::should_return_full_response(response_mode) {
             response.metadata = None;
-            // Full-mode diagnostic `note` only; keep always-on `trust` / `trust_note`.
             response.note = None;
         }
         response
@@ -1213,7 +1194,6 @@ impl FriggMcpServer {
         const DEFAULT_DOCUMENT_SYMBOLS_LIMIT: usize = 200;
         const MAX_DOCUMENT_SYMBOLS_LIMIT: usize = 1000;
 
-        // Default top_level_only=true ( outline).
         let top_level_only = params.top_level_only.unwrap_or(true);
         response.top_level_only = top_level_only;
         if top_level_only {
@@ -1466,7 +1446,6 @@ mod tests {
         assert!(value.get("correction_hint").is_some());
         assert!(value.get("suggested_next").is_some());
         assert_eq!(value["scope"]["path_regex"], "^src/");
-        // Index block is filled from workspace storage when a repo is known.
         assert!(
             value.get("index").is_some(),
             "zero-hit should serialize index block when workspace signals exist: {value}"
@@ -2030,8 +2009,6 @@ mod tests {
             ),
             "clean anchors on a multi-path handle must survive"
         );
-        // Dirty match removed from the handle; handle still exists → MixedHandle
-        // (not Found). Agents should re-search rather than re-use the old match_id.
         assert!(
             matches!(
                 server.session_result_handle_lookup(&mixed_handle, &mixed_dirty_mid),
@@ -2050,7 +2027,6 @@ mod tests {
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
-        // Known-empty dirty set (noop refresh) must not whole-wipe handles.
         server.invalidate_session_result_handles_for_paths(&["repo-001"], &[]);
 
         assert!(matches!(
@@ -2105,7 +2081,6 @@ mod tests {
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
-        // Bare basename must not treat every */foo.rs as dirty.
         server.invalidate_session_result_handles_for_paths(
             &["repo-001"],
             &["foo.rs".to_owned()],

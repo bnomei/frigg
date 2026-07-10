@@ -27,6 +27,7 @@ use super::{
     is_test_support_path, is_workspace_config_surface_path,
 };
 
+/// Coarse path-witness surface family used for bitset encoding and family-level boosts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum GenericWitnessSurfaceFamily {
     Runtime,
@@ -81,6 +82,7 @@ pub(super) struct PathWitnessProjectionFlags {
     pub(super) is_laravel_provider: bool,
 }
 
+/// In-memory path-witness row: path class, source class, terms, and ecosystem flags for one path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredPathWitnessProjection {
     pub(super) path: String,
@@ -206,15 +208,13 @@ pub(crate) fn build_path_witness_projection_records_from_paths(
     Ok(rows)
 }
 
+/// Decode a stored path-witness row. Legacy `Playbooks` source class maps to `Project`.
 pub(super) fn decode_path_witness_projection(
     record: &PathWitnessProjection,
 ) -> FriggResult<StoredPathWitnessProjection> {
     let path_class = record.path_class;
     let source_class = record.source_class;
     let source_class = match source_class {
-        // Legacy rows may still carry the old FRIGG-specific playbook class. Normalize those
-        // projections to the generic path-based class so ranking behavior does not depend on
-        // historical storage state.
         SourceClass::Playbooks => SourceClass::Project,
         other => other,
     };

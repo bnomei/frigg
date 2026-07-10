@@ -77,6 +77,7 @@ pub(crate) struct RustIndexedSourceAnalysis {
     pub(crate) implementation_facts: Vec<RustImplementationFact>,
 }
 
+/// Test-only Rust analysis keyed by stable symbol id (production uses index-keyed analysis).
 #[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RustSourceAnalysis {

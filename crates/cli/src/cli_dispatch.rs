@@ -194,7 +194,6 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
             let _ = cli_output.tool_call_event(event);
         })));
     }
-    // Watch supervisor starts only when the resolved transport enables incremental freshness.
     let watch_runtime = maybe_start_watch_runtime_with_reporter(
         &watch_runtime_config,
         transport_kind,
@@ -207,7 +206,6 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
     server.set_watch_runtime(_watch_runtime.clone());
     if let Some(runtime) = http_runtime {
         startup_trace(startup_trace_enabled, "async_main: serving http");
-        // HTTP runtime path: loopback or remote MCP over streamable HTTP.
         serve_http(runtime, server, cli_output).await?;
     } else {
         startup_trace(startup_trace_enabled, "async_main: serving stdio");

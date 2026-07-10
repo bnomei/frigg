@@ -124,6 +124,7 @@ pub struct ManifestBuilder {
     pub follow_symlinks: bool,
 }
 
+/// Benchmark helper: chunk one in-memory source buffer and return size summary only.
 #[doc(hidden)]
 pub fn benchmark_build_file_semantic_chunks(
     repository_id: &str,
@@ -141,6 +142,7 @@ pub fn benchmark_build_file_semantic_chunks(
     ))
 }
 
+/// Benchmark helper: chunk a full manifest under a workspace root and return size summary only.
 #[doc(hidden)]
 pub fn benchmark_build_semantic_chunk_candidates(
     repository_id: &str,

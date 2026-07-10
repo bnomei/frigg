@@ -20,6 +20,7 @@ pub(crate) const HUMAN_COLOR_TOPIC_PRECISE: &str = "1;38;2;185;150;255";
 pub(crate) const HUMAN_COLOR_TOPIC_STORAGE: &str = "1;38;2;205;180;120";
 pub(crate) const HUMAN_COLOR_TOPIC_WATCH: &str = "1;38;2;110;200;255";
 
+/// CLI human-mode topic used to pick accent colors for index/semantic/precise/storage/watch events.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HumanTopic {
     Index,

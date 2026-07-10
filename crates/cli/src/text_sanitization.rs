@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 
+/// Byte range of a leading HTML comment (after optional BOM), if the buffer starts with one.
 pub(crate) fn leading_html_comment_bounds(raw: &str) -> Option<(usize, usize)> {
     let trimmed = raw.trim_start_matches('\u{feff}');
     let bom_len = raw.len().saturating_sub(trimmed.len());
@@ -16,6 +17,7 @@ pub(crate) fn leading_html_comment_bounds(raw: &str) -> Option<(usize, usize)> {
     Some((bom_len, bom_len + close_index + 3))
 }
 
+/// Space-out a leading HTML comment while preserving newlines so line numbers stay stable.
 pub(crate) fn scrub_leading_html_comment<'a>(raw: &'a str) -> Cow<'a, str> {
     let Some((start, end)) = leading_html_comment_bounds(raw) else {
         return Cow::Borrowed(raw);

@@ -80,7 +80,6 @@ pub fn workspace_gate_hint(action: WorkspaceGateAction) -> Option<String> {
             "Index not ready. Run CLI `frigg index` (or operator lifecycle); there is no public MCP reindex tool."
                 .to_owned(),
         ),
-        // Ready / adopt / live-disk / wait_watch are self-explanatory or covered by skill cards.
         WorkspaceGateAction::Ready
         | WorkspaceGateAction::AdoptRepo
         | WorkspaceGateAction::WaitWatch
@@ -373,10 +372,7 @@ pub struct WorkspaceResponse {
     /// Session gate: what the agent should do next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_action: Option<WorkspaceGateAction>,
-    /// Short operator/agent-facing explanation of `recommended_action` when non-obvious.
-    ///
-    /// Especially for `reindex`: public MCP has no reindex tool — use CLI `frigg index` / operator
-    /// maintenance, not an invented MCP tool name.
+    /// Short explanation of recommended_action when non-obvious. For reindex: use CLI `frigg index`, not an MCP tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_hint: Option<String>,
     /// Working tree may have paths that differ from the last snapshot.
@@ -629,10 +625,7 @@ pub struct RuntimeTaskSummary {
     pub detail: Option<String>,
 }
 
-/// Closed reason set for compact agent-facing watch status.
-///
-/// Explains `wait_watch` / freshness waits. Gate `recommended_action` remains the decision;
-/// do not micro-manage retries from these reasons alone.
+/// Closed reason set for watch status. Explains wait_watch; gate recommended_action remains the decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchStatusReason {
@@ -666,9 +659,7 @@ pub struct WatchStatusSummary {
     /// Optional human-readable detail (stable short strings only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// Dual-class queue depth (pending + in-flight units, 0..=4). No third hot-path class.
-    ///
-    /// Helps choose `wait_watch` vs path-scoped live-disk without inventing agent-priority queues.
+    /// Dual-class queue depth (pending + in-flight, 0..=4). Helps choose wait_watch vs live-disk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_queue_depth: Option<usize>,
     /// Known dirty paths in the hot-path oracle / scheduler (best-effort count).
@@ -690,14 +681,7 @@ pub struct RuntimeStatusSummary {
     pub watch_status: Option<WatchStatusSummary>,
     /// Active tool-surface profile (`core` or `extended`).
     pub tool_surface_profile: String,
-    /// Tool names registered on **this process** after profile filtering.
-    ///
-    /// Authoritative for agent routing: prefer this list (or live `tools/list`) over host
-    /// schema caches, source `#[tool]` attributes, or inventory freezes. Non-public lifecycle
-    /// handlers (e.g. `workspace_index`) are never listed here.
-    ///
-    /// Always serialized (including empty) so clients can distinguish “field present” from an
-    /// older server that never emitted the key.
+    /// Tool names on this process after profile filtering. Prefer this or tools/list over host schema caches. Always serialized (including empty).
     #[serde(default)]
     pub tools_exposed: Vec<String>,
     pub status_tool: String,

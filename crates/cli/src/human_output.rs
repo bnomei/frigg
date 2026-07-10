@@ -1,4 +1,7 @@
-//! Shared human-output block primitives used by CLI-facing renderers.
+//! Terminal card primitives for CLI human mode: titled blocks, key-value rows, and path lines.
+//!
+//! Keeps utility commands and progress renderers on one visual contract without pulling clap
+//! dispatch or MCP transport concerns into the shared library surface.
 
 use std::fmt::Display;
 

@@ -8,6 +8,7 @@ use std::path::Path;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use tracing::warn;
 
+/// Compile root `.gitignore` and `.ignore` into a matcher; empty matcher on compile failure.
 pub(crate) fn build_root_ignore_matcher(root: &Path) -> Gitignore {
     let mut builder = GitignoreBuilder::new(root);
     for ignore_path in [root.join(".gitignore"), root.join(".ignore")] {
@@ -33,6 +34,7 @@ pub(crate) fn build_root_ignore_matcher(root: &Path) -> Gitignore {
     })
 }
 
+/// True for paths under hard-excluded roots (`.frigg`, `.git`, `target`) regardless of gitignore.
 pub(crate) fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
     let Some(relative) = repository_relative_runtime_path(root, path) else {
         return true;
@@ -46,6 +48,7 @@ pub(crate) fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
     )
 }
 
+/// True when path is hard-excluded or matched by the workspace ignore matcher.
 pub(crate) fn should_ignore_runtime_path(
     root: &Path,
     path: &Path,

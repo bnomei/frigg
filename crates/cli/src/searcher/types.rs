@@ -131,12 +131,14 @@ impl SearchLexicalBackend {
     }
 }
 
+/// One filesystem candidate admitted into lexical or hybrid scan scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchCandidateFile {
     pub(crate) relative_path: String,
     pub(crate) absolute_path: PathBuf,
 }
 
+/// Per-repository candidate set, optionally pinned to a validated manifest snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RepositoryCandidateUniverse {
     pub(crate) repository_id: String,
@@ -145,12 +147,14 @@ pub(crate) struct RepositoryCandidateUniverse {
     pub(crate) candidates: Vec<SearchCandidateFile>,
 }
 
+/// Multi-repo candidate universe plus walk/read diagnostics from universe construction.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SearchCandidateUniverse {
     pub(crate) repositories: Vec<RepositoryCandidateUniverse>,
     pub(crate) diagnostics: SearchExecutionDiagnostics,
 }
 
+/// Candidate-universe build result with intake timing and manifest-backed repository counts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SearchCandidateUniverseBuild {
     pub(crate) universe: SearchCandidateUniverse,
@@ -161,6 +165,7 @@ pub(crate) struct SearchCandidateUniverseBuild {
     pub(crate) freshness_validation_elapsed_us: u64,
 }
 
+/// Manifest-derived candidate paths for one repository after freshness validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManifestCandidateFilesBuild {
     pub(crate) snapshot_id: String,
@@ -325,6 +330,7 @@ pub struct HybridRankedEvidence {
     pub semantic_sources: Vec<String>,
 }
 
+/// Caller filters normalized once before candidate intake and channel fan-out.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NormalizedSearchFilters {
     pub(crate) repository_id: Option<String>,
@@ -332,6 +338,7 @@ pub(crate) struct NormalizedSearchFilters {
     pub(crate) include_hidden: bool,
 }
 
+/// Cache key for durable path-witness projections keyed by snapshot and heuristic version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HybridPathWitnessProjectionCacheKey {
     pub(crate) repository_id: String,
@@ -340,6 +347,7 @@ pub(crate) struct HybridPathWitnessProjectionCacheKey {
     pub(crate) heuristic_version: i64,
 }
 
+/// Cache key for per-file hybrid graph analysis invalidated on mtime or size change.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HybridGraphFileAnalysisCacheKey {
     pub(crate) path: PathBuf,
@@ -347,6 +355,7 @@ pub(crate) struct HybridGraphFileAnalysisCacheKey {
     pub(crate) size_bytes: u64,
 }
 
+/// Cached language-specific graph facts reused while expanding hybrid graph neighbors.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HybridGraphFileAnalysis {
     pub(crate) symbols: Vec<crate::indexer::SymbolDefinition>,

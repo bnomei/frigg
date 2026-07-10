@@ -140,6 +140,7 @@ pub(crate) enum BladeRelationKind {
     DynamicComponent,
 }
 
+/// One Blade `@extends` / `@include` / component relation with optional owner symbol.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct BladeRelationEvidence {
     pub(crate) owner_symbol_id: Option<String>,
@@ -149,6 +150,7 @@ pub(crate) struct BladeRelationEvidence {
     pub(crate) line: usize,
 }
 
+/// Flux UI component prop/slot/variant hints extracted from Blade for ranking and graph edges.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FluxComponentHint {
     pub(crate) props: Vec<String>,

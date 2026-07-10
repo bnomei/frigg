@@ -111,7 +111,6 @@ fn semantic_models_json() -> String {
             "enabled": false,
             "note": "Semantic runtime is off by default. When enabled without a cloud provider, Frigg resolves to local MiniLM."
         },
-        // Store schema width only — never report padded length as a model dimension.
         "projection_dimensions": DEFAULT_VECTOR_DIMENSIONS,
         "projection_note": "sqlite-vec table width (embedding float[N]). Fixed so one vector index can hold multiple providers. Short model vectors are zero-padded on write/query to fit N; oversize is rejected. Padding is storage interoperability only — it does not add semantic signal or make MiniLM '1536-quality'.",
         "dimensions_contract": {
@@ -138,7 +137,6 @@ fn semantic_models_json() -> String {
                 "role": "default",
                 "quality_tier": "offline_smoke",
                 "offline": true,
-                // REAL MiniLM width (pre-pad). Do not report 1536 here.
                 "native_dimensions": LOCAL_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": LOCAL_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": null,
@@ -160,7 +158,6 @@ fn semantic_models_json() -> String {
                 "role": "recommended",
                 "quality_tier": "cloud",
                 "offline": false,
-                // REAL width Frigg uses for this model (no pad on happy path).
                 "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": OPENAI_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": OPENAI_API_KEY_ENV_VAR,
@@ -175,13 +172,10 @@ fn semantic_models_json() -> String {
                 "id": "google-gemini-embedding-001",
                 "provider": "google",
                 "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
-                // role=recommended means supported curated default for this provider — not "best quality".
-                // quality_tier=credential_peer + recommended_when clarify when to pick Google vs OpenAI.
                 "role": "recommended",
                 "quality_tier": "credential_peer",
                 "recommended_when": "GEMINI_API_KEY already present (bring-your-key); not preferred-quality over OpenAI",
                 "offline": false,
-                // REAL width Frigg requests via output_dimensionality (not API catalog default 3072).
                 "native_dimensions": GOOGLE_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": GOOGLE_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": GEMINI_API_KEY_ENV_VAR,
@@ -203,7 +197,6 @@ fn semantic_models_json() -> String {
                 "role": "experimental",
                 "quality_tier": "selfhost_protocol",
                 "offline": false,
-                // Protocol default assumes OpenAI-small width; operator model may differ — reindex + match dims.
                 "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": OPENAI_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": OPENAI_COMPAT_API_KEY_ENV_VAR,
@@ -561,7 +554,6 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
     };
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.tool_surface.v1",
-        // Live SSOT for hosts/operators: generated from code manifests, not inventory freezes.
         "live": true,
         "source_of_truth": {
             "public_tool_names": "crates/cli/src/mcp/types.rs::PUBLIC_TOOL_NAMES",
@@ -576,7 +568,6 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "active_profile": active_profile.as_str(),
         "core_tools": core.tool_names,
         "extended_only_tools": extended_only_tool_names(),
-        // Tools registered for the active profile (same set tools_exposed reports at runtime).
         "active_tools": active.tool_names,
         "guidance": [
             "This resource is the machine-readable live tool surface. Prefer it (or tools/list / workspace.runtime.tools_exposed) over Phase 0 / systems inventory freezes.",
@@ -892,7 +883,6 @@ mod tests {
             }),
             "local known_limits must state MiniLM is not code SOTA"
         );
-        // Model rows must not expose a padded length as the model size.
         assert!(local.get("dimensions").is_none() || local["dimensions"] == local["native_dimensions"]);
         assert!(local.get("stored_dimensions").is_none());
 
@@ -975,7 +965,6 @@ mod tests {
         assert_eq!(openai_compat["role"], json!("experimental"));
         assert_eq!(openai_compat["quality"], json!("unbenchmarked"));
 
-        // No fake leaderboard fields; no padded length masquerading as model dims.
         for row in &models {
             assert!(row.get("score").is_none());
             assert!(row.get("benchmark_score").is_none());
@@ -1067,7 +1056,6 @@ mod tests {
                 preset["expands_to"]["FRIGG_SEMANTIC_RUNTIME_ENABLED"],
                 json!("true")
             );
-            // expands_to must not smuggle placeholder secret values.
             assert!(
                 preset["expands_to"].get(OPENAI_API_KEY_ENV_VAR).is_none()
                     && preset["expands_to"].get(GEMINI_API_KEY_ENV_VAR).is_none(),
@@ -1432,7 +1420,6 @@ mod tests {
             parsed["envelope"]["claims"].is_object(),
             "envelope.claims must be documented"
         );
-        // Example must deserialize as the typed skill/product shape.
         let example = parsed
             .get("example")
             .cloned()
@@ -1544,7 +1531,6 @@ mod tests {
             ToolSurfaceProfile::Extended,
         )
         .expect("routing prompt should exist");
-        // text + support-matrix + semantic-models + tool-surface + shell-map + shell-guidance
         assert_eq!(prompt.messages.len(), 6);
     }
 

@@ -265,7 +265,6 @@ fn build_skill_plans(
                 source.as_deref(),
                 uninstall,
             );
-            // Deduplicate personal-home installs across multi-repo workspaces.
             let dedupe_key = plan
                 .dest
                 .as_ref()
