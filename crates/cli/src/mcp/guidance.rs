@@ -110,13 +110,24 @@ fn semantic_models_json() -> String {
             "enabled": false,
             "note": "Semantic runtime is off by default. When enabled without a cloud provider, Frigg resolves to local MiniLM."
         },
+        // Store schema width only — never report padded length as a model dimension.
         "projection_dimensions": DEFAULT_VECTOR_DIMENSIONS,
-        "projection_note": "sqlite-vec projection width. Models with smaller native_dimensions are padded to this size; changing provider/model requires a semantic reindex (frigg index).",
+        "projection_note": "sqlite-vec table width (embedding float[N]). Fixed so one vector index can hold multiple providers. Short model vectors are zero-padded on write/query to fit N; oversize is rejected. Padding is storage interoperability only — it does not add semantic signal or make MiniLM '1536-quality'.",
+        "dimensions_contract": {
+            "model_field": "native_dimensions",
+            "model_field_meaning": "REAL model output width before any storage pad (never the padded store length)",
+            "store_field": "projection_dimensions",
+            "pad_flag": "pad_to_projection",
+            "pad_flag_meaning": "true only when native_dimensions < projection_dimensions; zeros fill the gap at the DB boundary",
+            "why_pad": "vec0 requires every row to have exactly projection_dimensions floats; local MiniLM is 384-d so it is padded to fit. Partitions (repository_id, provider, model) keep different models from sharing one cosine space.",
+            "reindex": "Changing provider or model requires a semantic reindex (frigg index); partitions do not auto-heal the active head"
+        },
         "reindex_on_change": true,
         "source_of_truth": {
             "defaults": "crates/cli/src/settings/semantic_runtime.rs DEFAULT_*_EMBEDDING_MODEL",
             "projection": "crates/cli/src/storage/mod.rs DEFAULT_VECTOR_DIMENSIONS",
-            "local_dims": "crates/cli/src/embeddings/local_model.rs DEFAULT_LOCAL_MODEL_ALIAS.dimensions"
+            "local_dims": "crates/cli/src/embeddings/local_model.rs DEFAULT_LOCAL_MODEL_ALIAS.dimensions",
+            "normalize": "crates/cli/src/storage/semantic_store_support.rs::normalize_embedding_for_vector_projection"
         },
         "models": [
             {
@@ -125,6 +136,7 @@ fn semantic_models_json() -> String {
                 "model": DEFAULT_LOCAL_EMBEDDING_MODEL,
                 "role": "default",
                 "offline": true,
+                // REAL MiniLM width (pre-pad). Do not report 1536 here.
                 "native_dimensions": LOCAL_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": LOCAL_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": null,
@@ -133,7 +145,8 @@ fn semantic_models_json() -> String {
                 "known_limits": [
                     "Weak mapping of product/natural phrases to API identifiers (prefer search_symbol / search_text after hybrid)",
                     "Offline ≠ high semantic quality for code concepts",
-                    "Requires local model preparation at startup when provider=local"
+                    "Requires local model preparation at startup when provider=local",
+                    "native_dimensions is 384 (real); store pads with zeros to projection_dimensions — pad is not quality"
                 ]
             },
             {
@@ -142,6 +155,7 @@ fn semantic_models_json() -> String {
                 "model": DEFAULT_OPENAI_EMBEDDING_MODEL,
                 "role": "recommended",
                 "offline": false,
+                // REAL width Frigg uses for this model (no pad on happy path).
                 "native_dimensions": OPENAI_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": OPENAI_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": OPENAI_API_KEY_ENV_VAR,
@@ -158,6 +172,7 @@ fn semantic_models_json() -> String {
                 "model": DEFAULT_GOOGLE_EMBEDDING_MODEL,
                 "role": "recommended",
                 "offline": false,
+                // REAL width Frigg requests via output_dimensionality (not API catalog default 3072).
                 "native_dimensions": GOOGLE_DEFAULT_NATIVE_DIMENSIONS,
                 "pad_to_projection": GOOGLE_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
                 "credential_env": GEMINI_API_KEY_ENV_VAR,
@@ -165,8 +180,8 @@ fn semantic_models_json() -> String {
                 "quality": "unbenchmarked",
                 "known_limits": [
                     "Requires GEMINI_API_KEY and network",
-                    "Frigg requests output_dimensionality = projection_dimensions (not the API catalog default 3072 or MRL 768)",
-                    "Vectors are stored at projection width; changing model still requires semantic reindex"
+                    "native_dimensions is the width Frigg requests (output_dimensionality), not a padded value",
+                    "API catalog default may be 3072; Frigg requests native_dimensions — no storage pad when equal to projection"
                 ]
             }
         ],
@@ -775,11 +790,19 @@ mod tests {
         assert_eq!(local["offline"], json!(true));
         assert_eq!(
             local["native_dimensions"],
-            json!(LOCAL_DEFAULT_NATIVE_DIMENSIONS)
+            json!(LOCAL_DEFAULT_NATIVE_DIMENSIONS),
+            "local native_dimensions must be REAL MiniLM width (384), not padded 1536"
         );
         assert_eq!(local["pad_to_projection"], json!(true));
+        assert!(
+            LOCAL_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
+            "local real dims must be strictly less than projection when pad is true"
+        );
         assert!(local["credential_env"].is_null());
         assert_eq!(local["quality"], json!("unbenchmarked"));
+        // Model rows must not expose a padded length as the model size.
+        assert!(local.get("dimensions").is_none() || local["dimensions"] == local["native_dimensions"]);
+        assert!(local.get("stored_dimensions").is_none());
 
         let openai = models
             .iter()
@@ -808,7 +831,7 @@ mod tests {
         assert_eq!(
             google["native_dimensions"],
             json!(DEFAULT_VECTOR_DIMENSIONS),
-            "Frigg requests Google output_dimensionality = projection width"
+            "Google native_dimensions is Frigg-requested REAL width, not a padded value"
         );
         assert_eq!(
             google["pad_to_projection"],
@@ -817,12 +840,28 @@ mod tests {
         );
         assert_eq!(google["quality"], json!("unbenchmarked"));
 
-        // No fake leaderboard fields that imply measured ranking quality.
+        // No fake leaderboard fields; no padded length masquerading as model dims.
         for row in &models {
             assert!(row.get("score").is_none());
             assert!(row.get("benchmark_score").is_none());
             assert!(row.get("leaderboard_rank").is_none());
+            let native = row["native_dimensions"].as_u64().expect("native_dimensions");
+            let pad = row["pad_to_projection"].as_bool().expect("pad_to_projection");
+            if pad {
+                assert!(
+                    (native as usize) < DEFAULT_VECTOR_DIMENSIONS,
+                    "when pad_to_projection, native_dimensions must be REAL pre-pad width < projection"
+                );
+            }
+            assert!(
+                row.get("stored_dimensions").is_none(),
+                "do not report padded store length on model rows"
+            );
         }
+        assert_eq!(
+            parsed["dimensions_contract"]["model_field"],
+            json!("native_dimensions")
+        );
 
         let presets = parsed["presets"]
             .as_array()

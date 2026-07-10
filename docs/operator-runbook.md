@@ -52,6 +52,23 @@ Curated embedding-model defaults and storage contract facts live on the MCP poli
 
 After changing provider or model, run `frigg index` for a semantic pass.
 
+### Why the DB pads (and what “dimensions” mean)
+
+Semantic vectors live in one sqlite-vec table with a **fixed** column width
+(`DEFAULT_VECTOR_DIMENSIONS` = **1536**): every row is `embedding float[1536]`.
+
+| Concept | Meaning |
+| --- | --- |
+| **Real / native dimensions** | What the model actually outputs (or Frigg requests from the API) **before** any store pad. Catalog field: `native_dimensions` on each model. **Never** the padded length. |
+| **Projection dimensions** | Store schema width (1536). Catalog field: top-level `projection_dimensions`. |
+| **Pad** | If native &lt; projection, Frigg zero-fills on write/query so the vector fits the table. `pad_to_projection: true` only then. Pad is **storage interoperability**, not a quality upgrade. |
+
+**Why pad at all?** One vector index can hold multiple providers without a separate table per native width. Local MiniLM is 384-d; OpenAI-small is 1536-d. Without pad, short models could not share the fixed-width schema. Oversize vectors are rejected.
+
+**Cosine / partitions:** Similarity is only meaningful **within** a `(repository_id, provider, model)` partition under matched pad policy. MiniLM-padded rows are not mixed with OpenAI rows in one head. Switching provider/model requires a semantic reindex (`frigg index`); partitions do not auto-heal.
+
+**Agent-facing JSON** (`frigg://policy/semantic-models.json`): model rows expose **real** `native_dimensions` only (e.g. MiniLM **384**). They do **not** report 1536 as the model size when the model is padded. Store width is only `projection_dimensions` + `pad_to_projection`.
+
 ## Semantic degraded mode
 
 Semantic retrieval is optional. When disabled or unavailable, Frigg still searches with lexical, path/witness, graph, symbol, and structural evidence. `search_hybrid` reports semantic participation in its execution note and channel health.

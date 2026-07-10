@@ -421,7 +421,7 @@ Defaults: `local` -> `all-MiniLM-L6-v2`, `openai` -> `text-embedding-3-small`, `
 | `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
 | `google` | `gemini-embedding-001` | `GEMINI_API_KEY` |
 
-Machine-readable catalog (dims, pad-to-projection, offline, reindex-on-change, known limits): MCP resource `frigg://policy/semantic-models.json`. Quality scores are **unbenchmarked** — contract facts only, not a live leaderboard. Soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`) expand to provider+model env keys; they are **not** CLI flags and never replace storage partition identity. Semantic remains optional acceleration (see `frigg://policy/support-matrix.json`).
+Machine-readable catalog: MCP resource `frigg://policy/semantic-models.json`. Each model lists **real** `native_dimensions` (pre-pad model width — e.g. MiniLM **384**, not 1536). Store schema width is separate: `projection_dimensions` (1536); short vectors are zero-padded only to fit sqlite-vec (`pad_to_projection`), which is **not** a quality upgrade. Quality scores are **unbenchmarked**. Soft intent presets (`offline-small`, `cloud-openai`, `cloud-google`) expand to provider+model env keys; they are **not** CLI flags and never replace storage partition identity. Semantic remains optional acceleration (see `frigg://policy/support-matrix.json`). Operator detail: [docs/operator-runbook.md](docs/operator-runbook.md) (Why the DB pads).
 
 After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic index pass with `frigg index`.
 
