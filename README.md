@@ -169,6 +169,17 @@ Managed markdown defaults to a **lightweight** Frigg-first pointer to the `frigg
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 
+### Policy surfaces after install (avoid drift)
+
+| Surface | Role |
+| --- | --- |
+| Production skill (`frigg-first-code-search`) | **SSOT** for scenario routing |
+| Repo `AGENTS.md` / managed directive | Lightweight pointer (do not paste the full skill by default) |
+| Host global skill path | Host-owned; monorepo re-adopt does not update every laptop |
+| Research `docs/ideas/` flows | Not production routing |
+
+Checklist: skill version / managed marker version → `frigg adopt --check` in CI for managed blocks → confirm host reloaded skill → `tools/list`. Do **not** default adopt to expanded policy (context bloat).
+
 Manual HTTP configuration for clients that accept JSON:
 
 ```json

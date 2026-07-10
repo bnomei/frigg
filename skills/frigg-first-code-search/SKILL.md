@@ -429,6 +429,12 @@ Policy progressive disclosure:
   - Skill scenario cards are SSOT for agent routing
   - MCP frigg://policy/* resources are secondary/machine (hosts, support matrix, tool-surface)
   - Do not treat resources as a second full skill
+
+Install surfaces (avoid three-doc drift):
+  - **Skill** = sole scenario home (this file / host skill path)
+  - **AGENTS.md** = lightweight pointer via `frigg adopt` (not a second skill)
+  - **ideas/flows** research = not production routing
+  - After monorepo skill changes: re-adopt managed blocks; reload host skill; `frigg adopt --check` in CI
 ```
 
 Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or extended-only tools.
