@@ -5,7 +5,8 @@
 use super::*;
 use crate::mcp::types::{
     FindImplementationsParams, FindReferencesParams, ImpactBundleParams, ImpactBundleResponse,
-    IncomingCallsParams, SearchSymbolParams, SearchSymbolPathClass, SuggestedNext,
+    ImpactBundleSummary, IncomingCallsParams, SearchSymbolParams, SearchSymbolPathClass,
+    SuggestedNext,
 };
 
 impl FriggMcpServer {
@@ -40,6 +41,17 @@ impl FriggMcpServer {
             return Ok(Json(ImpactBundleResponse {
                 symbol: String::new(),
                 path_class: "runtime".to_owned(),
+                summary: ImpactBundleSummary {
+                    symbols_count: 0,
+                    references_count: 0,
+                    incoming_calls_count: 0,
+                    implementations_count: 0,
+                    implementations_included: false,
+                    references_mode: NavigationMode::UnavailableNoPrecise,
+                    incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
+                    implementations_mode: None,
+                    top_paths: Vec::new(),
+                },
                 symbols: Vec::new(),
                 symbols_result_handle: None,
                 references: Vec::new(),
@@ -122,6 +134,17 @@ impl FriggMcpServer {
             let response = ImpactBundleResponse {
                 symbol,
                 path_class: path_class_label,
+                summary: ImpactBundleSummary {
+                    symbols_count: 0,
+                    references_count: 0,
+                    incoming_calls_count: 0,
+                    implementations_count: 0,
+                    implementations_included: false,
+                    references_mode: NavigationMode::UnavailableNoPrecise,
+                    incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
+                    implementations_mode: None,
+                    top_paths: Vec::new(),
+                },
                 symbols: Vec::new(),
                 symbols_result_handle: symbols_response.result_handle,
                 references: Vec::new(),
@@ -241,6 +264,16 @@ impl FriggMcpServer {
         let response = ImpactBundleResponse {
             symbol: symbol.clone(),
             path_class: path_class_label,
+            summary: ImpactBundleResponse::compute_summary(
+                &symbols_response.matches,
+                &references_response.matches,
+                &incoming_response.matches,
+                &implementations,
+                references_response.mode,
+                incoming_response.mode,
+                implementations_mode,
+                include_implementations,
+            ),
             symbols: symbols_response.matches,
             symbols_result_handle: symbols_response.result_handle,
             references: references_response.matches,
@@ -271,11 +304,11 @@ impl FriggMcpServer {
                     "selected_column": selected_symbol.column,
                 }),
                 json!({
-                    "symbols_count": response.symbols.len(),
-                    "references_count": response.references.len(),
-                    "incoming_calls_count": response.incoming_calls.len(),
-                    "implementations_count": response.implementations.len(),
-                    "implementations_included": response.implementations_included,
+                    "symbols_count": response.summary.symbols_count,
+                    "references_count": response.summary.references_count,
+                    "incoming_calls_count": response.summary.incoming_calls_count,
+                    "implementations_count": response.summary.implementations_count,
+                    "implementations_included": response.summary.implementations_included,
                 }),
                 &Ok::<(), ErrorData>(()),
             )

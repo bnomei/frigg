@@ -264,12 +264,14 @@ Unscoped search may rank docs/specs/skills before runtime — expected noise. Pr
 | **Fallback** | Scoped `search_text` may supplement tests; shell `rg` is not the main reference pass |
 | **Proof** | Read clusters; confirm `outgoing_calls` with body reads |
 | **Done** | Navigation evidence before edit or impact claim |
-| **Product support** | Ref filters, mode flags, `impact_bundle` composition |
+| **Product support** | `summary` counts/top_paths, mode flags, `impact_bundle` composition |
 
 ```text
 PREFERRED: impact_bundle(symbol, path_class=runtime)
-  → suggested_next (single recovery channel; compact default) for tests pass + read_match proof
+  → read summary first (counts / modes / top_paths) for plan
+  → then proof via handles/lists; suggested_next (single recovery channel) for tests pass + read_match
   // full response_mode only forwards diagnostics to child nav/search — not a second next-step list
+  // default bundle omits outgoing_calls (provisional) and does not embed tests (use suggested_next)
 
 OR sequential:
 search_symbol(anchor, path_class=runtime)
@@ -453,7 +455,7 @@ If navigation `mode` is unavailable/heuristic, widen with `search_text` before a
 | **Product support** | Ref filters, path-class filters, `impact_bundle` |
 
 ```text
-PREFERRED: impact_bundle(api, path_class=runtime) → read_match clusters
+PREFERRED: impact_bundle(api, path_class=runtime) → summary then read_match clusters
 OR:
 1. search_symbol(api, path_class=runtime)
 2. find_references(symbol, include_definition=false)

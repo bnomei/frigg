@@ -3186,6 +3186,27 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         !response.symbols.is_empty(),
         "impact_bundle should include symbol hits: {response:?}"
     );
+    assert_eq!(
+        response.summary.symbols_count,
+        response.symbols.len(),
+        "summary counts must match list lengths"
+    );
+    assert_eq!(
+        response.summary.references_count,
+        response.references.len()
+    );
+    assert_eq!(
+        response.summary.incoming_calls_count,
+        response.incoming_calls.len()
+    );
+    assert_eq!(
+        response.summary.references_mode,
+        response.references_mode
+    );
+    assert_eq!(
+        response.summary.incoming_calls_mode,
+        response.incoming_calls_mode
+    );
 
     // composition: symbols + (refs or mode/recovery note) + (callers or provisional note).
     let refs_ok = !response.references.is_empty()

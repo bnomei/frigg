@@ -511,6 +511,35 @@ pub struct ImpactBundleParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// Path tally row for compact impact planning (EXP-nav-impact-shape B).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImpactBundlePathTally {
+    pub path: String,
+    /// Section role: `symbol`, `reference`, `incoming_call`, or `implementation`.
+    pub role: String,
+    pub count: usize,
+}
+
+/// Always-on compact cardinality summary for `impact_bundle`.
+///
+/// Agents should plan from `summary` first, then open handles/lists for proof.
+/// Does not replace match arrays; tests/outgoing stay opt-in / sequential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImpactBundleSummary {
+    pub symbols_count: usize,
+    pub references_count: usize,
+    pub incoming_calls_count: usize,
+    pub implementations_count: usize,
+    pub implementations_included: bool,
+    pub references_mode: NavigationMode,
+    pub incoming_calls_mode: NavigationMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementations_mode: Option<NavigationMode>,
+    /// Highest-count paths per role (capped); empty when no hits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_paths: Vec<ImpactBundlePathTally>,
+}
+
 /// Composed impact response: symbol hits + references + callers (+ optional impls).
 ///
 /// **One next-step channel:** follow-ups live only in flattened
@@ -518,13 +547,15 @@ pub struct ImpactBundleParams {
 /// second top-level `suggested_next` field — dual channels caused serde ambiguity and
 /// agents reading full mode for “more next steps” found nothing extra.
 ///
-/// Compact (default) keeps: composed match arrays, handles, modes, and recovery/next.
+/// Compact (default) keeps: `summary`, composed match arrays, handles, modes, and recovery/next.
 /// Full `response_mode` is forwarded to child search/nav calls for diagnostics only;
 /// it does not add a second recovery channel on the bundle itself.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleResponse {
     pub symbol: String,
     pub path_class: String,
+    /// Always-on plan-friendly counts / modes / top paths (EXP-nav-impact-shape B).
+    pub summary: ImpactBundleSummary,
     pub symbols: Vec<crate::domain::model::SymbolMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbols_result_handle: Option<String>,
@@ -546,6 +577,84 @@ pub struct ImpactBundleResponse {
     /// Flattened recovery + **only** `suggested_next` channel (success and zero-hit paths).
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
+}
+
+impl ImpactBundleResponse {
+    /// Build the always-on summary from current list sections (max 8 top_paths).
+    pub fn compute_summary(
+        symbols: &[crate::domain::model::SymbolMatch],
+        references: &[crate::domain::model::ReferenceMatch],
+        incoming_calls: &[CallHierarchyMatch],
+        implementations: &[ImplementationMatch],
+        references_mode: NavigationMode,
+        incoming_calls_mode: NavigationMode,
+        implementations_mode: Option<NavigationMode>,
+        implementations_included: bool,
+    ) -> ImpactBundleSummary {
+        const TOP_PATHS_CAP: usize = 8;
+        use std::collections::BTreeMap;
+
+        let mut tallies: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
+        for m in symbols {
+            *tallies.entry((m.path.clone(), "symbol")).or_default() += 1;
+        }
+        for m in references {
+            *tallies.entry((m.path.clone(), "reference")).or_default() += 1;
+        }
+        for m in incoming_calls {
+            *tallies
+                .entry((m.path.clone(), "incoming_call"))
+                .or_default() += 1;
+        }
+        for m in implementations {
+            *tallies
+                .entry((m.path.clone(), "implementation"))
+                .or_default() += 1;
+        }
+
+        let mut top_paths: Vec<ImpactBundlePathTally> = tallies
+            .into_iter()
+            .map(|((path, role), count)| ImpactBundlePathTally {
+                path,
+                role: role.to_owned(),
+                count,
+            })
+            .collect();
+        top_paths.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.role.cmp(&b.role))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        top_paths.truncate(TOP_PATHS_CAP);
+
+        ImpactBundleSummary {
+            symbols_count: symbols.len(),
+            references_count: references.len(),
+            incoming_calls_count: incoming_calls.len(),
+            implementations_count: implementations.len(),
+            implementations_included,
+            references_mode,
+            incoming_calls_mode,
+            implementations_mode,
+            top_paths,
+        }
+    }
+
+    /// Recompute `summary` from the response's current lists/modes.
+    pub fn with_computed_summary(mut self) -> Self {
+        self.summary = Self::compute_summary(
+            &self.symbols,
+            &self.references,
+            &self.incoming_calls,
+            &self.implementations,
+            self.references_mode,
+            self.incoming_calls_mode,
+            self.implementations_mode,
+            self.implementations_included,
+        );
+        self
+    }
 }
 
 /// Optional evidence-packet claim witness shape for review/security.
@@ -652,9 +761,27 @@ pub struct SearchStructuralResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvidencePacket, EvidencePacketClaim, ImpactBundleResponse, NavigationMode,
+        EvidencePacket, EvidencePacketClaim, ImpactBundleResponse, ImpactBundleSummary,
+        NavigationMode,
     };
     use crate::mcp::types::{RecoveryFields, SuggestedNext};
+
+    fn empty_impact_summary(
+        references_mode: NavigationMode,
+        incoming_calls_mode: NavigationMode,
+    ) -> ImpactBundleSummary {
+        ImpactBundleSummary {
+            symbols_count: 0,
+            references_count: 0,
+            incoming_calls_count: 0,
+            implementations_count: 0,
+            implementations_included: false,
+            references_mode,
+            incoming_calls_mode,
+            implementations_mode: None,
+            top_paths: Vec::new(),
+        }
+    }
 
     #[test]
     fn with_provisional_honesty_forces_provisional_on_wire() {
@@ -736,6 +863,7 @@ mod tests {
         let success = ImpactBundleResponse {
             symbol: "catalog_entries".to_owned(),
             path_class: "runtime".to_owned(),
+            summary: empty_impact_summary(NavigationMode::Precise, NavigationMode::Precise),
             symbols: Vec::new(),
             symbols_result_handle: Some("symbols:h1".to_owned()),
             references: Vec::new(),
@@ -772,6 +900,8 @@ mod tests {
         assert_eq!(value["symbol"], "catalog_entries");
         assert_eq!(value["symbols_result_handle"], "symbols:h1");
         assert_eq!(value["references_result_handle"], "refs:h1");
+        assert!(value.get("summary").is_some());
+        assert_eq!(value["summary"]["references_count"], 0);
         assert!(value.get("error_code").is_none());
         assert!(value.get("recovery").is_none());
 
@@ -779,6 +909,10 @@ mod tests {
         let zero = ImpactBundleResponse {
             symbol: "missing_sym".to_owned(),
             path_class: "runtime".to_owned(),
+            summary: empty_impact_summary(
+                NavigationMode::UnavailableNoPrecise,
+                NavigationMode::UnavailableNoPrecise,
+            ),
             symbols: Vec::new(),
             symbols_result_handle: None,
             references: Vec::new(),
@@ -818,6 +952,137 @@ mod tests {
 
         // Flattened recovery: suggested_next appears at top level JSON, not nested under recovery.
         assert!(value.get("recovery").is_none());
+    }
+
+    #[test]
+    fn impact_bundle_summary_counts_and_top_paths() {
+        use crate::domain::model::{ReferenceMatch, ReferenceMatchKind, SymbolMatch};
+        use super::{CallHierarchyMatch, ImplementationMatch};
+
+        let symbols = vec![SymbolMatch {
+            match_id: None,
+            stable_symbol_id: None,
+            repository_id: "r1".to_owned(),
+            symbol: "target".to_owned(),
+            kind: "function".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            line: 1,
+            column: Some(1),
+            excerpt: None,
+            path_class: Some("runtime".to_owned()),
+            container: None,
+            signature: None,
+        }];
+        let references = vec![
+            ReferenceMatch {
+                match_id: None,
+                stable_symbol_id: None,
+                repository_id: "r1".to_owned(),
+                symbol: "target".to_owned(),
+                path: "src/a.rs".to_owned(),
+                line: 2,
+                column: 1,
+                match_kind: ReferenceMatchKind::Reference,
+                precision: None,
+                fallback_reason: None,
+                container: None,
+                signature: None,
+                follow_up_structural: Vec::new(),
+            },
+            ReferenceMatch {
+                match_id: None,
+                stable_symbol_id: None,
+                repository_id: "r1".to_owned(),
+                symbol: "target".to_owned(),
+                path: "src/a.rs".to_owned(),
+                line: 5,
+                column: 1,
+                match_kind: ReferenceMatchKind::Reference,
+                precision: None,
+                fallback_reason: None,
+                container: None,
+                signature: None,
+                follow_up_structural: Vec::new(),
+            },
+            ReferenceMatch {
+                match_id: None,
+                stable_symbol_id: None,
+                repository_id: "r1".to_owned(),
+                symbol: "target".to_owned(),
+                path: "src/b.rs".to_owned(),
+                line: 3,
+                column: 1,
+                match_kind: ReferenceMatchKind::Reference,
+                precision: None,
+                fallback_reason: None,
+                container: None,
+                signature: None,
+                follow_up_structural: Vec::new(),
+            },
+        ];
+        let incoming = vec![CallHierarchyMatch {
+            match_id: None,
+            source_stable_symbol_id: None,
+            target_stable_symbol_id: None,
+            source_symbol: "caller".to_owned(),
+            target_symbol: "target".to_owned(),
+            repository_id: "r1".to_owned(),
+            path: "src/a.rs".to_owned(),
+            line: 10,
+            column: 1,
+            relation: "calls".to_owned(),
+            source_container: None,
+            target_container: None,
+            source_signature: None,
+            target_signature: None,
+            precision: None,
+            call_path: None,
+            call_line: None,
+            call_column: None,
+            call_end_line: None,
+            call_end_column: None,
+            follow_up_structural: Vec::new(),
+        }];
+        let implementations: Vec<ImplementationMatch> = Vec::new();
+
+        let summary = ImpactBundleResponse::compute_summary(
+            &symbols,
+            &references,
+            &incoming,
+            &implementations,
+            NavigationMode::Precise,
+            NavigationMode::HeuristicNoPrecise,
+            None,
+            false,
+        );
+        assert_eq!(summary.symbols_count, 1);
+        assert_eq!(summary.references_count, 3);
+        assert_eq!(summary.incoming_calls_count, 1);
+        assert_eq!(summary.implementations_count, 0);
+        assert!(!summary.implementations_included);
+        assert_eq!(summary.references_mode, NavigationMode::Precise);
+        assert_eq!(
+            summary.incoming_calls_mode,
+            NavigationMode::HeuristicNoPrecise
+        );
+        // src/a.rs appears as reference x2 and incoming_call x1 — separate role rows.
+        assert!(
+            summary
+                .top_paths
+                .iter()
+                .any(|p| p.path == "src/a.rs" && p.role == "reference" && p.count == 2),
+            "top_paths should tally reference paths: {:?}",
+            summary.top_paths
+        );
+        assert!(
+            summary.top_paths.first().is_some_and(|p| p.count >= 2),
+            "highest tally should lead top_paths: {:?}",
+            summary.top_paths
+        );
+
+        let value = serde_json::to_value(&summary).expect("serialize summary");
+        assert_eq!(value["references_count"], 3);
+        assert_eq!(value["references_mode"], "precise");
     }
 
     #[test]
