@@ -644,7 +644,7 @@ pub enum WatchStatusReason {
     Refreshing,
     /// Lease held and no refresh task currently running.
     Active,
-    /// Reserved for future debounce observability (not yet projected from supervisor events).
+    /// Dual-class queue has pending work (debounce/queued), no in-flight refresh task.
     Debouncing,
     /// Reserved for future retry-backoff observability.
     RetryBackoff,
@@ -933,6 +933,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(WatchStatusReason::Active).expect("serialize"),
             json!("active")
+        );
+        assert_eq!(
+            serde_json::to_value(WatchStatusReason::Debouncing).expect("serialize"),
+            json!("debouncing")
         );
     }
 }

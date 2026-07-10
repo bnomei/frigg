@@ -439,6 +439,33 @@ impl WatchRuntime {
             .cloned()
     }
 
+    /// Test helper: install a dual-class queue snapshot without driving notify events.
+    #[cfg(test)]
+    pub(crate) fn test_set_queue_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot: WatchRepositoryQueueSnapshot,
+    ) {
+        self.queue_snapshots
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(repository_id.to_owned(), snapshot);
+    }
+
+    /// Test helper: set lease count without registering a filesystem watcher root.
+    #[cfg(test)]
+    pub(crate) fn test_set_lease_count(&self, repository_id: &str, lease_count: usize) {
+        let mut leases = self
+            .lease_counts
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if lease_count == 0 {
+            leases.remove(repository_id);
+        } else {
+            leases.insert(repository_id.to_owned(), lease_count);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_test_event(&self, event: Event) {
         let _ = self.command_tx.send(SupervisorCommand::Event(event));

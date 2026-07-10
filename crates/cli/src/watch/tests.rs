@@ -254,6 +254,11 @@ fn scheduler_queue_snapshot_reports_dual_class_depth_only() {
     assert!(inflight.manifest_fast_in_flight);
     assert!(!inflight.manifest_fast_pending);
     assert_eq!(inflight.refresh_queue_depth(), 1);
+    // Unique dirty set: inflight path must not double-count into semantic_followup_paths.
+    assert_eq!(
+        inflight.dirty_path_hint_count, 1,
+        "overlapping dirty path sets must not inflate pending_dirty_path_count"
+    );
     // Still dual-class only — semantic not pending until follow-up enqueue.
     assert!(!inflight.semantic_followup_pending);
     assert!(!inflight.semantic_followup_in_flight);

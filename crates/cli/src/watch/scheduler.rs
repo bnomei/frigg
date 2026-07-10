@@ -45,7 +45,7 @@ pub struct WatchRepositoryQueueSnapshot {
     pub semantic_followup_in_flight: bool,
     pub dirty_path_hint_count: usize,
     /// Oldest `first_pending_at` across pending classes (tokio Instant).
-    pub(super) oldest_first_pending_at: Option<Instant>,
+    pub(crate) oldest_first_pending_at: Option<Instant>,
 }
 
 impl WatchRepositoryQueueSnapshot {
@@ -573,11 +573,11 @@ impl WatchSchedulerState {
                 None => first,
             });
         }
-        let dirty_path_hint_count = state
-            .dirty_path_hints
-            .len()
-            .saturating_add(state.manifest_fast_inflight_paths.len())
-            .saturating_add(state.semantic_followup_paths.len());
+        // Unique path set — dirty hints, inflight, and semantic follow-up paths often overlap.
+        let mut unique_dirty = BTreeSet::new();
+        unique_dirty.extend(state.dirty_path_hints.iter().cloned());
+        unique_dirty.extend(state.manifest_fast_inflight_paths.iter().cloned());
+        unique_dirty.extend(state.semantic_followup_paths.iter().cloned());
         Some(WatchRepositoryQueueSnapshot {
             manifest_fast_pending: state.manifest_fast.pending,
             semantic_followup_pending: state.semantic_followup.pending,
@@ -585,7 +585,7 @@ impl WatchSchedulerState {
                 || state.active_class == Some(WatchRefreshClass::ManifestFast),
             semantic_followup_in_flight: self.in_flight_semantic_followup.contains(repository_id)
                 || state.active_class == Some(WatchRefreshClass::SemanticFollowup),
-            dirty_path_hint_count,
+            dirty_path_hint_count: unique_dirty.len(),
             oldest_first_pending_at: oldest,
         })
     }

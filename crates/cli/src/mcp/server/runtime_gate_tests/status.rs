@@ -122,6 +122,76 @@ fn watch_status_no_lease_when_watch_on_without_runtime_or_lease() {
     assert_eq!(status.lease_count, 0);
 }
 
+#[tokio::test]
+async fn watch_status_debouncing_when_lease_and_dual_class_pending() {
+    use crate::mcp::types::WatchStatusReason;
+    use crate::mcp::workspace_registry::AttachedWorkspace;
+    use crate::settings::{RuntimeTransportKind, WatchConfig, WatchMode};
+    use crate::watch::{WatchRepositoryQueueSnapshot, maybe_start_watch_runtime};
+    use std::path::PathBuf;
+
+    let mut config = fixture_config();
+    config.watch = WatchConfig {
+        mode: WatchMode::On,
+        debounce_ms: 25,
+        retry_ms: 100,
+        ..WatchConfig::default()
+    };
+    let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+    let validated = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+    let server = FriggMcpServer::new_with_runtime(
+        config.clone(),
+        RuntimeProfile::StdioAttached,
+        true,
+        Arc::clone(&runtime_task_registry),
+        Arc::clone(&validated),
+    );
+    let runtime = maybe_start_watch_runtime(
+        &config,
+        RuntimeTransportKind::Stdio,
+        runtime_task_registry,
+        validated,
+        None,
+    )
+    .expect("watch runtime start")
+    .expect("watch enabled");
+    server.set_watch_runtime(Some(Arc::new(runtime)));
+
+    let runtime = server
+        .runtime_state
+        .watch_runtime
+        .read()
+        .expect("watch lock")
+        .as_ref()
+        .expect("runtime")
+        .clone();
+    runtime.test_set_lease_count("repo-deb", 1);
+    runtime.test_set_queue_snapshot(
+        "repo-deb",
+        WatchRepositoryQueueSnapshot {
+            manifest_fast_pending: true,
+            semantic_followup_pending: false,
+            manifest_fast_in_flight: false,
+            semantic_followup_in_flight: false,
+            dirty_path_hint_count: 3,
+            ..Default::default()
+        },
+    );
+
+    let workspace = AttachedWorkspace {
+        repository_id: "stable-deb".to_owned(),
+        runtime_repository_id: "repo-deb".to_owned(),
+        display_name: "ws".to_owned(),
+        root: PathBuf::from("/tmp/frigg-watch-status-debouncing"),
+        db_path: PathBuf::from("/tmp/frigg-watch-status-debouncing/.frigg/frigg.db"),
+    };
+    let status = server.watch_status_summary(Some(&workspace), &[]);
+    assert_eq!(status.reason, WatchStatusReason::Debouncing);
+    assert_eq!(status.lease_count, 1);
+    assert_eq!(status.refresh_queue_depth, Some(1));
+    assert_eq!(status.pending_dirty_path_count, Some(3));
+}
+
 #[test]
 fn watch_status_includes_gate_dirty_path_count_when_pending() {
     use crate::mcp::types::WatchStatusReason;

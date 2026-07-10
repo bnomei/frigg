@@ -286,7 +286,16 @@ impl FriggMcpServer {
         let public_repo_id = workspace.map(|ws| ws.repository_id.as_str());
         let runtime_repo_id = workspace.map(|ws| ws.runtime_repository_id.as_str());
 
-        let (queue_depth, dirty_from_scheduler, oldest_age_ms, queue_pending, queue_in_flight) = {
+        // Single lock: lease + dual-class queue snapshot (EXP-hotpath-queue D).
+        let (
+            lease_count,
+            has_runtime,
+            queue_depth,
+            dirty_from_scheduler,
+            oldest_age_ms,
+            queue_pending,
+            queue_in_flight,
+        ) = {
             let guard = self
                 .runtime_state
                 .watch_runtime
@@ -294,6 +303,7 @@ impl FriggMcpServer {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match (guard.as_ref(), runtime_repo_id) {
                 (Some(runtime), Some(repo_id)) => {
+                    let lease = runtime.lease_status(repo_id);
                     if let Some(snap) = runtime.queue_status(repo_id) {
                         let now = tokio::time::Instant::now();
                         let in_flight =
@@ -301,6 +311,8 @@ impl FriggMcpServer {
                         let pending =
                             snap.manifest_fast_pending || snap.semantic_followup_pending;
                         (
+                            lease.lease_count,
+                            true,
                             Some(snap.refresh_queue_depth()),
                             Some(snap.dirty_path_hint_count),
                             snap.oldest_pending_age_ms(now),
@@ -308,10 +320,11 @@ impl FriggMcpServer {
                             in_flight,
                         )
                     } else {
-                        (None, None, None, false, false)
+                        (lease.lease_count, true, None, None, None, false, false)
                     }
                 }
-                _ => (None, None, None, false, false),
+                (Some(_), None) => (0, true, None, None, None, false, false),
+                (None, _) => (0, false, None, None, None, false, false),
             }
         };
 
@@ -365,27 +378,16 @@ impl FriggMcpServer {
                     || task_matches_session(&task.repository_id))
         });
 
-        let (lease_count, has_runtime) = {
-            let guard = self
-                .runtime_state
-                .watch_runtime
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match (guard.as_ref(), runtime_repo_id) {
-                (Some(runtime), Some(repo_id)) => {
-                    let status = runtime.lease_status(repo_id);
-                    (status.lease_count, true)
-                }
-                (Some(_), None) => (0, true),
-                (None, _) => (0, false),
-            }
-        };
-
         if refresh_running || queue_in_flight {
+            let detail = if refresh_running {
+                "incremental refresh task running"
+            } else {
+                "dual-class refresh in flight"
+            };
             return queue_fields(
                 WatchStatusReason::Refreshing,
                 lease_count,
-                Some("incremental refresh task running".to_owned()),
+                Some(detail.to_owned()),
             );
         }
 
