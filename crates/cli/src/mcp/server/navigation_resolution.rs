@@ -358,9 +358,11 @@ impl FriggMcpServer {
             .iter()
             .take_while(|resolved| resolved.rank == candidate.rank)
             .count();
-        // Multi-repo HTTP: same-rank hits in different attached repositories must not
-        // silently pick the first repo (EXP-nav-cross-repo B).
+        // Multi-repo HTTP: when no repository_id hint, do not silently pick the first
+        // repo among same-rank ties (EXP-nav-cross-repo B). Location resolution with
+        // require_disambiguation=false still prefers unique path context winners.
         let multi_repo_same_rank = repository_id_hint.is_none()
+            && require_disambiguation
             && selected_rank_candidate_count > 1
             && {
                 let mut repos = candidates

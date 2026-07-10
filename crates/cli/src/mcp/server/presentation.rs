@@ -965,6 +965,35 @@ impl FriggMcpServer {
         response
     }
 
+    /// Prefer disambiguation recovery over SCIP-missing when target_selection says so.
+    fn navigation_zero_hit_recovery(
+        tool: &'static str,
+        mode: NavigationMode,
+        target_selection: Option<&crate::mcp::types::NavigationTargetSelectionSummary>,
+        index: Option<ZeroHitIndex>,
+    ) -> RecoveryFields {
+        let query = target_selection.map(|selection| selection.symbol_query.as_str());
+        let disambiguation_required = target_selection.is_some_and(|selection| {
+            selection.status
+                == crate::mcp::types::NavigationTargetSelectionStatus::DisambiguationRequired
+        });
+        if disambiguation_required {
+            let mut recovery = RecoveryFields::disambiguation_required(query);
+            Self::attach_recovery_index_if_missing(&mut recovery, index);
+            return recovery;
+        }
+        let reason_override = matches!(mode, NavigationMode::UnavailableNoPrecise)
+            .then_some(ZeroHitReason::PreciseGraphUnavailable);
+        RecoveryFields::for_zero_hit(ZeroHitInput {
+            tool,
+            query,
+            pattern_type_is_literal: None,
+            scope: None,
+            index,
+            reason_override,
+        })
+    }
+
     pub(super) fn present_find_references_response(
         &self,
         mut response: FindReferencesResponse,
@@ -979,20 +1008,12 @@ impl FriggMcpServer {
         if response.total_matches == 0 || response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
-                let query = response
-                    .target_selection
-                    .as_ref()
-                    .map(|selection| selection.symbol_query.as_str());
-                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "find_references",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope: None,
+                response.recovery = Self::navigation_zero_hit_recovery(
+                    "find_references",
+                    response.mode,
+                    response.target_selection.as_ref(),
                     index,
-                    reason_override,
-                });
+                );
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
@@ -1020,32 +1041,12 @@ impl FriggMcpServer {
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
-                let query = response
-                    .target_selection
-                    .as_ref()
-                    .map(|selection| selection.symbol_query.as_str());
-                let disambiguation_required = response.target_selection.as_ref().is_some_and(
-                    |selection| {
-                        selection.status
-                            == crate::mcp::types::NavigationTargetSelectionStatus::DisambiguationRequired
-                    },
+                response.recovery = Self::navigation_zero_hit_recovery(
+                    "go_to_definition",
+                    response.mode,
+                    response.target_selection.as_ref(),
+                    index,
                 );
-                response.recovery = if disambiguation_required {
-                    RecoveryFields::disambiguation_required(query)
-                } else {
-                    let reason_override =
-                        matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                            .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                    RecoveryFields::for_zero_hit(ZeroHitInput {
-                        tool: "go_to_definition",
-                        query,
-                        pattern_type_is_literal: None,
-                        scope: None,
-                        index: index.clone(),
-                        reason_override,
-                    })
-                };
-                Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
@@ -1069,20 +1070,12 @@ impl FriggMcpServer {
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
-                let query = response
-                    .target_selection
-                    .as_ref()
-                    .map(|selection| selection.symbol_query.as_str());
-                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "find_declarations",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope: None,
+                response.recovery = Self::navigation_zero_hit_recovery(
+                    "find_declarations",
+                    response.mode,
+                    response.target_selection.as_ref(),
                     index,
-                    reason_override,
-                });
+                );
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
@@ -1106,20 +1099,12 @@ impl FriggMcpServer {
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
-                let query = response
-                    .target_selection
-                    .as_ref()
-                    .map(|selection| selection.symbol_query.as_str());
-                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "find_implementations",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope: None,
+                response.recovery = Self::navigation_zero_hit_recovery(
+                    "find_implementations",
+                    response.mode,
+                    response.target_selection.as_ref(),
                     index,
-                    reason_override,
-                });
+                );
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
@@ -1143,20 +1128,12 @@ impl FriggMcpServer {
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
-                let query = response
-                    .target_selection
-                    .as_ref()
-                    .map(|selection| selection.symbol_query.as_str());
-                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "incoming_calls",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope: None,
+                response.recovery = Self::navigation_zero_hit_recovery(
+                    "incoming_calls",
+                    response.mode,
+                    response.target_selection.as_ref(),
                     index,
-                    reason_override,
-                });
+                );
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
@@ -1182,20 +1159,12 @@ impl FriggMcpServer {
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
-                let query = response
-                    .target_selection
-                    .as_ref()
-                    .map(|selection| selection.symbol_query.as_str());
-                let reason_override = matches!(response.mode, NavigationMode::UnavailableNoPrecise)
-                    .then_some(ZeroHitReason::PreciseGraphUnavailable);
-                response.recovery = RecoveryFields::for_zero_hit(ZeroHitInput {
-                    tool: "outgoing_calls",
-                    query,
-                    pattern_type_is_literal: None,
-                    scope: None,
+                response.recovery = Self::navigation_zero_hit_recovery(
+                    "outgoing_calls",
+                    response.mode,
+                    response.target_selection.as_ref(),
                     index,
-                    reason_override,
-                });
+                );
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
@@ -1883,6 +1852,44 @@ mod tests {
             server.session_result_handle_lookup(&handle_b, &mid_b),
             SessionResultHandleLookup::Found(_)
         ));
+    }
+
+    #[test]
+    fn find_references_disambiguation_does_not_claim_precise_graph_unavailable() {
+        let server = presentation_test_server();
+        let refs = server.present_find_references_response(
+            FindReferencesResponse {
+                total_matches: 0,
+                matches: Vec::new(),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                mode: NavigationMode::UnavailableNoPrecise,
+                target_selection: Some(NavigationTargetSelectionSummary {
+                    status: NavigationTargetSelectionStatus::DisambiguationRequired,
+                    symbol_query: "Handler".to_owned(),
+                    selected_stable_symbol_id: None,
+                    candidate_count: 2,
+                    same_rank_candidate_count: 2,
+                    ambiguous_query: true,
+                    candidates: Vec::new(),
+                }),
+                metadata: None,
+                note: None,
+                recovery: RecoveryFields::default(),
+            },
+            None,
+        );
+        assert_eq!(
+            refs.recovery.error_code.as_deref(),
+            Some("DISAMBIGUATION_REQUIRED")
+        );
+        assert_ne!(
+            refs.recovery.zero_hit_reason,
+            Some(ZeroHitReason::PreciseGraphUnavailable),
+            "disambiguation must not be presented as SCIP absence: {:?}",
+            refs.recovery
+        );
     }
 
     #[test]
