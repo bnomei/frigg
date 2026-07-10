@@ -5,8 +5,7 @@
 use super::*;
 use crate::mcp::types::{
     FindImplementationsParams, FindReferencesParams, ImpactBundleParams, ImpactBundleResponse,
-    ImpactBundleSummary, IncomingCallsParams, SearchSymbolParams, SearchSymbolPathClass,
-    SuggestedNext,
+    IncomingCallsParams, SearchSymbolParams, SearchSymbolPathClass, SuggestedNext,
 };
 
 impl FriggMcpServer {
@@ -38,35 +37,37 @@ impl FriggMcpServer {
                 scope: None,
                 index: None,
             };
-            return Ok(Json(ImpactBundleResponse {
-                symbol: String::new(),
-                path_class: "runtime".to_owned(),
-                summary: ImpactBundleSummary {
-                    symbols_count: 0,
-                    references_count: 0,
-                    incoming_calls_count: 0,
-                    implementations_count: 0,
-                    implementations_included: false,
+            return Ok(Json(
+                ImpactBundleResponse {
+                    symbol: String::new(),
+                    path_class: "runtime".to_owned(),
+                    summary: ImpactBundleResponse::compute_summary(
+                        &[],
+                        &[],
+                        &[],
+                        &[],
+                        NavigationMode::UnavailableNoPrecise,
+                        NavigationMode::UnavailableNoPrecise,
+                        None,
+                        false,
+                    ),
+                    symbols: Vec::new(),
+                    symbols_result_handle: None,
+                    references: Vec::new(),
+                    references_result_handle: None,
                     references_mode: NavigationMode::UnavailableNoPrecise,
+                    incoming_calls: Vec::new(),
+                    incoming_calls_result_handle: None,
                     incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
+                    implementations: Vec::new(),
+                    implementations_result_handle: None,
                     implementations_mode: None,
-                    top_paths: Vec::new(),
-                },
-                symbols: Vec::new(),
-                symbols_result_handle: None,
-                references: Vec::new(),
-                references_result_handle: None,
-                references_mode: NavigationMode::UnavailableNoPrecise,
-                incoming_calls: Vec::new(),
-                incoming_calls_result_handle: None,
-                incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
-                implementations: Vec::new(),
-                implementations_result_handle: None,
-                implementations_mode: None,
-                implementations_included: false,
-                // Single channel: recovery.suggested_next only (flattened).
-                recovery,
-            }));
+                    implementations_included: false,
+                    // Single channel: recovery.suggested_next only (flattened).
+                    recovery,
+                }
+                .with_computed_summary(),
+            ));
         }
 
         let path_class = params.path_class.unwrap_or(SearchSymbolPathClass::Runtime);
@@ -134,17 +135,16 @@ impl FriggMcpServer {
             let response = ImpactBundleResponse {
                 symbol,
                 path_class: path_class_label,
-                summary: ImpactBundleSummary {
-                    symbols_count: 0,
-                    references_count: 0,
-                    incoming_calls_count: 0,
-                    implementations_count: 0,
-                    implementations_included: false,
-                    references_mode: NavigationMode::UnavailableNoPrecise,
-                    incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
-                    implementations_mode: None,
-                    top_paths: Vec::new(),
-                },
+                summary: ImpactBundleResponse::compute_summary(
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    NavigationMode::UnavailableNoPrecise,
+                    NavigationMode::UnavailableNoPrecise,
+                    None,
+                    false,
+                ),
                 symbols: Vec::new(),
                 symbols_result_handle: symbols_response.result_handle,
                 references: Vec::new(),
@@ -158,7 +158,8 @@ impl FriggMcpServer {
                 implementations_mode: None,
                 implementations_included: false,
                 recovery,
-            };
+            }
+            .with_computed_summary();
             return self.finalize_read_only_tool(
                 &execution_context,
                 Ok(Json(response)),

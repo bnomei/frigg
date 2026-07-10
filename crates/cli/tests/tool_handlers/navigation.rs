@@ -3207,6 +3207,20 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         response.summary.incoming_calls_mode,
         response.incoming_calls_mode
     );
+    assert!(
+        !response.summary.top_paths.is_empty(),
+        "non-empty impact should populate top_paths: {:?}",
+        response.summary.top_paths
+    );
+    assert!(
+        response
+            .summary
+            .top_paths
+            .iter()
+            .any(|p| p.path.contains("lib.rs")),
+        "fixture path should appear in top_paths: {:?}",
+        response.summary.top_paths
+    );
 
     // composition: symbols + (refs or mode/recovery note) + (callers or provisional note).
     let refs_ok = !response.references.is_empty()

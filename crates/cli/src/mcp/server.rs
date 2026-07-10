@@ -2282,7 +2282,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "impact_bundle",
-        description = "Compose symbol hits, references, callers, and optional implementations. Convenience bundle; navigation tools remain source of truth.",
+        description = "Compose symbol hits, references, callers, and optional implementations. Always-on summary (counts/modes/top_paths) for planning; lists and handles for proof; single suggested_next channel. Convenience bundle — navigation tools remain source of truth. Default omits outgoing_calls and tests.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

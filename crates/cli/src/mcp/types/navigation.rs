@@ -511,12 +511,34 @@ pub struct ImpactBundleParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// Section role for a path tally row in `ImpactBundleSummary.top_paths`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImpactBundlePathRole {
+    /// Selected/primary symbol hit (first search_symbol match used for nav composition).
+    Symbol,
+    Reference,
+    IncomingCall,
+    Implementation,
+}
+
+impl ImpactBundlePathRole {
+    /// Tie-break priority under equal counts (lower sorts earlier after count desc).
+    fn plan_priority(self) -> u8 {
+        match self {
+            Self::Symbol => 0,
+            Self::Reference => 1,
+            Self::IncomingCall => 2,
+            Self::Implementation => 3,
+        }
+    }
+}
+
 /// Path tally row for compact impact planning (EXP-nav-impact-shape B).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundlePathTally {
     pub path: String,
-    /// Section role: `symbol`, `reference`, `incoming_call`, or `implementation`.
-    pub role: String,
+    pub role: ImpactBundlePathRole,
     pub count: usize,
 }
 
@@ -524,6 +546,12 @@ pub struct ImpactBundlePathTally {
 ///
 /// Agents should plan from `summary` first, then open handles/lists for proof.
 /// Does not replace match arrays; tests/outgoing stay opt-in / sequential.
+///
+/// **Semantics:** `*_count` fields mirror the returned list lengths. References,
+/// incoming_calls, and implementations are composed from the **first** symbol hit;
+/// `symbols_count` may be >1 when the name is ambiguous. `top_paths` is a **global**
+/// cap of highest path×role tallies (not top-N within each role). Full lists remain
+/// SSOT for complete path coverage when `top_paths_truncated` is true.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleSummary {
     pub symbols_count: usize,
@@ -535,9 +563,11 @@ pub struct ImpactBundleSummary {
     pub incoming_calls_mode: NavigationMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub implementations_mode: Option<NavigationMode>,
-    /// Highest-count paths per role (capped); empty when no hits.
+    /// Highest-count path×role tallies (global cap 8); empty when no hits.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub top_paths: Vec<ImpactBundlePathTally>,
+    /// True when more path×role tallies existed than the top_paths cap.
+    pub top_paths_truncated: bool,
 }
 
 /// Composed impact response: symbol hits + references + callers (+ optional impls).
@@ -580,7 +610,7 @@ pub struct ImpactBundleResponse {
 }
 
 impl ImpactBundleResponse {
-    /// Build the always-on summary from current list sections (max 8 top_paths).
+    /// Build the always-on summary from current list sections (global top_paths cap 8).
     pub fn compute_summary(
         symbols: &[crate::domain::model::SymbolMatch],
         references: &[crate::domain::model::ReferenceMatch],
@@ -594,38 +624,42 @@ impl ImpactBundleResponse {
         const TOP_PATHS_CAP: usize = 8;
         use std::collections::BTreeMap;
 
-        let mut tallies: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
-        for m in symbols {
-            *tallies.entry((m.path.clone(), "symbol")).or_default() += 1;
+        let mut tallies: BTreeMap<(String, ImpactBundlePathRole), usize> = BTreeMap::new();
+        // Path tally for symbol role: selected/first hit only (nav composition anchor).
+        // symbols_count still reports full hit set length for ambiguity awareness.
+        if let Some(m) = symbols.first() {
+            *tallies
+                .entry((m.path.clone(), ImpactBundlePathRole::Symbol))
+                .or_default() += 1;
         }
         for m in references {
-            *tallies.entry((m.path.clone(), "reference")).or_default() += 1;
+            *tallies
+                .entry((m.path.clone(), ImpactBundlePathRole::Reference))
+                .or_default() += 1;
         }
         for m in incoming_calls {
             *tallies
-                .entry((m.path.clone(), "incoming_call"))
+                .entry((m.path.clone(), ImpactBundlePathRole::IncomingCall))
                 .or_default() += 1;
         }
         for m in implementations {
             *tallies
-                .entry((m.path.clone(), "implementation"))
+                .entry((m.path.clone(), ImpactBundlePathRole::Implementation))
                 .or_default() += 1;
         }
 
+        let total_tallies = tallies.len();
         let mut top_paths: Vec<ImpactBundlePathTally> = tallies
             .into_iter()
-            .map(|((path, role), count)| ImpactBundlePathTally {
-                path,
-                role: role.to_owned(),
-                count,
-            })
+            .map(|((path, role), count)| ImpactBundlePathTally { path, role, count })
             .collect();
         top_paths.sort_by(|a, b| {
             b.count
                 .cmp(&a.count)
-                .then_with(|| a.role.cmp(&b.role))
+                .then_with(|| a.role.plan_priority().cmp(&b.role.plan_priority()))
                 .then_with(|| a.path.cmp(&b.path))
         });
+        let top_paths_truncated = total_tallies > TOP_PATHS_CAP;
         top_paths.truncate(TOP_PATHS_CAP);
 
         ImpactBundleSummary {
@@ -638,6 +672,7 @@ impl ImpactBundleResponse {
             incoming_calls_mode,
             implementations_mode,
             top_paths,
+            top_paths_truncated,
         }
     }
 
@@ -761,8 +796,8 @@ pub struct SearchStructuralResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvidencePacket, EvidencePacketClaim, ImpactBundleResponse, ImpactBundleSummary,
-        NavigationMode,
+        EvidencePacket, EvidencePacketClaim, ImpactBundlePathRole, ImpactBundleResponse,
+        ImpactBundleSummary, NavigationMode,
     };
     use crate::mcp::types::{RecoveryFields, SuggestedNext};
 
@@ -770,17 +805,16 @@ mod tests {
         references_mode: NavigationMode,
         incoming_calls_mode: NavigationMode,
     ) -> ImpactBundleSummary {
-        ImpactBundleSummary {
-            symbols_count: 0,
-            references_count: 0,
-            incoming_calls_count: 0,
-            implementations_count: 0,
-            implementations_included: false,
+        ImpactBundleResponse::compute_summary(
+            &[],
+            &[],
+            &[],
+            &[],
             references_mode,
             incoming_calls_mode,
-            implementations_mode: None,
-            top_paths: Vec::new(),
-        }
+            None,
+            false,
+        )
     }
 
     #[test]
@@ -1067,10 +1101,11 @@ mod tests {
         );
         // src/a.rs appears as reference x2 and incoming_call x1 — separate role rows.
         assert!(
-            summary
-                .top_paths
-                .iter()
-                .any(|p| p.path == "src/a.rs" && p.role == "reference" && p.count == 2),
+            summary.top_paths.iter().any(|p| {
+                p.path == "src/a.rs"
+                    && p.role == ImpactBundlePathRole::Reference
+                    && p.count == 2
+            }),
             "top_paths should tally reference paths: {:?}",
             summary.top_paths
         );
@@ -1079,10 +1114,59 @@ mod tests {
             "highest tally should lead top_paths: {:?}",
             summary.top_paths
         );
+        assert!(
+            summary
+                .top_paths
+                .iter()
+                .any(|p| p.role == ImpactBundlePathRole::Symbol && p.path == "src/lib.rs"),
+            "selected symbol path should stay visible in top_paths: {:?}",
+            summary.top_paths
+        );
+        assert!(!summary.top_paths_truncated);
 
         let value = serde_json::to_value(&summary).expect("serialize summary");
         assert_eq!(value["references_count"], 3);
         assert_eq!(value["references_mode"], "precise");
+        assert_eq!(value["top_paths_truncated"], false);
+
+        // Cap honesty: >8 path×role tallies truncate with flag.
+        let many_refs: Vec<ReferenceMatch> = (0..10)
+            .map(|i| ReferenceMatch {
+                match_id: None,
+                stable_symbol_id: None,
+                repository_id: "r1".to_owned(),
+                symbol: "target".to_owned(),
+                path: format!("src/p{i}.rs"),
+                line: 1,
+                column: 1,
+                match_kind: ReferenceMatchKind::Reference,
+                precision: None,
+                fallback_reason: None,
+                container: None,
+                signature: None,
+                follow_up_structural: Vec::new(),
+            })
+            .collect();
+        let capped = ImpactBundleResponse::compute_summary(
+            &symbols,
+            &many_refs,
+            &[],
+            &[],
+            NavigationMode::Precise,
+            NavigationMode::Precise,
+            None,
+            false,
+        );
+        assert_eq!(capped.top_paths.len(), 8);
+        assert!(capped.top_paths_truncated);
+        assert!(
+            capped
+                .top_paths
+                .iter()
+                .any(|p| p.role == ImpactBundlePathRole::Symbol),
+            "symbol anchor should survive cap under ties: {:?}",
+            capped.top_paths
+        );
     }
 
     #[test]
