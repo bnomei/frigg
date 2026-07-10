@@ -269,10 +269,10 @@ impl FriggMcpServer {
         }
     }
 
-    /// Compact agent-facing watch projection from mode, leases, and active refresh tasks.
+    /// Compact agent-facing watch projection from mode, leases, dual-class queue, and tasks.
     ///
-    /// Does not dump raw `WatchEvent` history. Reserved reasons (debounce/backoff/blocked/degraded)
-    /// stay unused until supervisor observability is wired into MCP state.
+    /// Does not dump raw `WatchEvent` history. Queue depth / dirty counts (EXP-hotpath-queue D)
+    /// help choose `wait_watch` vs path-scoped live-disk; dual-class only (no third queue).
     ///
     /// Lease lookups use `runtime_repository_id` (watch supervisor key). The public
     /// `repository_id` field on the summary remains the stable agent-facing id.
@@ -286,13 +286,67 @@ impl FriggMcpServer {
         let public_repo_id = workspace.map(|ws| ws.repository_id.as_str());
         let runtime_repo_id = workspace.map(|ws| ws.runtime_repository_id.as_str());
 
-        if !self.runtime_state.runtime_watch_active {
-            return WatchStatusSummary {
-                reason: WatchStatusReason::ModeOff,
-                lease_count: 0,
+        let (queue_depth, dirty_from_scheduler, oldest_age_ms, queue_pending, queue_in_flight) = {
+            let guard = self
+                .runtime_state
+                .watch_runtime
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match (guard.as_ref(), runtime_repo_id) {
+                (Some(runtime), Some(repo_id)) => {
+                    if let Some(snap) = runtime.queue_status(repo_id) {
+                        let now = tokio::time::Instant::now();
+                        let in_flight =
+                            snap.manifest_fast_in_flight || snap.semantic_followup_in_flight;
+                        let pending =
+                            snap.manifest_fast_pending || snap.semantic_followup_pending;
+                        (
+                            Some(snap.refresh_queue_depth()),
+                            Some(snap.dirty_path_hint_count),
+                            snap.oldest_pending_age_ms(now),
+                            pending && !in_flight,
+                            in_flight,
+                        )
+                    } else {
+                        (None, None, None, false, false)
+                    }
+                }
+                _ => (None, None, None, false, false),
+            }
+        };
+
+        // Gate dirty oracle (precise pending) supplements scheduler dirty hints.
+        let dirty_from_gate = public_repo_id.map(|id| {
+            self.changed_paths_since_snapshot_for_gate(id).len()
+        });
+        let pending_dirty_path_count = match (dirty_from_scheduler, dirty_from_gate) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) if b > 0 => Some(b),
+            (None, _) => None,
+        };
+
+        let queue_fields = |reason: WatchStatusReason,
+                            lease_count: usize,
+                            detail: Option<String>|
+         -> WatchStatusSummary {
+            WatchStatusSummary {
+                reason,
+                lease_count,
                 repository_id: public_repo_id.map(ToOwned::to_owned),
-                detail: Some("watch mode disabled for this transport/profile".to_owned()),
-            };
+                detail,
+                refresh_queue_depth: queue_depth,
+                pending_dirty_path_count,
+                oldest_pending_age_ms: oldest_age_ms,
+            }
+        };
+
+        if !self.runtime_state.runtime_watch_active {
+            return queue_fields(
+                WatchStatusReason::ModeOff,
+                0,
+                Some("watch mode disabled for this transport/profile".to_owned()),
+            );
         }
 
         let task_matches_session = |task_repo: &str| -> bool {
@@ -327,40 +381,41 @@ impl FriggMcpServer {
             }
         };
 
-        if refresh_running {
-            return WatchStatusSummary {
-                reason: WatchStatusReason::Refreshing,
+        if refresh_running || queue_in_flight {
+            return queue_fields(
+                WatchStatusReason::Refreshing,
                 lease_count,
-                repository_id: public_repo_id.map(ToOwned::to_owned),
-                detail: Some("incremental refresh task running".to_owned()),
-            };
+                Some("incremental refresh task running".to_owned()),
+            );
         }
 
         if !has_runtime {
             // Watch enabled for profile but supervisor handle not attached yet.
-            return WatchStatusSummary {
-                reason: WatchStatusReason::NoLease,
-                lease_count: 0,
-                repository_id: public_repo_id.map(ToOwned::to_owned),
-                detail: Some("watch runtime not started".to_owned()),
-            };
+            return queue_fields(
+                WatchStatusReason::NoLease,
+                0,
+                Some("watch runtime not started".to_owned()),
+            );
         }
 
         if lease_count == 0 {
-            return WatchStatusSummary {
-                reason: WatchStatusReason::NoLease,
-                lease_count: 0,
-                repository_id: public_repo_id.map(ToOwned::to_owned),
-                detail: Some("no active watch lease for session repository".to_owned()),
-            };
+            return queue_fields(
+                WatchStatusReason::NoLease,
+                0,
+                Some("no active watch lease for session repository".to_owned()),
+            );
         }
 
-        WatchStatusSummary {
-            reason: WatchStatusReason::Active,
-            lease_count,
-            repository_id: public_repo_id.map(ToOwned::to_owned),
-            detail: None,
+        // Dual-class pending work, no in-flight task → debouncing/queued (not a third class).
+        if queue_pending {
+            return queue_fields(
+                WatchStatusReason::Debouncing,
+                lease_count,
+                Some("dual-class watch queue has pending work".to_owned()),
+            );
         }
+
+        queue_fields(WatchStatusReason::Active, lease_count, None)
     }
 }
 

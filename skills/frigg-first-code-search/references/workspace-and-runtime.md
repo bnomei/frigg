@@ -28,13 +28,13 @@ Important `workspace` outputs:
 - `repository`
 - `session_default`
 - `repositories`
-- `runtime` — includes `tool_surface_profile` (`core`|`extended`), **`tools_exposed`**, and **`watch_status`** (`reason`, `lease_count`, optional `repository_id` / `detail`)
+- `runtime` — includes `tool_surface_profile` (`core`|`extended`), **`tools_exposed`**, and **`watch_status`** (`reason`, `lease_count`, optional `repository_id` / `detail`, dual-class **`refresh_queue_depth`**, **`pending_dirty_path_count`**, **`oldest_pending_age_ms`**)
 - `recommended_action` — session gate next step (`ready`, `adopt_repo`, `wait_watch`, `reindex`, `use_live_disk_for_touched_files`, …) — **primary agent decision**
 - `gate_hint` — optional plain-language recovery when the action is non-obvious (especially `reindex`)
 - `working_tree_dirty`, `changed_paths_since_snapshot`, `watch_active`, `fresh_enough_for`
 - `lexical_ready` / `semantic_ready` — optional substrate flags only; not full health scorecards; do not install generators mid-task from these alone
 
-**`watch_status.reason` values (compact):** `mode_off`, `no_lease`, `refreshing`, `active` (plus reserved: `debouncing`, `retry_backoff`, `blocked`, `notify_degraded` when projected later). Use to **explain** `wait_watch`, not to replace the gate action.
+**`watch_status.reason` values (compact):** `mode_off`, `no_lease`, `debouncing`, `refreshing`, `active` (plus reserved: `retry_backoff`, `blocked`, `notify_degraded`). Use to **explain** `wait_watch`, not to replace the gate action. Queue fields are dual-class only (`manifest_fast` + `semantic_followup`) — no third agent-hot queue; high dirty count / age → path-scoped live reads of touched paths.
 
 **Tool surface honesty / live SSOT:**
 - Process: `runtime.tools_exposed` or live `tools/list` for **this** server

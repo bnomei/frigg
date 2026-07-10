@@ -33,6 +33,41 @@ pub(super) struct ScheduledRefresh {
     pub class: WatchRefreshClass,
 }
 
+/// Agent/operator-facing dual-class queue snapshot for one repository (EXP-hotpath-queue D).
+///
+/// Depth counts pending + in-flight units across the two refresh classes only — there is no
+/// third `agent_hot` class (EXP-hotpath-queue A).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WatchRepositoryQueueSnapshot {
+    pub manifest_fast_pending: bool,
+    pub semantic_followup_pending: bool,
+    pub manifest_fast_in_flight: bool,
+    pub semantic_followup_in_flight: bool,
+    pub dirty_path_hint_count: usize,
+    /// Oldest `first_pending_at` across pending classes (tokio Instant).
+    pub(super) oldest_first_pending_at: Option<Instant>,
+}
+
+impl WatchRepositoryQueueSnapshot {
+    /// Pending + in-flight units for dual-class watch (0..=4).
+    pub fn refresh_queue_depth(&self) -> usize {
+        usize::from(self.manifest_fast_pending)
+            + usize::from(self.semantic_followup_pending)
+            + usize::from(self.manifest_fast_in_flight)
+            + usize::from(self.semantic_followup_in_flight)
+    }
+
+    /// Best-effort age of oldest pending debounce/retry signal (not a hard ETA).
+    pub fn oldest_pending_age_ms(&self, now: Instant) -> Option<u64> {
+        self.oldest_first_pending_at
+            .map(|at| now.saturating_duration_since(at).as_millis() as u64)
+    }
+
+    pub fn has_pending_or_in_flight(&self) -> bool {
+        self.refresh_queue_depth() > 0
+    }
+}
+
 pub(super) enum RepositorySelector {
     Index(usize),
     Id(String),
@@ -517,6 +552,70 @@ impl WatchSchedulerState {
                 WatchRefreshClass::SemanticFollowup => state.semantic_followup.pending,
             })
             .unwrap_or(false)
+    }
+
+    /// Dual-class queue snapshot for MCP/agent observability (no third hot-path class).
+    pub(super) fn repository_queue_snapshot(
+        &self,
+        repository_id: &str,
+    ) -> Option<WatchRepositoryQueueSnapshot> {
+        let state = self.repositories.get(repository_id)?;
+        let mut oldest: Option<Instant> = None;
+        for first in [
+            state.manifest_fast.first_pending_at,
+            state.semantic_followup.first_pending_at,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            oldest = Some(match oldest {
+                Some(prev) => std::cmp::min(prev, first),
+                None => first,
+            });
+        }
+        let dirty_path_hint_count = state
+            .dirty_path_hints
+            .len()
+            .saturating_add(state.manifest_fast_inflight_paths.len())
+            .saturating_add(state.semantic_followup_paths.len());
+        Some(WatchRepositoryQueueSnapshot {
+            manifest_fast_pending: state.manifest_fast.pending,
+            semantic_followup_pending: state.semantic_followup.pending,
+            manifest_fast_in_flight: self.in_flight_manifest_fast.contains(repository_id)
+                || state.active_class == Some(WatchRefreshClass::ManifestFast),
+            semantic_followup_in_flight: self.in_flight_semantic_followup.contains(repository_id)
+                || state.active_class == Some(WatchRefreshClass::SemanticFollowup),
+            dirty_path_hint_count,
+            oldest_first_pending_at: oldest,
+        })
+    }
+
+    /// Publish dual-class queue snapshots for all known repositories (EXP-hotpath-queue D).
+    pub(super) fn publish_queue_snapshots(
+        &self,
+        out: &mut BTreeMap<String, WatchRepositoryQueueSnapshot>,
+    ) {
+        out.clear();
+        for repository_id in self.repositories.keys() {
+            if let Some(snapshot) = self.repository_queue_snapshot(repository_id) {
+                out.insert(repository_id.clone(), snapshot);
+            }
+        }
+    }
+
+    /// Age in ms of the oldest pending signal for a class, if pending (hotpath measure A).
+    pub(super) fn pending_age_ms(
+        &self,
+        repository_id: &str,
+        class: WatchRefreshClass,
+        now: Instant,
+    ) -> Option<u64> {
+        let state = self.repositories.get(repository_id)?;
+        let first = match class {
+            WatchRefreshClass::ManifestFast => state.manifest_fast.first_pending_at,
+            WatchRefreshClass::SemanticFollowup => state.semantic_followup.first_pending_at,
+        }?;
+        Some(now.saturating_duration_since(first).as_millis() as u64)
     }
 
     #[cfg(test)]

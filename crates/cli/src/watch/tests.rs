@@ -232,6 +232,34 @@ async fn wait_for_retrieval_projection_family(
 }
 
 #[test]
+fn scheduler_queue_snapshot_reports_dual_class_depth_only() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let debounce = Duration::from_millis(100);
+
+    scheduler.record_path_change(0, PathBuf::from("src/a.rs"), now, debounce);
+    let snap = scheduler
+        .repository_queue_snapshot("repo-000")
+        .expect("snapshot");
+    assert!(snap.manifest_fast_pending);
+    assert!(!snap.semantic_followup_pending);
+    assert_eq!(snap.refresh_queue_depth(), 1);
+    assert_eq!(snap.dirty_path_hint_count, 1);
+    assert!(snap.oldest_pending_age_ms(now + Duration::from_millis(50)).is_some());
+
+    let _ = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    let inflight = scheduler
+        .repository_queue_snapshot("repo-000")
+        .expect("snapshot inflight");
+    assert!(inflight.manifest_fast_in_flight);
+    assert!(!inflight.manifest_fast_pending);
+    assert_eq!(inflight.refresh_queue_depth(), 1);
+    // Still dual-class only — semantic not pending until follow-up enqueue.
+    assert!(!inflight.semantic_followup_pending);
+    assert!(!inflight.semantic_followup_in_flight);
+}
+
+#[test]
 fn scheduler_debounces_roots_and_serializes_execution() {
     let mut scheduler = WatchSchedulerState::new(2);
     let now = Instant::now();

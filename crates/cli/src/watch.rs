@@ -17,6 +17,7 @@ mod supervisor;
 #[path = "watch/tests.rs"]
 mod tests;
 
+pub use scheduler::WatchRepositoryQueueSnapshot;
 pub use supervisor::{
     RepositoryCacheInvalidationCallback, WatchEvent, WatchEventReporter, WatchRuntime,
     maybe_start_watch_runtime, maybe_start_watch_runtime_with_reporter,

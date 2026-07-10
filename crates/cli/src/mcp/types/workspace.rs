@@ -666,6 +666,17 @@ pub struct WatchStatusSummary {
     /// Optional human-readable detail (stable short strings only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Dual-class queue depth (pending + in-flight units, 0..=4). No third hot-path class.
+    ///
+    /// Helps choose `wait_watch` vs path-scoped live-disk without inventing agent-priority queues.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_queue_depth: Option<usize>,
+    /// Known dirty paths in the hot-path oracle / scheduler (best-effort count).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_dirty_path_count: Option<usize>,
+    /// Age of oldest pending debounce/retry signal in ms (not a hard ETA).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oldest_pending_age_ms: Option<u64>,
 }
 
 /// Process-level runtime summary returned by `workspace` / `workspace_current`.

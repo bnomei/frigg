@@ -123,6 +123,37 @@ fn watch_status_no_lease_when_watch_on_without_runtime_or_lease() {
 }
 
 #[test]
+fn watch_status_includes_gate_dirty_path_count_when_pending() {
+    use crate::mcp::types::WatchStatusReason;
+    use crate::mcp::workspace_registry::AttachedWorkspace;
+    use std::path::PathBuf;
+
+    let server = FriggMcpServer::new_with_runtime(
+        fixture_config(),
+        RuntimeProfile::StdioAttached,
+        true,
+        Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
+    );
+    let workspace = AttachedWorkspace {
+        repository_id: "stable-dirty".to_owned(),
+        runtime_repository_id: "repo-dirty".to_owned(),
+        display_name: "ws".to_owned(),
+        root: PathBuf::from("/tmp/frigg-watch-status-dirty"),
+        db_path: PathBuf::from("/tmp/frigg-watch-status-dirty/.frigg/frigg.db"),
+    };
+    server.test_record_gate_dirty_paths(
+        "stable-dirty",
+        &["src/a.rs".to_owned(), "src/b.rs".to_owned()],
+        &[],
+    );
+    let status = server.watch_status_summary(Some(&workspace), &[]);
+    // No watch runtime → no_lease, but dirty count from gate oracle still surfaces (D).
+    assert_eq!(status.reason, WatchStatusReason::NoLease);
+    assert_eq!(status.pending_dirty_path_count, Some(2));
+}
+
+#[test]
 fn runtime_status_tools_exposed_matches_filtered_router() {
     use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
     use crate::mcp::types::PUBLIC_TOOL_NAMES;

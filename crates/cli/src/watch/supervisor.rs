@@ -30,7 +30,9 @@ use super::repository::{
     repository_relative_watch_path, should_ignore_watch_path, startup_refresh_status,
     watched_repository_for_workspace,
 };
-use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState};
+use super::scheduler::{
+    ScheduledRefresh, WatchRefreshClass, WatchRepositoryQueueSnapshot, WatchSchedulerState,
+};
 
 const WATCH_TICK_MS: u64 = 50;
 const WATCH_INDEX_WORKER_PANIC_MESSAGE: &str = "watch index worker panicked";
@@ -270,6 +272,8 @@ pub struct WatchRuntime {
     watcher: Mutex<RecommendedWatcher>,
     repositories: Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     lease_counts: Arc<RwLock<BTreeMap<String, usize>>>,
+    /// Dual-class queue depth / dirty hints for agents (EXP-hotpath-queue D). No third class.
+    queue_snapshots: Arc<RwLock<BTreeMap<String, WatchRepositoryQueueSnapshot>>>,
     supervisor_handle: JoinHandle<()>,
     command_tx: mpsc::UnboundedSender<SupervisorCommand>,
     reporter: Option<WatchEventReporter>,
@@ -420,6 +424,21 @@ impl WatchRuntime {
         }
     }
 
+    /// Dual-class queue snapshot for a repository (pending/in-flight units + dirty hint count).
+    ///
+    /// Used by MCP `runtime.watch_status` so agents can choose `wait_watch` vs
+    /// `use_live_disk_for_touched_files` without inventing a third hot-path class.
+    pub(crate) fn queue_status(
+        &self,
+        repository_id: &str,
+    ) -> Option<WatchRepositoryQueueSnapshot> {
+        self.queue_snapshots
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(repository_id)
+            .cloned()
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_test_event(&self, event: Event) {
         let _ = self.command_tx.send(SupervisorCommand::Event(event));
@@ -487,6 +506,7 @@ pub fn maybe_start_watch_runtime_with_reporter(
 
     let repositories = Arc::new(RwLock::new(BTreeMap::new()));
     let lease_counts = Arc::new(RwLock::new(BTreeMap::new()));
+    let queue_snapshots = Arc::new(RwLock::new(BTreeMap::new()));
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let callback_tx = command_tx.clone();
     let watcher = notify::recommended_watcher(move |result: notify::Result<Event>| match result {
@@ -506,6 +526,7 @@ pub fn maybe_start_watch_runtime_with_reporter(
     let semantic_credentials = SemanticRuntimeCredentials::from_process_env();
     let supervisor_handle = tokio::spawn(run_supervisor(
         Arc::clone(&repositories),
+        Arc::clone(&queue_snapshots),
         watch_config,
         semantic_runtime,
         semantic_credentials,
@@ -530,15 +551,27 @@ pub fn maybe_start_watch_runtime_with_reporter(
         watcher: Mutex::new(watcher),
         repositories,
         lease_counts,
+        queue_snapshots,
         supervisor_handle,
         command_tx,
         reporter,
     }))
 }
 
+fn publish_scheduler_queue_snapshots(
+    scheduler: &WatchSchedulerState,
+    queue_snapshots: &Arc<RwLock<BTreeMap<String, WatchRepositoryQueueSnapshot>>>,
+) {
+    let mut guard = queue_snapshots
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    scheduler.publish_queue_snapshots(&mut guard);
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_supervisor(
     repositories: Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
+    queue_snapshots: Arc<RwLock<BTreeMap<String, WatchRepositoryQueueSnapshot>>>,
     watch_config: crate::settings::WatchConfig,
     semantic_runtime: SemanticRuntimeConfig,
     semantic_credentials: SemanticRuntimeCredentials,
@@ -663,6 +696,7 @@ async fn run_supervisor(
                         }
                     }
                 }
+                publish_scheduler_queue_snapshots(&scheduler, &queue_snapshots);
             }
             _ = ticker.tick() => {}
         }
@@ -711,6 +745,7 @@ async fn run_supervisor(
                     let retry_delay = scheduler
                         .mark_failed(&repository_id, class, now, retry)
                         .unwrap_or(retry);
+                    publish_scheduler_queue_snapshots(&scheduler, &queue_snapshots);
                     report_watch_event(
                         &reporter,
                         WatchEvent::RefreshDeferred {
@@ -724,7 +759,11 @@ async fn run_supervisor(
                     continue;
                 }
             };
+            // EXP-hotpath-queue A: measure debounce→dispatch before clearing first_pending_at.
+            let debounce_to_start_ms =
+                scheduler.pending_age_ms(&repository.repository_id, class, now);
             let recent_paths = scheduler.mark_started(&repository_id, class);
+            publish_scheduler_queue_snapshots(&scheduler, &queue_snapshots);
             // Capture dispatch epoch so worker side effects and completions can detect lease churn.
             let dispatch_epoch = repository_epochs
                 .lock()
@@ -735,6 +774,7 @@ async fn run_supervisor(
                 root = %repository.root.display(),
                 refresh_class = %class.as_str(),
                 debounce_ms = watch_config.debounce_ms,
+                debounce_to_start_ms = debounce_to_start_ms,
                 "built-in watch mode starting refresh"
             );
             report_watch_event(
@@ -1221,6 +1261,7 @@ fn handle_index_completed(
                 files_changed = summary.files_changed,
                 files_deleted = summary.files_deleted,
                 duration_ms = summary.duration_ms,
+                // Pair with debounce_to_start_ms on start for p95 debounce→Ready (EXP-hotpath-queue A).
                 "built-in watch mode refresh succeeded"
             );
             report_watch_event(

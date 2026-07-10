@@ -373,7 +373,7 @@ Or: presentation_mode=json → use start_line/end_line + path in ```start:end:pa
 | **Fallback** | Shell not a patch for unexplained zeros; check repo/index first |
 | **Proof** | After adoption/health, resume the real scenario tool |
 | **Done** | Workspace used when trust changes, not before every search |
-| **Product support** | `recommended_action`, `gate_hint`, `runtime.watch_status`, `runtime.tools_exposed`, optional `lexical_ready`/`semantic_ready`, dirty/changed paths |
+| **Product support** | `recommended_action`, `gate_hint`, `runtime.watch_status` (reason + dual-class queue depth / dirty count), `runtime.tools_exposed`, optional `lexical_ready`/`semantic_ready`, dirty/changed paths |
 
 ```text
 Call workspace(path=...) IF:
@@ -385,7 +385,8 @@ Agent health decision tree (branch here only — not full scorecards):
   1. recommended_action (primary)
   2. zero-hit recovery / ZeroHitIndex when a search returned empty
   3. optional lexical_ready / semantic_ready — never promote SCIP generator install mid-task
-  4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / refreshing / active)
+  4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / debouncing / refreshing / active);
+     optional refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms (dual-class only — no third queue)
 
 recommended_action=reindex means index substrate not Ready:
   - NOT a public MCP tool (tools/list has no reindex / workspace_reindex)
@@ -433,8 +434,13 @@ Verify live `tools/list` / `runtime.tools_exposed` before calling schema-only or
 1. workspace() after edits
 2. If recommended_action=ready (or fresh_enough_for includes search_*) → Frigg search
 3. If use_live_disk_for_touched_files → read_file / host Read on **those paths only**
-4. If wait_watch → read runtime.watch_status.reason (mode_off / no_lease / refreshing / active);
-     wait or path-scoped live reads — do not "verify" with whole-repo rg or micro-manage retries
+4. If wait_watch → read runtime.watch_status:
+     - reason: mode_off / no_lease / debouncing / refreshing / active
+     - refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms when present
+       (dual-class manifest_fast + semantic_followup only — there is no agent_hot third queue)
+     - high dirty count or rising age_ms → prefer path-scoped live reads on **touched** paths
+       over busy-wait; low depth + debouncing/refreshing → brief wait then re-check workspace
+     - do not "verify" with whole-repo rg or invent micro-retry loops
 5. If reindex → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
 6. **Handles after freshness:** do not `read_match` a pre-edit result_handle for touched paths.
      Re-run search_text / search_symbol / nav after ready (or after watch commits dirty paths).
@@ -445,6 +451,7 @@ BAD: recommended_action=reindex → call invented MCP workspace_reindex
 BAD: wait_watch → invent a retry loop without reading watch_status
 BAD: post-edit → read_match(old_handle) for a file you just changed
 GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path watch refresh
+GOOD: wait_watch + pending_dirty_path_count high → path-scoped live read of touched files
 GOOD: recommended_action=reindex → frigg index (CLI) or wait for operator; read gate_hint
 GOOD: after ready → new search → new result_handle → read_match
 ```
