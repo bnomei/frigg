@@ -36,6 +36,8 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
 
 Deep parameter encyclopedias live under [references/](references/) — use them after you pick a scenario. **This top screen is enough to route.**
 
+**Dual OS note:** Agents follow this **skill loop** (symbol → text → hybrid → batch → proof). Searcher ranking/policy depth is an **internal ranking OS** for product engineers and evals — not a second agent DSL. Prefer compact pivots and exact tools over “trust hybrid rank-1.”
+
 ---
 
 ## Pick your scenario first
@@ -123,6 +125,7 @@ BAD: spawn multiple stdio Frigg processes against one repo and expect shared HTT
 BAD: invent compose_evidence_packet / sealed evidence MCP tools — packets are skill-assembled
 BAD: invent review_bundle / bug_trace_bundle / citation-service tools — impact_bundle is the composition template
 BAD: invent product tool-order hacks or blame Frigg ranking when host Grep wins / MCP bridge is flaky
+BAD: answer from hybrid rank-1 alone or treat ranking policy as a second agent skill
 ```
 
 ---

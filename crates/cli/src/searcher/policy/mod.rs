@@ -1,6 +1,15 @@
 //! Hybrid retrieval policy: path quality multipliers, path witness recall, selection scoring,
 //! post-selection guardrails, and frontier sizing. Facts are normalized once; predicates and DSL
 //! rules apply stage-specific effects through the shared policy kernel.
+//!
+//! # Dual OS (EXP-ranking-os-vs-skill)
+//!
+//! Agents follow the **skill loop** (symbol → text → hybrid → batch → proof). This module is the
+//! internal **ranking OS** for product engineers and evals — not a second agent-facing DSL.
+//!
+//! Growth rule: prefer new rules only with an ecosystem ranking golden + trace attribution
+//! (`PostSelectionTrace`). Freeze ad-hoc ecosystem flags unless a failing golden demands them.
+//! Do not replace skill pivots with “trust hybrid rank-1.”
 
 mod dsl;
 mod facts;
