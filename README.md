@@ -170,14 +170,14 @@ Managed markdown defaults to a lightweight Frigg-first pointer to the `frigg-fir
 frigg adopt --target agents-md --policy expanded
 ```
 
-Frigg can also copy the skill into an existing Claude, Codex, Cursor, or Copilot skill directory:
+Frigg can also copy the skill into an existing Claude, Codex, Cursor, or Copilot skill directory. Run this from the Frigg checkout, where `skills/frigg-first-code-search` is available, or set `FRIGG_SKILL_SOURCE` to that skill directory first:
 
 ```bash
 frigg adopt --target agents-md --skill-provider claude
 frigg adopt --target agents-md --skill-provider codex
 ```
 
-`--skill-provider` is additive: Frigg still applies the selected adopt targets, then copies the skill when the provider's parent skill directory already exists. It never creates that parent directory. Uninstalling a copied skill also requires the matching `--skill-provider`; plain `--uninstall` removes only managed docs and MCP entries.
+`--skill-provider` is additive: Frigg still applies the selected adopt targets, then copies the skill when both the source and the provider's parent skill directory exist. It never creates that parent directory. Uninstalling a copied skill also requires the matching `--skill-provider`; plain `--uninstall` removes only managed docs and MCP entries.
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 
@@ -357,7 +357,7 @@ Playbook tools are **dev/trace tooling**, not default product surface. They requ
 
 Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Use `presentation_mode=citation` for `LINE|content` lines when writing user-facing citations. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics or selection notes matter.
 
-Hybrid results report which ranking channels contributed. `graph_mode` describes graph-derived ranking evidence; it does not claim precise navigation or call edges. Compact `ranking_note` output also states when ranking is lexical-only because semantic search is disabled or returned no candidates. Use definitions, references, and call tools when you need navigation proof.
+Hybrid results report which ranking channels contributed. `graph_mode` describes graph-derived ranking evidence; it does not claim precise navigation or call edges. Compact `ranking_note` output states when ranking is lexical-only because semantic search did not contribute. Request `response_mode=full` to diagnose why. Use definitions, references, and call tools when you need navigation proof.
 
 ## Configuration
 
