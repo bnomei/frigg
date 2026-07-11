@@ -338,7 +338,11 @@ mod tests {
         let missing_key = runtime
             .validate_startup(&SemanticRuntimeCredentials::default())
             .expect_err("openai_compat requires an API key");
-        assert!(missing_key.to_string().contains(OPENAI_COMPAT_API_KEY_ENV_VAR));
+        assert!(
+            missing_key
+                .to_string()
+                .contains(OPENAI_COMPAT_API_KEY_ENV_VAR)
+        );
 
         runtime
             .validate_startup(&SemanticRuntimeCredentials {
@@ -371,7 +375,7 @@ mod tests {
                 provider: None,
                 model: Some("text-embedding-3-small".to_owned()),
                 strict_mode: false,
-            openai_compat_endpoint: None,
+                openai_compat_endpoint: None,
             },
         };
 

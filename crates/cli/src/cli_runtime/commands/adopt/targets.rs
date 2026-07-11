@@ -97,11 +97,7 @@ mod tests {
         let root = temp_dir("adopt-detect-targets");
         fs::create_dir_all(root.join(".cursor/rules")).expect("create cursor rules dir");
         fs::create_dir_all(root.join(".github")).expect("create .github dir");
-        fs::write(
-            root.join(".github/copilot-instructions.md"),
-            "",
-        )
-        .expect("write copilot marker");
+        fs::write(root.join(".github/copilot-instructions.md"), "").expect("write copilot marker");
         fs::write(root.join(".cursor/rules/frigg.mdc"), "").expect("write cursor marker");
 
         let targets = detect_known_project_client_markers(&root);

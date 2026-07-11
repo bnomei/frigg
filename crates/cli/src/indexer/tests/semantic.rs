@@ -129,12 +129,7 @@ fn semantic_indexing_emits_batched_file_progress() -> FriggResult<()> {
         .into_inner()
         .expect("semantic progress events lock should not be poisoned")
         .into_iter()
-        .filter_map(|event| {
-            Some((
-                event.semantic_files_completed?,
-                event.semantic_files_total?,
-            ))
-        })
+        .filter_map(|event| Some((event.semantic_files_completed?, event.semantic_files_total?)))
         .collect::<Vec<_>>();
     assert_eq!(progress, vec![(0, 2), (1, 2), (2, 2)]);
 
@@ -204,7 +199,7 @@ fn semantic_indexing_local_model_alias_indexes_with_canonical_partition() -> Fri
         provider: Some(SemanticRuntimeProvider::Local),
         model: Some("AllMiniLML6V2".to_owned()),
         strict_mode: false,
-    openai_compat_endpoint: None,
+        openai_compat_endpoint: None,
     };
     let summary = index_repository_with_semantic_executor(
         "repo-001",
@@ -518,7 +513,7 @@ fn semantic_indexing_validation_failure_keeps_existing_semantic_state() -> Frigg
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
-    openai_compat_endpoint: None,
+        openai_compat_endpoint: None,
     };
     let invalid_credentials = SemanticRuntimeCredentials::default();
     let error = index_repository_with_semantic_executor(

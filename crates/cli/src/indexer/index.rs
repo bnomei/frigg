@@ -15,11 +15,6 @@ pub use plan::{
     IndexProgressStatus, IndexSummary, ManifestSnapshotPlan, SemanticRefreshMode,
     SemanticRefreshPlan,
 };
-#[cfg(test)]
-pub(crate) use semantic::{
-    index_repository_with_semantic_executor,
-    index_repository_with_semantic_executor_and_progress,
-};
 pub use semantic::{
     index_repository, index_repository_with_runtime_config,
     index_repository_with_runtime_config_and_dirty_paths,
@@ -27,5 +22,9 @@ pub use semantic::{
     index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback,
     index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
     index_repository_with_runtime_config_and_plan_callback,
+};
+#[cfg(test)]
+pub(crate) use semantic::{
+    index_repository_with_semantic_executor, index_repository_with_semantic_executor_and_progress,
 };
 pub use store::ManifestStore;

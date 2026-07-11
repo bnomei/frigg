@@ -164,8 +164,7 @@ pub(crate) fn plan_skill_install(
     source: Option<&Path>,
     uninstall: bool,
 ) -> SkillInstallPlan {
-    let Some(skills_parent) = resolve_existing_skills_parent(provider, workspace_root, home)
-    else {
+    let Some(skills_parent) = resolve_existing_skills_parent(provider, workspace_root, home) else {
         let tried = skill_parent_candidates(provider, workspace_root, home)
             .into_iter()
             .map(|p| p.display().to_string())
@@ -313,7 +312,10 @@ pub(crate) fn apply_skill_install(plan: &SkillInstallPlan) -> io::Result<()> {
             if dest.exists() && !dest.is_dir() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("skill dest exists and is not a directory: {}", dest.display()),
+                    format!(
+                        "skill dest exists and is not a directory: {}",
+                        dest.display()
+                    ),
                 ));
             }
             copy_skill_tree_atomic(source, dest, parent)
@@ -385,10 +387,7 @@ fn collect_relative_files_rec(
 /// Stage a full skill tree under the existing skills parent, then rename into place.
 /// Leaves the previous dest intact if staging fails.
 fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> io::Result<()> {
-    let staging_name = format!(
-        ".{SKILL_DIR_NAME}.staging-{}",
-        std::process::id()
-    );
+    let staging_name = format!(".{SKILL_DIR_NAME}.staging-{}", std::process::id());
     let staging = skills_parent.join(&staging_name);
     if staging.exists() {
         if staging.is_dir() {
@@ -482,13 +481,7 @@ mod tests {
         let home = temp_dir("skill-skip-home");
         fs::create_dir_all(&home).expect("home");
 
-        let plan = plan_skill_install(
-            SkillProvider::Claude,
-            &root,
-            Some(&home),
-            None,
-            false,
-        );
+        let plan = plan_skill_install(SkillProvider::Claude, &root, Some(&home), None, false);
         assert_eq!(plan.action, SkillInstallAction::Skipped);
         assert!(plan.reason.contains("skills-parent-missing"));
         assert!(!home.join(".claude/skills").exists());

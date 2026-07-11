@@ -51,10 +51,7 @@ fn decision_table_section(skill: &str) -> &str {
         .unwrap_or_else(|| panic!("skill must include decision table heading"))
         .1;
     // Until next ## heading or EOF
-    after
-        .split("\n## ")
-        .next()
-        .unwrap_or(after)
+    after.split("\n## ").next().unwrap_or(after)
 }
 
 /// Known public tool tokens that may appear as first-route identifiers in skill maps.
@@ -185,9 +182,6 @@ fn futura_routing_scorecard_first_route_tools_subset_of_public_names() {
             mentions.contains(required) || skill.contains(&format!("`{required}`")),
             "skill should route to or cite core product tool `{required}`"
         );
-        assert!(
-            public.contains(required),
-            "`{required}` must remain public"
-        );
+        assert!(public.contains(required), "`{required}` must remain public");
     }
 }

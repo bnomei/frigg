@@ -876,13 +876,15 @@ mod tests {
             .expect("local known_limits");
         assert!(
             local_limits.iter().any(|limit| {
-                limit
-                    .as_str()
-                    .is_some_and(|text| text.contains("Offline smoke") || text.contains("not a code-specialized"))
+                limit.as_str().is_some_and(|text| {
+                    text.contains("Offline smoke") || text.contains("not a code-specialized")
+                })
             }),
             "local known_limits must state MiniLM offline-smoke / general-embedder role"
         );
-        assert!(local.get("dimensions").is_none() || local["dimensions"] == local["native_dimensions"]);
+        assert!(
+            local.get("dimensions").is_none() || local["dimensions"] == local["native_dimensions"]
+        );
         assert!(local.get("stored_dimensions").is_none());
 
         let openai = models
@@ -937,8 +939,7 @@ mod tests {
         assert!(
             google_limits.iter().any(|limit| {
                 limit.as_str().is_some_and(|text| {
-                    text.contains("Credential-ecosystem peer")
-                        || text.contains("credential peer")
+                    text.contains("Credential-ecosystem peer") || text.contains("credential peer")
                 })
             }),
             "google known_limits must state credential-peer positioning"
@@ -968,8 +969,12 @@ mod tests {
             assert!(row.get("score").is_none());
             assert!(row.get("benchmark_score").is_none());
             assert!(row.get("leaderboard_rank").is_none());
-            let native = row["native_dimensions"].as_u64().expect("native_dimensions");
-            let pad = row["pad_to_projection"].as_bool().expect("pad_to_projection");
+            let native = row["native_dimensions"]
+                .as_u64()
+                .expect("native_dimensions");
+            let pad = row["pad_to_projection"]
+                .as_bool()
+                .expect("pad_to_projection");
             if pad {
                 assert!(
                     (native as usize) < DEFAULT_VECTOR_DIMENSIONS,
@@ -1074,8 +1079,7 @@ mod tests {
                 "preset {id} model must match models[]"
             );
             assert_eq!(
-                preset["required_credential_env"],
-                resolved["credential_env"],
+                preset["required_credential_env"], resolved["credential_env"],
                 "preset {id} credential env must match models[]"
             );
             assert!(
@@ -1115,8 +1119,7 @@ mod tests {
         {
             use crate::embeddings::local_model::DEFAULT_LOCAL_MODEL_ALIAS;
             assert_eq!(
-                LOCAL_DEFAULT_NATIVE_DIMENSIONS,
-                DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+                LOCAL_DEFAULT_NATIVE_DIMENSIONS, DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
                 "scoreboard local dims must match DEFAULT_LOCAL_MODEL_ALIAS"
             );
             assert_eq!(
@@ -1398,7 +1401,10 @@ mod tests {
         let json = resource_text(EVIDENCE_PACKET_RESOURCE_URI, ToolSurfaceProfile::Core);
         let parsed =
             serde_json::from_str::<Value>(&json).expect("evidence packet policy should parse");
-        assert_eq!(parsed["schema_id"], json!("frigg.policy.evidence_packet.v1"));
+        assert_eq!(
+            parsed["schema_id"],
+            json!("frigg.policy.evidence_packet.v1")
+        );
         assert_eq!(parsed["not_a_tool"], json!(true));
         assert_eq!(parsed["product_role"], json!("skill_composition_template"));
         for field in [

@@ -24,9 +24,9 @@ pub(super) use super::super::{
     extract_symbols_from_source, file_digest_order,
     generated_follow_up_structural_at_location_in_source, index_repository_with_runtime_config,
     index_repository_with_semantic_executor, index_repository_with_semantic_executor_and_progress,
-    inspect_syntax_tree_with_follow_up_in_source,
-    mark_local_flux_overlays, navigation_symbol_target_rank, register_symbol_definitions,
-    resolve_heuristic_references, search_structural_in_source, semantic_chunk_language_for_path,
+    inspect_syntax_tree_with_follow_up_in_source, mark_local_flux_overlays,
+    navigation_symbol_target_rank, register_symbol_definitions, resolve_heuristic_references,
+    search_structural_in_source, semantic_chunk_language_for_path,
 };
 pub(super) use crate::domain::{FriggError, FriggResult};
 pub(super) use crate::graph::{RelationKind, SymbolGraph};
@@ -206,7 +206,7 @@ pub(super) fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
-            openai_compat_endpoint: None,
+        openai_compat_endpoint: None,
     }
 }
 
@@ -216,7 +216,7 @@ pub(super) fn semantic_runtime_enabled_local() -> SemanticRuntimeConfig {
         provider: Some(SemanticRuntimeProvider::Local),
         model: Some("all-MiniLM-L6-v2".to_owned()),
         strict_mode: false,
-            openai_compat_endpoint: None,
+        openai_compat_endpoint: None,
     }
 }
 

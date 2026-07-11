@@ -366,6 +366,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            continuation: None,
             ..Default::default()
         }))
         .await;

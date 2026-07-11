@@ -320,6 +320,7 @@ impl FriggMcpServer {
                     path_class: Some(probe.path_class.unwrap_or(SearchSymbolPathClass::Runtime)),
                     path_regex: probe.path_regex.clone(),
                     limit: per_limit,
+                    continuation: None,
                     response_mode,
                 };
                 let result = self.search_symbol_impl(symbol_params).await?;
@@ -492,8 +493,7 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
             let path_class = probe.path_class.unwrap_or(SearchSymbolPathClass::Runtime);
             scope = scope.with_path_class(path_class.as_str());
         }
-        SearchBatchProbeKind::Hybrid => {
-        }
+        SearchBatchProbeKind::Hybrid => {}
     }
     if let Some(repository_id) = probe.repository_id.as_ref() {
         scope = scope.with_repository_id(repository_id.clone());

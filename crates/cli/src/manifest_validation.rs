@@ -1189,7 +1189,7 @@ mod tests {
                 provider: Some(SemanticRuntimeProvider::Local),
                 model: Some("AllMiniLML6V2".to_owned()),
                 strict_mode: false,
-            openai_compat_endpoint: None,
+                openai_compat_endpoint: None,
             },
             |_| false,
         )?;
@@ -1324,7 +1324,7 @@ mod tests {
                 provider: Some(SemanticRuntimeProvider::OpenAi),
                 model: None,
                 strict_mode: false,
-            openai_compat_endpoint: None,
+                openai_compat_endpoint: None,
             },
             |_| false,
         )?;

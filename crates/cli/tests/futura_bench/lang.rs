@@ -62,6 +62,7 @@ async fn run_php_board(report: &Mutex<harness::BenchReport>) {
                 path_class: None,
                 path_regex: Some("^src/".to_owned()),
                 limit: Some(20),
+                continuation: None,
                 response_mode: Some(ResponseMode::Compact),
             }))
             .await
@@ -159,6 +160,7 @@ async fn lang_text_and_symbol(
             path_class: None,
             path_regex: Some("^src/".to_owned()),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await

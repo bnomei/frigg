@@ -427,10 +427,7 @@ impl WatchRuntime {
     ///
     /// Used by MCP `runtime.watch_status` so agents can choose `wait_watch` vs
     /// `use_live_disk_for_touched_files` without inventing a third hot-path class.
-    pub(crate) fn queue_status(
-        &self,
-        repository_id: &str,
-    ) -> Option<WatchRepositoryQueueSnapshot> {
+    pub(crate) fn queue_status(&self, repository_id: &str) -> Option<WatchRepositoryQueueSnapshot> {
         self.queue_snapshots
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -983,10 +980,7 @@ async fn run_supervisor(
                         }
                         Err(_) => None,
                     };
-                    callback(
-                        &repository.repository_id,
-                        dirty_paths.as_deref(),
-                    );
+                    callback(&repository.repository_id, dirty_paths.as_deref());
                 }
                 task_guard.finish(status, detail);
                 let _ = completion_tx.send(SupervisorCommand::IndexCompleted {
@@ -1597,12 +1591,14 @@ mod tests {
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
-            recorded
-                .lock()
-                .expect("invalidation record poisoned")
-                .push(repository_id.to_owned());
-        });
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(
+            move |repository_id: &str, _dirty_paths: Option<&[String]>| {
+                recorded
+                    .lock()
+                    .expect("invalidation record poisoned")
+                    .push(repository_id.to_owned());
+            },
+        );
 
         let invoked = invalidate_caches_for_stale_completion(
             "repo-001",
@@ -1622,12 +1618,14 @@ mod tests {
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
-            recorded
-                .lock()
-                .expect("invalidation record poisoned")
-                .push(repository_id.to_owned());
-        });
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(
+            move |repository_id: &str, _dirty_paths: Option<&[String]>| {
+                recorded
+                    .lock()
+                    .expect("invalidation record poisoned")
+                    .push(repository_id.to_owned());
+            },
+        );
 
         let invoked = invalidate_caches_for_stale_completion(
             "repo-001",
@@ -2073,12 +2071,14 @@ mod tests {
         let worker_epochs = Arc::clone(&epochs);
         let invalidated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
-            recorded
-                .lock()
-                .expect("invalidation record poisoned")
-                .push(repository_id.to_owned());
-        });
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(
+            move |repository_id: &str, _dirty_paths: Option<&[String]>| {
+                recorded
+                    .lock()
+                    .expect("invalidation record poisoned")
+                    .push(repository_id.to_owned());
+            },
+        );
 
         let dirty_path = workspace_root.join("src/lib.rs");
         let result = index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(

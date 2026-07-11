@@ -114,6 +114,7 @@ async fn read_match_cross_search_handle_and_match_id_returns_mixed_handle() {
             path_class: None,
             path_regex: Some("^src/".to_owned()),
             limit: Some(5),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await

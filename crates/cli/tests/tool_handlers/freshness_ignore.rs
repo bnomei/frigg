@@ -144,6 +144,7 @@ async fn search_symbol_and_hybrid_emit_latency_class() {
             path_class: Some(SearchSymbolPathClass::Runtime),
             path_regex: Some("^src/".to_owned()),
             limit: Some(5),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await

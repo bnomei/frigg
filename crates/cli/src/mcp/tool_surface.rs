@@ -188,7 +188,10 @@ mod tests {
             "explore is product tooling and belongs on core"
         );
         assert!(
-            !core.tool_names.iter().any(|name| name.starts_with("playbook_")),
+            !core
+                .tool_names
+                .iter()
+                .any(|name| name.starts_with("playbook_")),
             "playbook tools must not appear on core"
         );
 

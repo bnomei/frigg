@@ -56,11 +56,13 @@ fn test_repository_cache_invalidation_log() -> Arc<RwLock<Vec<String>>> {
 fn test_repository_cache_invalidation_callback(
     log: Arc<RwLock<Vec<String>>>,
 ) -> RepositoryCacheInvalidationCallback {
-    Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
-        log.write()
-            .expect("test repository cache invalidation log poisoned")
-            .push(repository_id.to_owned());
-    })
+    Arc::new(
+        move |repository_id: &str, _dirty_paths: Option<&[String]>| {
+            log.write()
+                .expect("test repository cache invalidation log poisoned")
+                .push(repository_id.to_owned());
+        },
+    )
 }
 
 fn init_storage(workspace_root: &Path) -> PathBuf {
@@ -245,7 +247,10 @@ fn scheduler_queue_snapshot_reports_dual_class_depth_only() {
     assert!(!snap.semantic_followup_pending);
     assert_eq!(snap.refresh_queue_depth(), 1);
     assert_eq!(snap.dirty_path_hint_count, 1);
-    assert!(snap.oldest_pending_age_ms(now + Duration::from_millis(50)).is_some());
+    assert!(
+        snap.oldest_pending_age_ms(now + Duration::from_millis(50))
+            .is_some()
+    );
 
     let _ = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
     let inflight = scheduler
@@ -1408,7 +1413,7 @@ fn watch_semantic_followup_validation_error_skips_doomed_followup_after_manifest
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
-    openai_compat_endpoint: None,
+        openai_compat_endpoint: None,
     };
     let credentials = SemanticRuntimeCredentials::default();
 
@@ -1859,22 +1864,24 @@ async fn watch_runtime_invalidates_repository_cache_before_finishing_refresh_tas
     let callback_task_registry = Arc::clone(&task_registry);
     let stable_repository_id =
         crate::domain::model::stable_repository_id_for_root(&workspace_root).0;
-    let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str, _dirty_paths: Option<&[String]>| {
-        if repository_id == "repo-001" {
-            let task_registry = callback_task_registry
-                .read()
-                .expect("watch runtime task registry poisoned");
-            let repository_ids = [repository_id, stable_repository_id.as_str()];
-            let active = task_registry.has_active_task_for_any_repository(
-                crate::mcp::types::RuntimeTaskKind::ChangedIndex,
-                &repository_ids,
-            );
-            recorded_observations
-                .write()
-                .expect("active task observation log poisoned")
-                .push(active);
-        }
-    });
+    let callback: RepositoryCacheInvalidationCallback = Arc::new(
+        move |repository_id: &str, _dirty_paths: Option<&[String]>| {
+            if repository_id == "repo-001" {
+                let task_registry = callback_task_registry
+                    .read()
+                    .expect("watch runtime task registry poisoned");
+                let repository_ids = [repository_id, stable_repository_id.as_str()];
+                let active = task_registry.has_active_task_for_any_repository(
+                    crate::mcp::types::RuntimeTaskKind::ChangedIndex,
+                    &repository_ids,
+                );
+                recorded_observations
+                    .write()
+                    .expect("active task observation log poisoned")
+                    .push(active);
+            }
+        },
+    );
     let runtime = maybe_start_watch_runtime(
         &config,
         RuntimeTransportKind::Stdio,

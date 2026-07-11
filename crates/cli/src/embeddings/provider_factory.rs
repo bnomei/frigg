@@ -298,7 +298,7 @@ fn prepare_local_artifacts_for_policy_with(
                 provider: Some(SemanticRuntimeProvider::Local),
                 model: Some(model.to_owned()),
                 strict_mode: false,
-            openai_compat_endpoint: None,
+                openai_compat_endpoint: None,
             };
             prepare(&semantic_runtime)
         }

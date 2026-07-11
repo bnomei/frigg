@@ -26,6 +26,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                             path_class: Some(SearchSymbolPathClass::Runtime),
                             path_regex: None,
                             limit: Some(16),
+                            continuation: None,
                             response_mode: None,
                         })),
                 )
@@ -51,6 +52,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                     path_class: Some(SearchSymbolPathClass::Runtime),
                     path_regex: None,
                     limit: Some(8),
+                    continuation: None,
                     response_mode: None,
                 })),
         )
@@ -80,6 +82,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                             path_class: Some(SearchSymbolPathClass::Runtime),
                             path_regex: None,
                             limit: Some(8),
+                            continuation: None,
                             response_mode: None,
                         })),
                 )

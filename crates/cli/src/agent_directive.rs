@@ -258,8 +258,9 @@ mod tests {
     fn skill_scenario_tools_are_subset_of_public_tool_names() {
         use crate::mcp::types::PUBLIC_TOOL_NAMES;
 
-        let skill = workspace_file("skills/frigg-first-code-search/SKILL.md")
-            .expect("bundled skill skills/frigg-first-code-search/SKILL.md must exist for SSOT guard");
+        let skill = workspace_file("skills/frigg-first-code-search/SKILL.md").expect(
+            "bundled skill skills/frigg-first-code-search/SKILL.md must exist for SSOT guard",
+        );
 
         const SCENARIO_TOOLS: &[&str] = &[
             "workspace",

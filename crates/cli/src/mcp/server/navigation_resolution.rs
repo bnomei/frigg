@@ -222,22 +222,6 @@ impl FriggMcpServer {
         });
     }
 
-    pub(in crate::mcp::server) fn retain_bounded_ranked_symbol_match(
-        ranked_matches: &mut Vec<RankedSymbolMatch>,
-        limit: usize,
-        candidate: RankedSymbolMatch,
-    ) {
-        if limit == 0 {
-            return;
-        }
-
-        ranked_matches.push(candidate);
-        Self::sort_ranked_symbol_matches(ranked_matches);
-        if ranked_matches.len() > limit {
-            ranked_matches.pop();
-        }
-    }
-
     fn resolve_navigation_symbol_target(
         corpora: &[Arc<RepositorySymbolCorpus>],
         symbol_query: &str,

@@ -609,10 +609,11 @@ fn build_semantic_embedding_records_with_runtime(
                 .count(),
         );
         let next_chunk_index = (batch_index + 1) * SEMANTIC_EMBEDDING_BATCH_SIZE;
-        if chunks
-            .get(next_chunk_index)
-            .is_none_or(|next_chunk| batch.last().is_some_and(|last_chunk| last_chunk.path != next_chunk.path))
-        {
+        if chunks.get(next_chunk_index).is_none_or(|next_chunk| {
+            batch
+                .last()
+                .is_some_and(|last_chunk| last_chunk.path != next_chunk.path)
+        }) {
             completed_files = completed_files.saturating_add(1);
         }
         on_file_progress(completed_files, files_total);
@@ -967,11 +968,8 @@ fn build_semantic_chunk_candidate(
     end_line: usize,
     content_text: String,
 ) -> SemanticChunkCandidate {
-    let content_hash = semantic_chunk_content_hash(
-        &file_context.path,
-        &file_context.language,
-        &content_text,
-    );
+    let content_hash =
+        semantic_chunk_content_hash(&file_context.path, &file_context.language, &content_text);
 
     let mut chunk_id_hasher = file_context.chunk_id_prefix.clone();
     chunk_id_hasher.update(&chunk_index.to_le_bytes());
@@ -1007,7 +1005,11 @@ fn build_semantic_chunk_candidate(
 ///
 /// Content hashes are taken over this exact string so any template edit invalidates reuse
 /// without a separate version constant.
-pub(crate) fn semantic_embed_document_text(path: &str, language: &str, content_text: &str) -> String {
+pub(crate) fn semantic_embed_document_text(
+    path: &str,
+    language: &str,
+    content_text: &str,
+) -> String {
     let mut out = String::with_capacity(path.len() + language.len() + content_text.len() + 32);
     out.push_str("path: ");
     out.push_str(path);
@@ -1135,7 +1137,10 @@ mod embed_envelope_tests {
         assert_ne!(base, other_path);
         assert_ne!(base, other_lang);
         assert_ne!(base, other_body);
-        assert_eq!(base, semantic_chunk_content_hash("a.rs", "rust", "fn a() {}"));
+        assert_eq!(
+            base,
+            semantic_chunk_content_hash("a.rs", "rust", "fn a() {}")
+        );
         assert_eq!(
             base,
             blake3::hash(semantic_embed_document_text("a.rs", "rust", "fn a() {}").as_bytes())

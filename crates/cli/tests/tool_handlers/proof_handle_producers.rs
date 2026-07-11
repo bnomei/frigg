@@ -170,6 +170,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             path_class: None,
             path_regex: Some(r"^src/lib\.rs$".to_owned()),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await

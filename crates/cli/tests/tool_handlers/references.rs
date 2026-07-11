@@ -1097,6 +1097,7 @@ async fn find_references_precise_results_round_trip_through_stable_symbol_id() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await

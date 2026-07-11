@@ -85,6 +85,7 @@ impl FriggMcpServer {
                 path_class: Some(path_class),
                 path_regex: None,
                 limit: None,
+                continuation: None,
                 response_mode: params.response_mode,
             })
             .await?

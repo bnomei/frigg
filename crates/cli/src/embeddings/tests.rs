@@ -168,7 +168,10 @@ fn provider_trait_exposes_kind_and_default_limits() {
 fn provider_trait_helpers_expose_stable_defaults_and_strings() {
     let retry_policy = RetryPolicy::default();
     assert_eq!(EmbeddingProviderKind::OpenAi.as_str(), "openai");
-    assert_eq!(EmbeddingProviderKind::OpenAiCompat.as_str(), "openai_compat");
+    assert_eq!(
+        EmbeddingProviderKind::OpenAiCompat.as_str(),
+        "openai_compat"
+    );
     assert_eq!(EmbeddingProviderKind::Google.as_str(), "google");
     assert_eq!(EmbeddingProviderKind::Local.as_str(), "local");
     assert_eq!(EmbeddingProviderKind::VectorStore.as_str(), "vector_store");

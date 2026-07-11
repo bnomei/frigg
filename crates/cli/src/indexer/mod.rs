@@ -33,10 +33,6 @@ mod semantic;
 mod symbols;
 #[cfg(test)]
 pub(crate) use index::build_index_plan_for_tests;
-#[cfg(test)]
-use index::{
-    index_repository_with_semantic_executor, index_repository_with_semantic_executor_and_progress,
-};
 pub use index::{
     IndexDiagnostics, IndexMode, IndexPlan, IndexProgressEvent, IndexProgressPhase,
     IndexProgressStatus, IndexSummary, ManifestSnapshotPlan, ManifestStore, SemanticRefreshMode,
@@ -46,6 +42,10 @@ pub use index::{
     index_repository_with_runtime_config_and_dirty_paths_and_progress_and_commit_callback,
     index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
     index_repository_with_runtime_config_and_plan_callback,
+};
+#[cfg(test)]
+use index::{
+    index_repository_with_semantic_executor, index_repository_with_semantic_executor_and_progress,
 };
 #[cfg(test)]
 use manifest::diff;

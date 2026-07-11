@@ -251,7 +251,8 @@ impl FriggMcpServer {
         tools_exposed.dedup();
 
         let session_workspace = self.current_workspace();
-        let watch_status = Some(self.watch_status_summary(session_workspace.as_ref(), &active_tasks));
+        let watch_status =
+            Some(self.watch_status_summary(session_workspace.as_ref(), &active_tasks));
 
         RuntimeStatusSummary {
             profile: self.runtime_state.runtime_profile,
@@ -281,7 +282,9 @@ impl FriggMcpServer {
         workspace: Option<&crate::mcp::workspace_registry::AttachedWorkspace>,
         active_tasks: &[crate::mcp::types::RuntimeTaskSummary],
     ) -> crate::mcp::types::WatchStatusSummary {
-        use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus, WatchStatusReason, WatchStatusSummary};
+        use crate::mcp::types::{
+            RuntimeTaskKind, RuntimeTaskStatus, WatchStatusReason, WatchStatusSummary,
+        };
 
         let public_repo_id = workspace.map(|ws| ws.repository_id.as_str());
         let runtime_repo_id = workspace.map(|ws| ws.runtime_repository_id.as_str());
@@ -307,8 +310,7 @@ impl FriggMcpServer {
                         let now = tokio::time::Instant::now();
                         let in_flight =
                             snap.manifest_fast_in_flight || snap.semantic_followup_in_flight;
-                        let pending =
-                            snap.manifest_fast_pending || snap.semantic_followup_pending;
+                        let pending = snap.manifest_fast_pending || snap.semantic_followup_pending;
                         (
                             lease.lease_count,
                             true,
@@ -327,9 +329,8 @@ impl FriggMcpServer {
             }
         };
 
-        let dirty_from_gate = public_repo_id.map(|id| {
-            self.changed_paths_since_snapshot_for_gate(id).len()
-        });
+        let dirty_from_gate =
+            public_repo_id.map(|id| self.changed_paths_since_snapshot_for_gate(id).len());
         let pending_dirty_path_count = match (dirty_from_scheduler, dirty_from_gate) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (Some(a), None) => Some(a),

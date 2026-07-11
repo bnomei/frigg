@@ -954,10 +954,7 @@ impl RecoveryFields {
                     .with_path_class("runtime")
                     .with_reason("exact symbol pivot after hybrid discovery"),
             );
-            let text_query = tokens
-                .get(1)
-                .cloned()
-                .unwrap_or_else(|| (*primary).clone());
+            let text_query = tokens.get(1).cloned().unwrap_or_else(|| (*primary).clone());
             suggested_next.push(
                 SuggestedNext::tool("search_text")
                     .with_query(text_query)
@@ -1390,11 +1387,7 @@ fn path_file_stem(path: &str) -> Option<&str> {
         Some((stem, _ext)) if !stem.is_empty() => stem,
         _ => name,
     };
-    if stem.is_empty() {
-        None
-    } else {
-        Some(stem)
-    }
+    if stem.is_empty() { None } else { Some(stem) }
 }
 
 fn normalize_pivot_token(raw: &str) -> Option<String> {
@@ -1883,8 +1876,7 @@ mod tests {
 
     #[test]
     fn recovery_hybrid_discovery_exact_pivot_uses_code_shaped_query() {
-        let recovery =
-            RecoveryFields::hybrid_discovery_exact_pivot("read_match", None, &[]);
+        let recovery = RecoveryFields::hybrid_discovery_exact_pivot("read_match", None, &[]);
         assert_recovery_actionable(&recovery);
         assert_eq!(
             recovery
@@ -1913,7 +1905,8 @@ mod tests {
             recovery
                 .suggested_next
                 .iter()
-                .any(|next| next.tool == "read_file" && next.path.as_deref() == Some("docs/readme.md"))
+                .any(|next| next.tool == "read_file"
+                    && next.path.as_deref() == Some("docs/readme.md"))
         );
         assert!(
             recovery

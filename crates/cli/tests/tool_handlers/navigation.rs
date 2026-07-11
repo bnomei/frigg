@@ -1170,6 +1170,7 @@ async fn navigation_go_to_definition_precise_results_round_trip_through_stable_s
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -3191,18 +3192,12 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         response.symbols.len(),
         "summary counts must match list lengths"
     );
-    assert_eq!(
-        response.summary.references_count,
-        response.references.len()
-    );
+    assert_eq!(response.summary.references_count, response.references.len());
     assert_eq!(
         response.summary.incoming_calls_count,
         response.incoming_calls.len()
     );
-    assert_eq!(
-        response.summary.references_mode,
-        response.references_mode
-    );
+    assert_eq!(response.summary.references_mode, response.references_mode);
     assert_eq!(
         response.summary.incoming_calls_mode,
         response.incoming_calls_mode

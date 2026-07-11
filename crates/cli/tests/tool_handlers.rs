@@ -179,6 +179,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
         "search_symbol",
         &SearchSymbolResponse {
             matches: Vec::new(),
+            completeness: ResultCompleteness::complete(ResultUnit::Symbol, 0, 0)
+                .expect("empty symbol completeness"),
             result_handle: None,
             handle_scope: None,
             handle_expires: None,
