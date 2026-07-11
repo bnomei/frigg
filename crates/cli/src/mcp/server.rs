@@ -2045,7 +2045,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_match",
-        description = "Read a source window for a prior result_handle and match_id. Use after search/nav proof; equivalent to read_file on the resolved range.",
+        description = "Read a revision-bound source window for a prior result_handle and match_id. Use after search/nav proof; if the bound source changed or cannot be verified, returns RESOURCE_NOT_FOUND with STALE_PROOF_ANCHOR instead of content.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

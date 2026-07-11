@@ -1241,6 +1241,50 @@ impl RecoveryFields {
         }
     }
 
+    /// A result handle remains valid, but its bound source revision can no longer be proved.
+    pub fn stale_proof_anchor(
+        origin_tool: &str,
+        result_handle: &str,
+        match_id: &str,
+        repository_id: &str,
+        path: &str,
+    ) -> Self {
+        let origin_tool = origin_tool.trim();
+        let origin_tool = (!origin_tool.is_empty())
+            .then_some(origin_tool)
+            .unwrap_or("search_text");
+        let path = std::path::Path::new(path);
+        let repository_path = if path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            "<repository-relative path unavailable>".to_owned()
+        } else {
+            path.display().to_string()
+        };
+        let mut related_tools = Vec::new();
+        for tool in [origin_tool, "read_match", "read_file"] {
+            if !related_tools.iter().any(|related| related == tool) {
+                related_tools.push(tool.to_owned());
+            }
+        }
+        Self {
+            error_code: Some("STALE_PROOF_ANCHOR".to_owned()),
+            message: Some(format!(
+                "Source proof for {repository_id}:{repository_path} changed or can no longer be verified (result_handle={result_handle:?}, match_id={match_id:?})."
+            )),
+            correction_hint: Some(format!(
+                "Re-run {origin_tool} to obtain a fresh result_handle and match_id pair. read_file can read current live content, but cannot refresh this historical proof."
+            )),
+            related_tools,
+            suggested_next: Vec::new(),
+            zero_hit_reason: None,
+            scope: None,
+            index: None,
+        }
+    }
+
     /// match_id from a different result_handle / foreign handle pairing.
     pub fn mixed_handle(result_handle: Option<&str>, match_id: Option<&str>) -> Self {
         let handle = result_handle.unwrap_or("<missing>");
@@ -1990,6 +2034,61 @@ mod tests {
         let recovery = RecoveryFields::mixed_handle(Some("result-000001"), Some("m9"));
         assert_recovery_actionable(&recovery);
         assert_eq!(recovery.error_code.as_deref(), Some("MIXED_HANDLE"));
+    }
+
+    #[test]
+    fn recovery_stale_proof_anchor_is_descriptive_and_redacted() {
+        let recovery = RecoveryFields::stale_proof_anchor(
+            "search_text",
+            "result-000001",
+            "search:m1",
+            "repo-001",
+            "src/lib.rs",
+        );
+
+        assert_eq!(recovery.error_code.as_deref(), Some("STALE_PROOF_ANCHOR"));
+        assert!(recovery.suggested_next.is_empty());
+        assert_eq!(
+            recovery.related_tools,
+            vec!["search_text", "read_match", "read_file"]
+        );
+        let serialized = serde_json::to_string(&recovery).expect("recovery serializes");
+        for forbidden in [
+            "suggested_next",
+            "next_actions",
+            "blake3",
+            "query",
+            "excerpt",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "stale-proof recovery must not expose {forbidden}"
+            );
+        }
+
+        let absolute = RecoveryFields::stale_proof_anchor(
+            "search_text",
+            "result-000001",
+            "search:m1",
+            "repo-001",
+            "/private/source.rs",
+        );
+        assert!(
+            !absolute
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("/private/source.rs")),
+            "recovery must never serialize an absolute path"
+        );
+
+        let deduplicated = RecoveryFields::stale_proof_anchor(
+            "read_file",
+            "result-000001",
+            "search:m1",
+            "repo-001",
+            "src/lib.rs",
+        );
+        assert_eq!(deduplicated.related_tools, vec!["read_file", "read_match"]);
     }
 
     #[test]

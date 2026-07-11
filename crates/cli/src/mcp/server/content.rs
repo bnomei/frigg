@@ -6,13 +6,53 @@
 
 use super::presentation::SessionResultHandleLookup;
 use super::*;
+use crate::mcp::server_cache::ResultHandleSourceRevision;
 use crate::mcp::types::ContextEfficiencyMetadata;
 use serde::Serialize;
+use std::io::Read;
 
 #[derive(Clone)]
 pub(super) struct ReadFileProvenanceContext {
     tool_name: &'static str,
     extra_params: Value,
+}
+
+/// Private proof expectation used only by `read_match`.
+///
+/// Keeping this separate from `ReadFileParams` preserves the public `read_file` contract while
+/// ensuring a proof-bound response is built only after the captured raw bytes are verified.
+#[derive(Clone)]
+pub(super) struct ReadMatchProofExpectation {
+    revision: ResultHandleSourceRevision,
+    origin_tool: &'static str,
+    result_handle: String,
+    match_id: String,
+    repository_id: String,
+    path: String,
+}
+
+#[derive(Debug)]
+enum BoundedProofReadError {
+    Io(std::io::Error),
+    TooLarge,
+}
+
+/// Read no more than `max_bytes + 1` bytes, so a size race cannot allocate an unbounded source.
+fn read_proof_bytes_bounded(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BoundedProofReadError> {
+    let mut file = fs::File::open(path).map_err(BoundedProofReadError::Io)?;
+    let read_limit = u64::try_from(max_bytes.saturating_add(1)).unwrap_or(u64::MAX);
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+    file.by_ref()
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(BoundedProofReadError::Io)?;
+    if bytes.len() > max_bytes {
+        return Err(BoundedProofReadError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 impl ReadFileProvenanceContext {
@@ -49,7 +89,7 @@ impl FriggMcpServer {
         &self,
         params: ReadFileParams,
     ) -> Result<ReadFileResponse, ErrorData> {
-        self.read_file_impl_with_provenance(params, ReadFileProvenanceContext::read_file())
+        self.read_file_impl_with_provenance(params, ReadFileProvenanceContext::read_file(), None)
             .await
     }
 
@@ -57,12 +97,14 @@ impl FriggMcpServer {
         &self,
         params: ReadFileParams,
         provenance: ReadFileProvenanceContext,
+        proof_expectation: Option<ReadMatchProofExpectation>,
     ) -> Result<ReadFileResponse, ErrorData> {
         let execution_context = self
             .read_only_tool_execution_context(provenance.tool_name, params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let provenance_for_blocking = provenance.clone();
+        let proof_expectation_for_blocking = proof_expectation.clone();
         let server = self.clone();
         let execution = self
             .run_read_only_tool_blocking(&execution_context, move || {
@@ -178,7 +220,33 @@ impl FriggMcpServer {
                             })),
                         ));
                     }
-                    let snapshot = server.file_content_snapshot_for_workspace(&workspace, &path)?;
+                    let snapshot = if proof_expectation_for_blocking.is_some() {
+                        server.file_content_snapshot_for_bound_proof(&workspace, &path)?
+                    } else {
+                        server.file_content_snapshot_for_workspace(&workspace, &path)?
+                    };
+                    if proof_expectation_for_blocking
+                        .as_ref()
+                        .is_some_and(|expectation| {
+                            snapshot.source_revision() != expectation.revision
+                        })
+                    {
+                        // Do not extract content or metadata from an unverified proof snapshot.
+                        return Err(Self::resource_not_found(
+                            "source revision no longer matches the proof anchor",
+                            None,
+                        ));
+                    }
+                    if proof_expectation_for_blocking.is_some()
+                        && snapshot.raw_bytes_len() > server.config.max_file_bytes
+                    {
+                        // A file that grew after the bounded-read metadata check is not a
+                        // verifiable proof source, even when the requested line window is small.
+                        return Err(Self::resource_not_found(
+                            "source exceeds the proof read bound",
+                            None,
+                        ));
+                    }
                     let _pre_read_bytes =
                         pre_read_bytes.unwrap_or_else(|| snapshot.raw_bytes_len());
                     if !has_line_range {
@@ -332,7 +400,23 @@ impl FriggMcpServer {
                     execution_context_for_blocking
                         .normalized_workload(&repository_ids, WorkloadPrecisionMode::Exact)
                 });
-                let finalization = server.tool_execution_finalization(
+                let result = match (proof_expectation_for_blocking.as_ref(), result) {
+                    (Some(expectation), Err(_)) => {
+                        crate::mcp::routing_stats::record_handle_failure();
+                        Err(Self::stale_proof_anchor_error(expectation))
+                    }
+                    (_, result) => result,
+                };
+                let source_refs = if let Some(expectation) = proof_expectation_for_blocking.as_ref()
+                {
+                    json!({
+                        "repository_id": expectation.repository_id,
+                        "path": expectation.path,
+                        "origin_tool": expectation.origin_tool,
+                        "result_handle": expectation.result_handle,
+                        "match_id": expectation.match_id,
+                    })
+                } else {
                     json!({
                         "resolved_repository_id": resolved_repository_id.clone(),
                         "resolved_path": resolved_path
@@ -341,9 +425,10 @@ impl FriggMcpServer {
                         "resolved_absolute_path": resolved_absolute_path
                             .clone()
                             .map(|path| Self::bounded_text(&path)),
-                    }),
-                    normalized_workload,
-                );
+                    })
+                };
+                let finalization =
+                    server.tool_execution_finalization(source_refs, normalized_workload);
                 let mut provenance_params = json!({
                     "repository_id": execution_context_for_blocking.repository_hint,
                     "path": Self::bounded_text(&params_for_blocking.path),
@@ -376,11 +461,131 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
+    fn stale_proof_anchor_error(expectation: &ReadMatchProofExpectation) -> ErrorData {
+        let recovery = RecoveryFields::stale_proof_anchor(
+            expectation.origin_tool,
+            &expectation.result_handle,
+            &expectation.match_id,
+            &expectation.repository_id,
+            &expectation.path,
+        );
+        let message = recovery
+            .message
+            .clone()
+            .unwrap_or_else(|| "source proof anchor is stale".to_owned());
+        Self::resource_not_found(
+            message,
+            Some(json!({
+                "error_code": recovery.error_code,
+                "repository_id": expectation.repository_id,
+                "path": expectation.path,
+                "origin_tool": expectation.origin_tool,
+                "result_handle": expectation.result_handle,
+                "match_id": expectation.match_id,
+                "correction_hint": recovery.correction_hint,
+                "related_tools": recovery.related_tools,
+            })),
+        )
+    }
+
+    fn session_result_handle_origin_tool(&self, result_handle: &str) -> Option<&'static str> {
+        self.session_state
+            .inner
+            .result_handles
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entries
+            .get(result_handle)
+            .map(|entry| entry.origin_tool)
+    }
+
+    /// Builds a bounded snapshot for proof validation without changing `read_file` behavior.
+    fn file_content_snapshot_for_bound_proof(
+        &self,
+        workspace: &AttachedWorkspace,
+        canonical_path: &Path,
+    ) -> Result<Arc<FileContentSnapshot>, ErrorData> {
+        let _freshness = self.repository_response_cache_freshness(
+            std::slice::from_ref(workspace),
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )?;
+        let max_file_bytes = self.config.max_file_bytes;
+        let proof_path = self.bound_proof_path_within_workspace(workspace, canonical_path)?;
+        let bytes =
+            read_proof_bytes_bounded(&proof_path, max_file_bytes).map_err(|error| match error {
+                BoundedProofReadError::TooLarge => Self::invalid_params(
+                    format!("file exceeds max_file_bytes={max_file_bytes}"),
+                    Some(json!({
+                        "path": canonical_path.display().to_string(),
+                        "max_file_bytes": max_file_bytes,
+                    })),
+                ),
+                BoundedProofReadError::Io(error) => Self::internal(
+                    format!("failed to read file {}: {error}", canonical_path.display()),
+                    None,
+                ),
+            })?;
+        // The pathname may have been swapped while it was open. Re-check the live object after
+        // the bounded read so an external symlink swap cannot supply a same-byte proof source.
+        if self.bound_proof_path_within_workspace(workspace, canonical_path)? != proof_path {
+            return Err(Self::access_denied(
+                "proof source changed while its workspace containment was being verified",
+                None,
+            ));
+        }
+        Ok(Arc::new(FileContentSnapshot::from_bytes(bytes)))
+    }
+
+    /// Re-authorizes the live proof source after `read_match`'s earlier path resolution.
+    ///
+    /// The regular resolver is intentionally shared with `read_file`, but a revision-bound proof
+    /// must fail closed if the resolved path is replaced by a symlink before or during the read.
+    fn bound_proof_path_within_workspace(
+        &self,
+        workspace: &AttachedWorkspace,
+        resolved_path: &Path,
+    ) -> Result<PathBuf, ErrorData> {
+        let root = workspace.root.canonicalize().map_err(|err| {
+            Self::internal(
+                "failed to canonicalize proof workspace root",
+                Some(json!({
+                    "reason": Self::bounded_text(&err.to_string()),
+                })),
+            )
+        })?;
+        let live_path = resolved_path.canonicalize().map_err(|err| {
+            Self::resource_not_found(
+                "proof source can no longer be resolved",
+                Some(json!({ "reason": Self::bounded_text(&err.to_string()) })),
+            )
+        })?;
+        if !live_path.starts_with(&root) {
+            return Err(Self::access_denied(
+                "proof source is outside workspace roots",
+                None,
+            ));
+        }
+        let metadata = fs::metadata(&live_path).map_err(|err| {
+            Self::resource_not_found(
+                "proof source can no longer be read",
+                Some(json!({ "reason": Self::bounded_text(&err.to_string()) })),
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(Self::resource_not_found(
+                "proof source is no longer a file",
+                None,
+            ));
+        }
+        Ok(live_path)
+    }
+
     pub(super) async fn read_match_impl(
         &self,
         params: ReadMatchParams,
     ) -> Result<ReadMatchResponse, ErrorData> {
         let started_at = Instant::now();
+        let origin_tool = self.session_result_handle_origin_tool(&params.result_handle);
         let anchor = match self
             .session_result_handle_lookup(&params.result_handle, &params.match_id)
         {
@@ -478,47 +683,23 @@ impl FriggMcpServer {
             .read_file_impl_with_provenance(
                 read_params,
                 ReadFileProvenanceContext::read_match(&params.result_handle, &params.match_id),
+                Some(ReadMatchProofExpectation {
+                    revision: anchor.revision.clone(),
+                    origin_tool: origin_tool.unwrap_or("read_match"),
+                    result_handle: params.result_handle.clone(),
+                    match_id: params.match_id.clone(),
+                    repository_id: anchor.repository_id.clone(),
+                    path: anchor.path.clone(),
+                }),
             )
             .await?;
-        let effective_end_line = {
-            let read_params = ReadFileParams {
-                path: read.path.clone(),
-                repository_id: Some(read.repository_id.clone()),
-                max_bytes: None,
-                start_line: Some(line_start),
-                end_line: Some(line_end),
-                line_count: None,
-                presentation_mode: Some(ReadPresentationMode::Json),
-                include_context_efficiency: None,
-            };
-            let (repository_id, path, _) = self.resolve_file_path(&read_params)?;
-            let workspace = self
-                .attached_workspaces_for_repository(Some(repository_id.as_str()))?
-                .into_iter()
-                .find(|workspace| workspace.repository_id == repository_id)
-                .ok_or_else(|| {
-                    Self::resource_not_found(
-                        "repository_id not found",
-                        Some(json!({ "repository_id": repository_id })),
-                    )
-                })?;
-            let line_slice = self
-                .file_content_snapshot_for_workspace(&workspace, &path)?
-                .read_line_slice_lossy(line_start, Some(line_end), self.config.max_file_bytes)
-                .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
-            if line_slice.total_lines == 0 {
-                0
-            } else {
-                line_end.min(line_slice.total_lines)
-            }
-        };
         Ok(ReadMatchResponse {
             repository_id: read.repository_id,
             path: read.path,
             line: anchor.line,
             column: anchor.column,
             start_line: line_start,
-            end_line: effective_end_line,
+            end_line: read.end_line.unwrap_or(line_start),
             bytes: read.bytes,
             content: read.content,
             context_efficiency: read.context_efficiency,
@@ -1288,5 +1469,362 @@ impl FriggMcpServer {
                 "total_lines": total_lines,
             })),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::ErrorCode;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_workspace_root(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "frigg-content-{test_name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join(".git")).expect("fixture git marker should be creatable");
+        root
+    }
+
+    struct ReadMatchFixture {
+        server: FriggMcpServer,
+        workspace_root: PathBuf,
+        source_path: PathBuf,
+        result_handle: String,
+        match_id: String,
+        original_content: &'static str,
+    }
+
+    async fn read_match_fixture(test_name: &str) -> ReadMatchFixture {
+        let workspace_root = temporary_workspace_root(test_name);
+        fs::create_dir_all(workspace_root.join("src")).expect("create workspace source directory");
+        let source_path = workspace_root.join("src/lib.rs");
+        let original_content = "pub fn proof_marker() {}\n";
+        fs::write(&source_path, original_content).expect("write source fixture");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("fixture config should be valid");
+        let repository = config
+            .repositories()
+            .into_iter()
+            .next()
+            .expect("fixture config should declare a repository");
+        let repository_root = PathBuf::from(&repository.root_path);
+        let db_path = crate::storage::ensure_provenance_db_parent_dir(&repository_root)
+            .expect("storage path should resolve");
+        Storage::new(&db_path)
+            .initialize()
+            .expect("storage should initialize");
+        crate::indexer::index_repository_with_runtime_config(
+            &repository.repository_id.0,
+            &repository_root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+        )
+        .expect("fixture index should succeed");
+
+        let server = FriggMcpServer::new(config);
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+        server
+            .adopt_workspace(&workspace, true)
+            .expect("server should adopt fixture workspace");
+        let search = server
+            .search_text_impl(crate::mcp::types::SearchTextParams {
+                query: "proof_marker".to_owned(),
+                pattern_type: None,
+                repository_id: Some(workspace.repository_id),
+                path_regex: None,
+                limit: None,
+                context_lines: None,
+                case_sensitive: None,
+                ignore_case: None,
+                word: None,
+                files_with_matches: None,
+                count_only: None,
+                glob: None,
+                exclude_glob: None,
+                include_hidden: None,
+                max_count_per_file: None,
+                collapse_by_file: None,
+                response_mode: None,
+                include_context_efficiency: None,
+            })
+            .await
+            .expect("search should succeed")
+            .0;
+
+        ReadMatchFixture {
+            server,
+            workspace_root,
+            source_path,
+            result_handle: search.result_handle.expect("search should issue a handle"),
+            match_id: search
+                .matches
+                .first()
+                .and_then(|matched| matched.match_id.clone())
+                .expect("search match should carry an id"),
+            original_content,
+        }
+    }
+
+    async fn read_fixture_match(
+        fixture: &ReadMatchFixture,
+    ) -> Result<ReadMatchResponse, ErrorData> {
+        fixture
+            .server
+            .read_match_impl(ReadMatchParams {
+                result_handle: fixture.result_handle.clone(),
+                match_id: fixture.match_id.clone(),
+                before: Some(0),
+                after: Some(0),
+                presentation_mode: None,
+                include_context_efficiency: None,
+            })
+            .await
+    }
+
+    fn assert_stale_proof_anchor(error: ErrorData, expected_path: &str) {
+        assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+        let data = error.data.expect("stale proof error data");
+        assert_eq!(
+            data.get("error_code").and_then(Value::as_str),
+            Some("STALE_PROOF_ANCHOR")
+        );
+        assert_eq!(
+            data.get("path").and_then(Value::as_str),
+            Some(expected_path)
+        );
+        assert!(data.get("content").is_none());
+        assert!(data.get("suggested_next").is_none());
+        assert!(data.get("next_actions").is_none());
+    }
+
+    #[test]
+    fn bounded_proof_read_refuses_growth_without_unbounded_allocation() {
+        let directory = temporary_workspace_root("bounded-proof-read");
+        fs::create_dir_all(&directory).expect("create fixture directory");
+        let path = directory.join("source.rs");
+        fs::write(&path, b"0123456789").expect("write oversized fixture");
+
+        assert!(matches!(
+            read_proof_bytes_bounded(&path, 4),
+            Err(BoundedProofReadError::TooLarge)
+        ));
+        assert_eq!(
+            read_proof_bytes_bounded(&path, 10).expect("exact-bound source succeeds"),
+            b"0123456789"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn read_match_rejects_changed_proof_anchor_without_source_content() {
+        let workspace_root = temporary_workspace_root("stale-proof-anchor");
+        fs::create_dir_all(workspace_root.join("src")).expect("create workspace source directory");
+        let source_path = workspace_root.join("src/lib.rs");
+        fs::write(&source_path, "pub fn proof_marker() {}\n").expect("write source fixture");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("fixture config should be valid");
+        let repository = config
+            .repositories()
+            .into_iter()
+            .next()
+            .expect("fixture config should declare a repository");
+        let repository_root = PathBuf::from(&repository.root_path);
+        let db_path = crate::storage::ensure_provenance_db_parent_dir(&repository_root)
+            .expect("storage path should resolve");
+        Storage::new(&db_path)
+            .initialize()
+            .expect("storage should initialize");
+        crate::indexer::index_repository_with_runtime_config(
+            &repository.repository_id.0,
+            &repository_root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+        )
+        .expect("fixture index should succeed");
+
+        let server = FriggMcpServer::new(config);
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+        server
+            .adopt_workspace(&workspace, true)
+            .expect("server should adopt fixture workspace");
+        let search = server
+            .search_text_impl(crate::mcp::types::SearchTextParams {
+                query: "proof_marker".to_owned(),
+                pattern_type: None,
+                repository_id: Some(workspace.repository_id.clone()),
+                path_regex: None,
+                limit: None,
+                context_lines: None,
+                case_sensitive: None,
+                ignore_case: None,
+                word: None,
+                files_with_matches: None,
+                count_only: None,
+                glob: None,
+                exclude_glob: None,
+                include_hidden: None,
+                max_count_per_file: None,
+                collapse_by_file: None,
+                response_mode: None,
+                include_context_efficiency: None,
+            })
+            .await
+            .expect("search should succeed")
+            .0;
+        let result_handle = search.result_handle.expect("search should issue a handle");
+        let match_id = search
+            .matches
+            .first()
+            .and_then(|matched| matched.match_id.clone())
+            .expect("search match should carry an id");
+
+        fs::write(
+            &source_path,
+            "// inserted before proof\npub fn proof_marker() {}\n",
+        )
+        .expect("rewrite source after handle issuance");
+        let error = server
+            .read_match_impl(ReadMatchParams {
+                result_handle,
+                match_id,
+                before: Some(0),
+                after: Some(0),
+                presentation_mode: None,
+                include_context_efficiency: None,
+            })
+            .await
+            .expect_err("changed source must fail closed");
+
+        assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+        let data = error.data.expect("stale proof error data");
+        assert_eq!(
+            data.get("error_code").and_then(Value::as_str),
+            Some("STALE_PROOF_ANCHOR")
+        );
+        assert_eq!(data.get("path").and_then(Value::as_str), Some("src/lib.rs"));
+        assert!(data.get("content").is_none());
+        assert!(data.get("suggested_next").is_none());
+        assert!(data.get("next_actions").is_none());
+        assert!(
+            !data
+                .to_string()
+                .contains(&source_path.display().to_string()),
+            "error data must not expose the absolute source path"
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[tokio::test]
+    async fn read_match_accepts_an_identical_byte_rewrite() {
+        let fixture = read_match_fixture("identical-proof-rewrite").await;
+        fs::write(&fixture.source_path, fixture.original_content)
+            .expect("identical rewrite should be writable");
+
+        let response = read_fixture_match(&fixture)
+            .await
+            .expect("identical raw bytes must preserve the proof anchor");
+
+        assert_eq!(response.content, fixture.original_content.trim_end());
+        assert_eq!(response.bytes, fixture.original_content.trim_end().len());
+        let _ = fs::remove_dir_all(fixture.workspace_root);
+    }
+
+    #[tokio::test]
+    async fn read_match_rejects_deleted_replaced_and_newly_oversized_proof_sources() {
+        let deleted = read_match_fixture("deleted-proof-source").await;
+        fs::remove_file(&deleted.source_path).expect("fixture source should be removable");
+        assert_stale_proof_anchor(
+            read_fixture_match(&deleted)
+                .await
+                .expect_err("deleted proof source must fail closed"),
+            "src/lib.rs",
+        );
+        let _ = fs::remove_dir_all(deleted.workspace_root);
+
+        let replaced = read_match_fixture("replaced-proof-source").await;
+        fs::write(&replaced.source_path, "pub fn replacement_marker() {}\n")
+            .expect("replacement fixture should be writable");
+        assert_stale_proof_anchor(
+            read_fixture_match(&replaced)
+                .await
+                .expect_err("replacement proof source must fail closed"),
+            "src/lib.rs",
+        );
+        let _ = fs::remove_dir_all(replaced.workspace_root);
+
+        let oversized = read_match_fixture("oversized-proof-source").await;
+        fs::write(
+            &oversized.source_path,
+            vec![b'x'; oversized.server.config.max_file_bytes.saturating_add(1)],
+        )
+        .expect("oversized fixture should be writable");
+        assert_stale_proof_anchor(
+            read_fixture_match(&oversized)
+                .await
+                .expect_err("newly oversized proof source must fail closed"),
+            "src/lib.rs",
+        );
+        let _ = fs::remove_dir_all(oversized.workspace_root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_match_rejects_identical_byte_external_symlink_replacement() {
+        let fixture = read_match_fixture("external-symlink-proof-source").await;
+        let resolved_before_swap = fixture
+            .source_path
+            .canonicalize()
+            .expect("fixture source should resolve before the swap");
+        let outside_path = fixture.workspace_root.with_extension("outside.rs");
+        fs::write(&outside_path, fixture.original_content)
+            .expect("outside fixture should be writable");
+        fs::remove_file(&fixture.source_path).expect("fixture source should be removable");
+        std::os::unix::fs::symlink(&outside_path, &fixture.source_path)
+            .expect("external symlink replacement should be creatable");
+
+        let workspace = fixture
+            .server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("fixture workspace should remain known");
+        assert!(
+            fixture
+                .server
+                .file_content_snapshot_for_bound_proof(&workspace, &resolved_before_swap)
+                .is_err(),
+            "the post-resolution proof read must reject an external symlink even with identical bytes"
+        );
+        assert_stale_proof_anchor(
+            read_fixture_match(&fixture)
+                .await
+                .expect_err("external identical-byte replacement must fail closed"),
+            "src/lib.rs",
+        );
+
+        let _ = fs::remove_file(&outside_path);
+        let _ = fs::remove_dir_all(fixture.workspace_root);
     }
 }
