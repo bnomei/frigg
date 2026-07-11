@@ -6,29 +6,8 @@
 use super::*;
 use frigg::mcp::types::ReadMatchResponse;
 
-fn handle_error_code(error: &rmcp::ErrorData) -> String {
-    error
-        .data
-        .as_ref()
-        .and_then(|value| value.get("error_code"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("")
-        .to_owned()
-}
-
 fn assert_handle_recovery_fields(error: &rmcp::ErrorData, expected_code: &str) {
-    let code = handle_error_code(error);
-    assert!(
-        code.contains(expected_code)
-            || (code == "resource_not_found"
-                && error
-                    .data
-                    .as_ref()
-                    .and_then(|v| v.get("correction_hint"))
-                    .is_some()),
-        "expected error_code containing {expected_code:?} (or resource_not_found with recovery), got {code:?}; data={:?}",
-        error.data
-    );
+    assert_eq!(error_code_tag(error), Some(expected_code));
     let data = error
         .data
         .as_ref()

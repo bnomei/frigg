@@ -566,6 +566,8 @@ mod freshness_ignore;
 mod handles_futura;
 #[path = "tool_handlers/navigation.rs"]
 mod navigation;
+#[path = "tool_handlers/proof_handle_producers.rs"]
+mod proof_handle_producers;
 #[path = "tool_handlers/references.rs"]
 mod references;
 #[path = "tool_handlers/search_batch.rs"]
