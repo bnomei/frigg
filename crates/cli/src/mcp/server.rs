@@ -162,6 +162,7 @@ mod navigation_metadata;
 mod navigation_precise;
 mod navigation_resolution;
 mod navigation_tools;
+mod next_actions;
 #[cfg(feature = "playbook")]
 mod playbook;
 mod precise_graph;
