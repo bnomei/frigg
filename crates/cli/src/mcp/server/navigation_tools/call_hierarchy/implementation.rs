@@ -4,12 +4,20 @@
 //! before ranking locations.
 
 use super::*;
+use crate::mcp::types::ResultUnit;
 
 impl FriggMcpServer {
     pub(in crate::mcp::server) async fn find_implementations_impl(
         &self,
         params: FindImplementationsParams,
     ) -> Result<Json<FindImplementationsResponse>, ErrorData> {
+        let page_limit = self.navigation_page_limit(params.limit)?;
+        let (resume_offset, continuation_binding) = self.navigation_continuation_context(
+            "find_implementations",
+            &params,
+            params.repository_id.clone(),
+            ResultUnit::Implementation,
+        )?;
         let execution_context = self
             .read_only_tool_execution_context("find_implementations", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -30,13 +38,10 @@ impl FriggMcpServer {
             let mut match_count = 0usize;
             let mut fallback_reason: Option<String> = None;
             (|| -> Result<Json<FindImplementationsResponse>, ErrorData> {
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
+                let limit = usize::MAX;
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
-                effective_limit = Some(limit);
+                effective_limit = Some(page_limit);
                 let freshness_basis = server
                     .scoped_read_only_tool_execution_context(
                         execution_context_for_blocking.tool_name,
@@ -89,6 +94,14 @@ impl FriggMcpServer {
                         let (metadata, note) =
                             Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(FindImplementationsResponse {
+                            completeness: FriggMcpServer::navigation_completeness(
+                                ResultUnit::Implementation,
+                                0,
+                                Some(0),
+                                NavigationMode::UnavailableNoPrecise,
+                                false,
+                                None,
+                            ),
                             matches: Vec::new(),
                             result_handle: None,
                             mode: NavigationMode::UnavailableNoPrecise,
@@ -172,6 +185,7 @@ impl FriggMcpServer {
                     resolution_precision =
                         Some(Self::precise_resolution_precision(precise_coverage).to_owned());
                 }
+                let total_implementations = precise_matches.len();
                 if precise_matches.len() > limit {
                     precise_matches.truncate(limit);
                 }
@@ -215,6 +229,16 @@ impl FriggMcpServer {
                 });
                 let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 Ok(Json(FindImplementationsResponse {
+                    completeness: FriggMcpServer::navigation_completeness(
+                        ResultUnit::Implementation,
+                        precise_matches.len(),
+                        Some(total_implementations),
+                        Self::navigation_mode_from_precision_label(
+                            resolution_precision.as_deref(),
+                        ),
+                        precise_matches.len() < total_implementations,
+                        None,
+                    ),
                     matches: precise_matches,
                     result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(
@@ -227,7 +251,15 @@ impl FriggMcpServer {
                 }))
             })()
         });
-        execution.await?.map(|Json(response)| {
+        execution.await?.map(|Json(mut response)| {
+            self.paginate_navigation_rows(
+                &mut response.matches,
+                &mut response.completeness,
+                response.mode,
+                page_limit,
+                resume_offset,
+                continuation_binding.clone(),
+            );
             Json(self.present_find_implementations_response(response, params.response_mode))
         })
     }
@@ -236,6 +268,13 @@ impl FriggMcpServer {
         &self,
         params: IncomingCallsParams,
     ) -> Result<Json<IncomingCallsResponse>, ErrorData> {
+        let page_limit = self.navigation_page_limit(params.limit)?;
+        let (resume_offset, continuation_binding) = self.navigation_continuation_context(
+            "incoming_calls",
+            &params,
+            params.repository_id.clone(),
+            ResultUnit::IncomingCall,
+        )?;
         let execution_context =
             self.read_only_tool_execution_context("incoming_calls", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -253,10 +292,7 @@ impl FriggMcpServer {
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
             (|| -> Result<Json<IncomingCallsResponse>, ErrorData> {
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
+                let limit = usize::MAX;
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
                 let freshness_basis = server
@@ -315,6 +351,14 @@ impl FriggMcpServer {
                         });
                         let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(IncomingCallsResponse {
+                            completeness: FriggMcpServer::navigation_completeness(
+                                ResultUnit::IncomingCall,
+                                0,
+                                Some(0),
+                                NavigationMode::UnavailableNoPrecise,
+                                false,
+                                None,
+                            ),
                             matches: Vec::new(),
                             result_handle: None,
                             mode: NavigationMode::UnavailableNoPrecise,
@@ -383,6 +427,7 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
+                    let total_incoming_calls = precise_matches.len();
                     if precise_matches.len() > limit {
                         precise_matches.truncate(limit);
                     }
@@ -424,6 +469,16 @@ impl FriggMcpServer {
                     });
                     let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(IncomingCallsResponse {
+                        completeness: FriggMcpServer::navigation_completeness(
+                            ResultUnit::IncomingCall,
+                            precise_matches.len(),
+                            Some(total_incoming_calls),
+                            Self::navigation_mode_from_precision_label(
+                                resolution_precision.as_deref(),
+                            ),
+                            precise_matches.len() < total_incoming_calls,
+                            None,
+                        ),
                         matches: precise_matches,
                         result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
@@ -471,6 +526,16 @@ impl FriggMcpServer {
                     });
                     let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(IncomingCallsResponse {
+                        completeness: FriggMcpServer::navigation_completeness(
+                            ResultUnit::IncomingCall,
+                            0,
+                            Some(0),
+                            Self::navigation_mode_from_precision_label(
+                                resolution_precision.as_deref(),
+                            ),
+                            false,
+                            None,
+                        ),
                         matches: Vec::new(),
                         result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
@@ -521,6 +586,7 @@ impl FriggMcpServer {
                     })
                     .collect::<Vec<_>>();
                 Self::sort_call_hierarchy_matches(&mut matches);
+                let total_incoming_calls = matches.len();
                 if matches.len() > limit {
                     matches.truncate(limit);
                 }
@@ -575,6 +641,14 @@ impl FriggMcpServer {
                 });
                 let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 Ok(Json(IncomingCallsResponse {
+                    completeness: FriggMcpServer::navigation_completeness(
+                        ResultUnit::IncomingCall,
+                        matches.len(),
+                        Some(total_incoming_calls),
+                        Self::navigation_mode_from_precision_label(resolution_precision.as_deref()),
+                        matches.len() < total_incoming_calls,
+                        None,
+                    ),
                     matches,
                     result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(
@@ -589,7 +663,15 @@ impl FriggMcpServer {
                 }))
             })()
         });
-        execution.await?.map(|Json(response)| {
+        execution.await?.map(|Json(mut response)| {
+            self.paginate_navigation_rows(
+                &mut response.matches,
+                &mut response.completeness,
+                response.mode,
+                page_limit,
+                resume_offset,
+                continuation_binding.clone(),
+            );
             Json(self.present_incoming_calls_response(response, params.response_mode))
         })
     }
@@ -598,6 +680,13 @@ impl FriggMcpServer {
         &self,
         params: OutgoingCallsParams,
     ) -> Result<Json<OutgoingCallsResponse>, ErrorData> {
+        let page_limit = self.navigation_page_limit(params.limit)?;
+        let (resume_offset, continuation_binding) = self.navigation_continuation_context(
+            "outgoing_calls",
+            &params,
+            params.repository_id.clone(),
+            ResultUnit::OutgoingCall,
+        )?;
         let execution_context =
             self.read_only_tool_execution_context("outgoing_calls", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -615,10 +704,7 @@ impl FriggMcpServer {
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
             (|| -> Result<Json<OutgoingCallsResponse>, ErrorData> {
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
+                let limit = usize::MAX;
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
                 let freshness_basis = server
@@ -677,6 +763,14 @@ impl FriggMcpServer {
                         });
                         let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(OutgoingCallsResponse {
+                            completeness: FriggMcpServer::navigation_completeness(
+                                ResultUnit::OutgoingCall,
+                                0,
+                                Some(0),
+                                NavigationMode::UnavailableNoPrecise,
+                                false,
+                                None,
+                            ),
                             matches: Vec::new(),
                             result_handle: None,
                             mode: NavigationMode::UnavailableNoPrecise,
@@ -738,6 +832,7 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
+                    let total_outgoing_calls = precise_matches.len();
                     if precise_matches.len() > limit {
                         precise_matches.truncate(limit);
                     }
@@ -780,6 +875,16 @@ impl FriggMcpServer {
                     });
                     let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(OutgoingCallsResponse {
+                        completeness: FriggMcpServer::navigation_completeness(
+                            ResultUnit::OutgoingCall,
+                            precise_matches.len(),
+                            Some(total_outgoing_calls),
+                            Self::navigation_mode_from_precision_label(
+                                resolution_precision.as_deref(),
+                            ),
+                            precise_matches.len() < total_outgoing_calls,
+                            None,
+                        ),
                         matches: precise_matches,
                         result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
@@ -830,6 +935,16 @@ impl FriggMcpServer {
                     });
                     let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(OutgoingCallsResponse {
+                        completeness: FriggMcpServer::navigation_completeness(
+                            ResultUnit::OutgoingCall,
+                            0,
+                            Some(0),
+                            Self::navigation_mode_from_precision_label(
+                                resolution_precision.as_deref(),
+                            ),
+                            false,
+                            None,
+                        ),
                         matches: Vec::new(),
                         result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
@@ -898,6 +1013,7 @@ impl FriggMcpServer {
                     })
                     .collect::<Vec<_>>();
                 Self::sort_call_hierarchy_matches(&mut matches);
+                let total_outgoing_calls = matches.len();
                 if matches.len() > limit {
                     matches.truncate(limit);
                 }
@@ -953,6 +1069,14 @@ impl FriggMcpServer {
                 });
                 let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 Ok(Json(OutgoingCallsResponse {
+                    completeness: FriggMcpServer::navigation_completeness(
+                        ResultUnit::OutgoingCall,
+                        matches.len(),
+                        Some(total_outgoing_calls),
+                        Self::navigation_mode_from_precision_label(resolution_precision.as_deref()),
+                        matches.len() < total_outgoing_calls,
+                        None,
+                    ),
                     matches,
                     result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(
@@ -969,7 +1093,15 @@ impl FriggMcpServer {
                 }))
             })()
         });
-        execution.await?.map(|Json(response)| {
+        execution.await?.map(|Json(mut response)| {
+            self.paginate_navigation_rows(
+                &mut response.matches,
+                &mut response.completeness,
+                response.mode,
+                page_limit,
+                resume_offset,
+                continuation_binding.clone(),
+            );
             Json(self.present_outgoing_calls_response(response, params.response_mode))
         })
     }

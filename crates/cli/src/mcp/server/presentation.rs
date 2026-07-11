@@ -8,9 +8,11 @@ use crate::domain::model::TextMatch;
 use crate::mcp::server_cache::{ContinuationBinding, SessionContinuationCache};
 use crate::mcp::types::{
     ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, ResultCompleteness,
-    ResultTruncationReason, ResultUnit, SearchHybridDiagnosticsSummary, SearchHybridMatch,
-    SearchHybridMetadata, SearchHybridRankReason,
+    ResultIncompleteReason, ResultTruncationReason, ResultUnit, SearchHybridDiagnosticsSummary,
+    SearchHybridMatch, SearchHybridMetadata, SearchHybridRankReason,
 };
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Outcome of resolving a session `result_handle` + `match_id` pair for `read_match`.
 #[derive(Debug, Clone)]
@@ -26,6 +28,192 @@ pub(in crate::mcp::server) enum SessionResultHandleLookup {
 }
 
 impl FriggMcpServer {
+    /// Navigation continuations always need a positive page width. Returning a token from an
+    /// empty explicit page would retain the same offset and create an infinite replay loop.
+    pub(super) fn navigation_page_limit(
+        &self,
+        requested: Option<usize>,
+    ) -> Result<usize, ErrorData> {
+        if requested == Some(0) {
+            return Err(Self::invalid_params(
+                "limit must be at least 1 for pageable navigation results",
+                Some(serde_json::json!({ "limit": 0 })),
+            ));
+        }
+        Ok(requested
+            .unwrap_or(self.config.max_search_results)
+            .min(self.config.max_search_results.max(1)))
+    }
+
+    /// Stable v2 binding identity for navigation requests. The opaque continuation itself is
+    /// deliberately excluded: replay validates the repeated, behavior-affecting request.
+    pub(super) fn navigation_continuation_digest<T: serde::Serialize>(
+        tool: &str,
+        params: &T,
+        repository_ids: &[String],
+    ) -> String {
+        let mut request = serde_json::to_value(params)
+            .expect("navigation parameter DTOs must serialize for continuation binding");
+        if let Some(object) = request.as_object_mut() {
+            object.remove("continuation");
+        }
+        let normalized = serde_json::json!({
+            "tool": tool,
+            "request": request,
+            "repository_ids": repository_ids,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("navigation-v2:{:016x}", hasher.finish())
+    }
+
+    /// Resolve the page offset and replay binding for navigation surfaces. Navigation recomputes
+    /// rows rather than retaining them, so the binding deliberately carries only identity and
+    /// offset. This is also used for branches whose target resolution discovers the final scope
+    /// late (route helpers, direct precise fallback, and disambiguation).
+    pub(super) fn navigation_continuation_context<T: serde::Serialize>(
+        &self,
+        tool: &'static str,
+        params: &T,
+        repository_hint: Option<String>,
+        unit: ResultUnit,
+    ) -> Result<(usize, Option<ContinuationBinding>), ErrorData> {
+        let freshness = self
+            .scoped_read_only_tool_execution_context(
+                tool,
+                repository_hint.clone(),
+                RepositoryResponseCacheFreshnessMode::ManifestOnly,
+            )?
+            .cache_freshness;
+        let repository_ids = self
+            .collect_repository_symbol_corpora(repository_hint.as_deref())?
+            .iter()
+            .map(|corpus| corpus.repository_id.clone())
+            .collect::<Vec<_>>();
+        let snapshot_fingerprints = freshness
+            .scopes
+            .as_ref()
+            .map(|scopes| {
+                scopes
+                    .iter()
+                    .map(|scope| format!("{}:{}", scope.repository_id, scope.snapshot_id))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let request_digest = Self::navigation_continuation_digest(tool, params, &repository_ids);
+        let request = serde_json::to_value(params)
+            .expect("navigation parameter DTOs must serialize for continuation lookup");
+        let continuation = request
+            .get("continuation")
+            .and_then(serde_json::Value::as_str);
+        let offset = match continuation {
+            Some(token) => self
+                .session_continuation_lookup(
+                    token,
+                    tool,
+                    &request_digest,
+                    &repository_ids,
+                    &snapshot_fingerprints,
+                    unit,
+                )
+                .map(|binding| binding.next_position)
+                .map_err(|error| {
+                    Self::invalid_params(
+                        error.message.clone(),
+                        Some(serde_json::json!({ "continuation": error })),
+                    )
+                })?,
+            None => 0,
+        };
+        let binding = (!snapshot_fingerprints.is_empty()).then_some(ContinuationBinding {
+            tool,
+            request_digest,
+            repository_ids,
+            snapshot_fingerprints,
+            unit,
+            next_position: 0,
+        });
+        Ok((offset, binding))
+    }
+
+    /// Turn a recomputed, over-fetched active-mode result into one page. The cache binding owns
+    /// only the next offset; rows are always recomputed from the current snapshot.
+    pub(super) fn paginate_navigation_rows<T>(
+        &self,
+        rows: &mut Vec<T>,
+        completeness: &mut ResultCompleteness,
+        mode: NavigationMode,
+        page_limit: usize,
+        resume_offset: usize,
+        binding: Option<ContinuationBinding>,
+    ) {
+        let available = rows.len();
+        if resume_offset >= available {
+            rows.clear();
+        } else if resume_offset > 0 {
+            rows.drain(..resume_offset);
+        }
+        if rows.len() > page_limit {
+            rows.truncate(page_limit);
+        }
+        let total = completeness.total;
+        let omitted = total.is_some_and(|total| resume_offset.saturating_add(rows.len()) < total);
+        let continuation = omitted
+            .then(|| {
+                binding.map(|mut binding| {
+                    binding.next_position = resume_offset.saturating_add(rows.len());
+                    self.store_session_continuation(binding)
+                })
+            })
+            .flatten();
+        *completeness = Self::navigation_completeness(
+            completeness.unit,
+            rows.len(),
+            total,
+            mode,
+            omitted,
+            continuation,
+        );
+    }
+
+    /// Build the shared navigation envelope without allowing an exhausted row page to imply
+    /// semantic precision. `total` is the active-mode pre-page cardinality when known.
+    pub(super) fn navigation_completeness(
+        unit: ResultUnit,
+        returned: usize,
+        total: Option<usize>,
+        mode: NavigationMode,
+        truncated: bool,
+        continuation: Option<String>,
+    ) -> ResultCompleteness {
+        let incomplete_reason = match mode {
+            NavigationMode::Precise => None,
+            NavigationMode::PrecisePartial => {
+                Some(ResultIncompleteReason::NavigationPartialCoverage)
+            }
+            NavigationMode::HeuristicNoPrecise => {
+                Some(ResultIncompleteReason::NavigationHeuristicCoverage)
+            }
+            NavigationMode::UnavailableNoPrecise => {
+                Some(ResultIncompleteReason::NavigationUnavailable)
+            }
+        };
+        ResultCompleteness::try_new(
+            unit,
+            returned,
+            total,
+            mode == NavigationMode::Precise && !truncated,
+            truncated,
+            truncated
+                .then_some(ResultTruncationReason::PageLimit)
+                .into_iter()
+                .collect(),
+            incomplete_reason.into_iter().collect(),
+            continuation,
+        )
+        .expect("navigation completeness arguments must be internally consistent")
+    }
+
     pub(super) fn response_mode(mode: Option<ResponseMode>) -> ResponseMode {
         mode.unwrap_or(ResponseMode::Compact)
     }
@@ -2326,6 +2514,14 @@ mod tests {
         let refs = server.present_find_references_response(
             FindReferencesResponse {
                 total_matches: 0,
+                completeness: FriggMcpServer::navigation_completeness(
+                    ResultUnit::Reference,
+                    0,
+                    Some(0),
+                    NavigationMode::UnavailableNoPrecise,
+                    false,
+                    None,
+                ),
                 matches: Vec::new(),
                 result_handle: None,
                 handle_scope: None,
@@ -2348,6 +2544,14 @@ mod tests {
 
         let defs = server.present_go_to_definition_response(
             GoToDefinitionResponse {
+                completeness: FriggMcpServer::navigation_completeness(
+                    ResultUnit::Definition,
+                    0,
+                    Some(0),
+                    NavigationMode::HeuristicNoPrecise,
+                    false,
+                    None,
+                ),
                 matches: Vec::new(),
                 result_handle: None,
                 handle_scope: None,
@@ -2567,6 +2771,14 @@ mod tests {
         let refs = server.present_find_references_response(
             FindReferencesResponse {
                 total_matches: 0,
+                completeness: FriggMcpServer::navigation_completeness(
+                    ResultUnit::Reference,
+                    0,
+                    Some(0),
+                    NavigationMode::UnavailableNoPrecise,
+                    false,
+                    None,
+                ),
                 matches: Vec::new(),
                 result_handle: None,
                 handle_scope: None,
@@ -2604,6 +2816,14 @@ mod tests {
         let server = presentation_test_server();
         let defs = server.present_go_to_definition_response(
             GoToDefinitionResponse {
+                completeness: FriggMcpServer::navigation_completeness(
+                    ResultUnit::Definition,
+                    0,
+                    Some(0),
+                    NavigationMode::UnavailableNoPrecise,
+                    false,
+                    None,
+                ),
                 matches: Vec::new(),
                 result_handle: None,
                 handle_scope: None,

@@ -4,6 +4,7 @@
 //! corpora when precise partial coverage applies.
 
 use super::*;
+use crate::mcp::types::ResultUnit;
 
 pub(in crate::mcp::server) struct DirectPreciseNavigationTarget {
     pub repository_id: String,
@@ -141,6 +142,14 @@ impl FriggMcpServer {
             let (metadata, note) = Self::metadata_note_pair(metadata);
             return Ok(Some((
                 Json(GoToDefinitionResponse {
+                    completeness: FriggMcpServer::navigation_completeness(
+                        ResultUnit::Definition,
+                        precise_matches.len(),
+                        Some(precise_matches.len()),
+                        Self::navigation_mode_from_precision_label(Some(&precision)),
+                        false,
+                        None,
+                    ),
                     matches: precise_matches,
                     result_handle: None,
                     handle_scope: None,

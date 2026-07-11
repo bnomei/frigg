@@ -735,6 +735,7 @@ async fn security_go_to_definition_rejects_relative_path_traversal_outside_works
             column: Some(12),
             include_follow_up_structural: None,
             limit: None,
+            continuation: None,
             response_mode: None,
         }))
         .await;
@@ -788,6 +789,7 @@ async fn security_go_to_definition_rejects_absolute_path_outside_workspace() {
             column: Some(12),
             include_follow_up_structural: None,
             limit: None,
+            continuation: None,
             response_mode: None,
         }))
         .await;

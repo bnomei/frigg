@@ -15,12 +15,12 @@ use frigg::mcp::types::{
     GoToDefinitionParams, GoToDefinitionResponse, ImpactBundleParams, IncomingCallsParams,
     IncomingCallsResponse, InspectSyntaxTreeResponse, ListFilesParams, ListRepositoriesParams,
     NavigationMode, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadMatchParams,
-    ReadPresentationMode, RecoveryFields, ResponseMode, ResultCompleteness, ResultUnit,
-    SearchHybridParams, SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem,
-    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceParams,
-    WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
+    ReadPresentationMode, RecoveryFields, ResponseMode, ResultCompleteness, ResultIncompleteReason,
+    ResultUnit, SearchHybridParams, SearchHybridQueryShape, SearchHybridRankReason,
+    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
+    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, StructuralResultMode,
+    SyntaxTreeNodeItem, WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceCurrentParams,
+    WorkspaceParams, WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::mcp::{FriggMcpServer, ToolCallDisplayEvent, ToolCallDisplayStatus};
 use frigg::settings::{
@@ -175,6 +175,19 @@ fn assert_omits_absent_metadata_and_note<T: serde::Serialize>(tool_name: &str, r
 
 #[test]
 fn metadata_note_responses_omit_absent_fields_on_wire() {
+    let unavailable = |unit| {
+        ResultCompleteness::try_new(
+            unit,
+            0,
+            Some(0),
+            false,
+            false,
+            vec![],
+            vec![ResultIncompleteReason::NavigationUnavailable],
+            None,
+        )
+        .expect("unavailable navigation fixture completeness")
+    };
     assert_omits_absent_metadata_and_note(
         "search_symbol",
         &SearchSymbolResponse {
@@ -194,6 +207,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
         "find_references",
         &FindReferencesResponse {
             total_matches: 0,
+            completeness: unavailable(ResultUnit::Reference),
             matches: Vec::new(),
             result_handle: None,
             handle_scope: None,
@@ -208,6 +222,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
     assert_omits_absent_metadata_and_note(
         "go_to_definition",
         &GoToDefinitionResponse {
+            completeness: unavailable(ResultUnit::Definition),
             matches: Vec::new(),
             result_handle: None,
             handle_scope: None,
@@ -224,6 +239,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
     assert_omits_absent_metadata_and_note(
         "find_declarations",
         &FindDeclarationsResponse {
+            completeness: unavailable(ResultUnit::Declaration),
             matches: Vec::new(),
             result_handle: None,
             mode: NavigationMode::UnavailableNoPrecise,
@@ -237,6 +253,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
     assert_omits_absent_metadata_and_note(
         "find_implementations",
         &FindImplementationsResponse {
+            completeness: unavailable(ResultUnit::Implementation),
             matches: Vec::new(),
             result_handle: None,
             mode: NavigationMode::UnavailableNoPrecise,
@@ -250,6 +267,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
     assert_omits_absent_metadata_and_note(
         "incoming_calls",
         &IncomingCallsResponse {
+            completeness: unavailable(ResultUnit::IncomingCall),
             matches: Vec::new(),
             result_handle: None,
             mode: NavigationMode::UnavailableNoPrecise,
@@ -264,6 +282,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
     assert_omits_absent_metadata_and_note(
         "outgoing_calls",
         &OutgoingCallsResponse {
+            completeness: unavailable(ResultUnit::OutgoingCall),
             matches: Vec::new(),
             result_handle: None,
             mode: NavigationMode::UnavailableNoPrecise,

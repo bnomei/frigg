@@ -3,7 +3,7 @@
 //! Shared resolution and response assembly for definition and declaration location tools.
 
 use super::*;
-use crate::mcp::types::SuggestedNext;
+use crate::mcp::types::{ResultUnit, SuggestedNext};
 
 fn error_code_tag(error: &ErrorData) -> Option<&str> {
     error
@@ -191,6 +191,7 @@ impl FriggMcpServer {
             provenance_result: Result<(), ErrorData>,
         }
 
+        let page_limit = self.navigation_page_limit(params.limit)?;
         let has_symbol = params
             .symbol
             .as_ref()
@@ -202,6 +203,14 @@ impl FriggMcpServer {
             && params.line.is_some();
         if !has_symbol && !has_location {
             let response = GoToDefinitionResponse {
+                completeness: Self::navigation_completeness(
+                    ResultUnit::Definition,
+                    0,
+                    Some(0),
+                    NavigationMode::UnavailableNoPrecise,
+                    false,
+                    None,
+                ),
                 matches: Vec::new(),
                 result_handle: None,
                 handle_scope: None,
@@ -219,6 +228,13 @@ impl FriggMcpServer {
                 params.response_mode,
             )));
         }
+
+        let (resume_offset, continuation_binding) = self.navigation_continuation_context(
+            "go_to_definition",
+            &params,
+            params.repository_id.clone(),
+            ResultUnit::Definition,
+        )?;
 
         let execution_context =
             self.read_only_tool_execution_context("go_to_definition", params.repository_id.clone());
@@ -240,13 +256,10 @@ impl FriggMcpServer {
                 let mut precise_artifacts_failed = 0usize;
                 let mut match_count = 0usize;
                 let result = (|| -> Result<Json<GoToDefinitionResponse>, ErrorData> {
-                    let limit = params_for_blocking
-                        .limit
-                        .unwrap_or(server.config.max_search_results)
-                        .min(server.config.max_search_results.max(1));
+                    let limit = usize::MAX;
                     let include_follow_up_structural =
                         params_for_blocking.include_follow_up_structural == Some(true);
-                    effective_limit = Some(limit);
+                    effective_limit = Some(page_limit);
                     let scoped_execution_context = server.scoped_read_only_tool_execution_context(
                         execution_context_for_blocking.tool_name,
                         execution_context_for_blocking.repository_hint.clone(),
@@ -337,6 +350,14 @@ impl FriggMcpServer {
                                         let (metadata, note) =
                                             Self::metadata_note_pair(metadata);
                                         return Ok(Json(GoToDefinitionResponse {
+                                            completeness: FriggMcpServer::navigation_completeness(
+                                                ResultUnit::Definition,
+                                                precise_matches.len(),
+                                                Some(precise_matches.len()),
+                                                FriggMcpServer::navigation_mode_from_precision_label(Some(precision)),
+                                                false,
+                                                None,
+                                            ),
                                             matches: precise_matches,
                                             result_handle: None,
                     handle_scope: None,
@@ -382,6 +403,14 @@ impl FriggMcpServer {
                                         let (metadata, note) =
                                             Self::metadata_note_pair(metadata);
                                         return Ok(Json(GoToDefinitionResponse {
+                                            completeness: FriggMcpServer::navigation_completeness(
+                                                ResultUnit::Definition,
+                                                route_matches.len(),
+                                                Some(route_matches.len()),
+                                                NavigationMode::HeuristicNoPrecise,
+                                                false,
+                                                None,
+                                            ),
                                             matches: route_matches,
                                             result_handle: None,
                     handle_scope: None,
@@ -459,6 +488,14 @@ impl FriggMcpServer {
                                         );
                                         let (metadata, note) = Self::metadata_note_pair(metadata);
                                         return Ok(Json(GoToDefinitionResponse {
+                                            completeness: FriggMcpServer::navigation_completeness(
+                                                ResultUnit::Definition,
+                                                0,
+                                                Some(0),
+                                                NavigationMode::UnavailableNoPrecise,
+                                                false,
+                                                None,
+                                            ),
                                             matches: Vec::new(),
                                             result_handle: None,
                     handle_scope: None,
@@ -589,6 +626,14 @@ impl FriggMcpServer {
                                     );
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
+                                        completeness: FriggMcpServer::navigation_completeness(
+                                            ResultUnit::Definition,
+                                            precise_matches.len(),
+                                            Some(precise_matches.len()),
+                                            FriggMcpServer::navigation_mode_from_precision_label(Some(precision)),
+                                            false,
+                                            None,
+                                        ),
                                         matches: precise_matches,
                                         result_handle: None,
                     handle_scope: None,
@@ -662,6 +707,14 @@ impl FriggMcpServer {
                                     );
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
+                                        completeness: FriggMcpServer::navigation_completeness(
+                                            ResultUnit::Definition,
+                                            matches.len(),
+                                            Some(matches.len()),
+                                            NavigationMode::HeuristicNoPrecise,
+                                            false,
+                                            None,
+                                        ),
                                         matches,
                                         result_handle: None,
                     handle_scope: None,
@@ -724,6 +777,14 @@ impl FriggMcpServer {
                                     );
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     return Ok(Json(GoToDefinitionResponse {
+                                        completeness: FriggMcpServer::navigation_completeness(
+                                            ResultUnit::Definition,
+                                            0,
+                                            Some(0),
+                                            NavigationMode::UnavailableNoPrecise,
+                                            false,
+                                            None,
+                                        ),
                                         matches: Vec::new(),
                                         result_handle: None,
                     handle_scope: None,
@@ -853,6 +914,14 @@ impl FriggMcpServer {
                                 );
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
                                 Json(GoToDefinitionResponse {
+                                    completeness: FriggMcpServer::navigation_completeness(
+                                        ResultUnit::Definition,
+                                        precise_matches.len(),
+                                        Some(precise_matches.len()),
+                                        FriggMcpServer::navigation_mode_from_precision_label(Some(precision)),
+                                        false,
+                                        None,
+                                    ),
                                     matches: precise_matches,
                                     result_handle: None,
                     handle_scope: None,
@@ -926,6 +995,14 @@ impl FriggMcpServer {
                                 );
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
                                 Json(GoToDefinitionResponse {
+                                    completeness: FriggMcpServer::navigation_completeness(
+                                        ResultUnit::Definition,
+                                        matches.len(),
+                                        Some(matches.len()),
+                                        NavigationMode::HeuristicNoPrecise,
+                                        false,
+                                        None,
+                                    ),
                                     matches,
                                     result_handle: None,
                     handle_scope: None,
@@ -990,6 +1067,10 @@ impl FriggMcpServer {
                                         );
                                         let (metadata, note) = Self::metadata_note_pair(metadata);
                                         return Ok(Json(GoToDefinitionResponse {
+                                            completeness: FriggMcpServer::navigation_completeness(
+                                                ResultUnit::Definition, 0, Some(0),
+                                                NavigationMode::UnavailableNoPrecise, false, None,
+                                            ),
                                             matches: Vec::new(),
                                             result_handle: None,
                     handle_scope: None,
@@ -1116,6 +1197,10 @@ impl FriggMcpServer {
                                     );
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
+                                        completeness: FriggMcpServer::navigation_completeness(
+                                            ResultUnit::Definition, precise_matches.len(), Some(precise_matches.len()),
+                                            FriggMcpServer::navigation_mode_from_precision_label(Some(precision)), false, None,
+                                        ),
                                         matches: precise_matches,
                                         result_handle: None,
                     handle_scope: None,
@@ -1189,6 +1274,10 @@ impl FriggMcpServer {
                                     );
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
+                                        completeness: FriggMcpServer::navigation_completeness(
+                                            ResultUnit::Definition, matches.len(), Some(matches.len()),
+                                            NavigationMode::HeuristicNoPrecise, false, None,
+                                        ),
                                         matches,
                                         result_handle: None,
                     handle_scope: None,
@@ -1261,6 +1350,10 @@ impl FriggMcpServer {
                                     );
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
+                                        completeness: FriggMcpServer::navigation_completeness(
+                                            ResultUnit::Definition, precise_matches.len(), Some(precise_matches.len()),
+                                            FriggMcpServer::navigation_mode_from_precision_label(Some(precision)), false, None,
+                                        ),
                                         matches: precise_matches,
                                         result_handle: None,
                     handle_scope: None,
@@ -1378,6 +1471,14 @@ impl FriggMcpServer {
                     }
                 }
             }
+            self.paginate_navigation_rows(
+                &mut response.matches,
+                &mut response.completeness,
+                response.mode,
+                page_limit,
+                resume_offset,
+                continuation_binding.clone(),
+            );
             Json(self.present_go_to_definition_response(response, params.response_mode))
         });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
@@ -1439,6 +1540,14 @@ impl FriggMcpServer {
             provenance_result: Result<(), ErrorData>,
         }
 
+        let page_limit = self.navigation_page_limit(params.limit)?;
+        let (resume_offset, continuation_binding) = self.navigation_continuation_context(
+            "find_declarations",
+            &params,
+            params.repository_id.clone(),
+            ResultUnit::Declaration,
+        )?;
+
         let execution_context = self
             .read_only_tool_execution_context("find_declarations", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -1460,13 +1569,10 @@ impl FriggMcpServer {
                 let mut match_count = 0usize;
 
                 let result = (|| -> Result<Json<FindDeclarationsResponse>, ErrorData> {
-                    let limit = params_for_blocking
-                        .limit
-                        .unwrap_or(server.config.max_search_results)
-                        .min(server.config.max_search_results.max(1));
+                    let limit = usize::MAX;
                     let include_follow_up_structural =
                         params_for_blocking.include_follow_up_structural == Some(true);
-                    effective_limit = Some(limit);
+                    effective_limit = Some(page_limit);
                     let scoped_execution_context = server.scoped_read_only_tool_execution_context(
                         execution_context_for_blocking.tool_name,
                         execution_context_for_blocking.repository_hint.clone(),
@@ -1519,6 +1625,14 @@ impl FriggMcpServer {
                             );
                             let (metadata, note) = Self::metadata_note_pair(metadata);
                             let response = FindDeclarationsResponse {
+                                completeness: FriggMcpServer::navigation_completeness(
+                                    ResultUnit::Declaration,
+                                    0,
+                                    Some(0),
+                                    NavigationMode::UnavailableNoPrecise,
+                                    false,
+                                    None,
+                                ),
                                 matches: Vec::new(),
                                 result_handle: None,
                                 mode: NavigationMode::UnavailableNoPrecise,
@@ -1636,6 +1750,16 @@ impl FriggMcpServer {
                             Self::metadata_with_freshness_basis(metadata, &cache_freshness.basis);
                         let (metadata, note) = Self::metadata_note_pair(metadata);
                         let response = FindDeclarationsResponse {
+                            completeness: FriggMcpServer::navigation_completeness(
+                                ResultUnit::Declaration,
+                                precise_matches.len(),
+                                Some(precise_matches.len()),
+                                FriggMcpServer::navigation_mode_from_precision_label(Some(
+                                    precision,
+                                )),
+                                false,
+                                None,
+                            ),
                             matches: precise_matches,
                             result_handle: None,
                             mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
@@ -1705,6 +1829,14 @@ impl FriggMcpServer {
                         Self::metadata_with_freshness_basis(metadata, &cache_freshness.basis);
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     let response = FindDeclarationsResponse {
+                        completeness: FriggMcpServer::navigation_completeness(
+                            ResultUnit::Declaration,
+                            matches.len(),
+                            Some(matches.len()),
+                            NavigationMode::HeuristicNoPrecise,
+                            false,
+                            None,
+                        ),
                         matches,
                         result_handle: None,
                         mode: NavigationMode::HeuristicNoPrecise,
@@ -1775,7 +1907,15 @@ impl FriggMcpServer {
             })
             .await?;
 
-        let result = execution.result.map(|Json(response)| {
+        let result = execution.result.map(|Json(mut response)| {
+            self.paginate_navigation_rows(
+                &mut response.matches,
+                &mut response.completeness,
+                response.mode,
+                page_limit,
+                resume_offset,
+                continuation_binding.clone(),
+            );
             Json(self.present_find_declarations_response(response, params.response_mode))
         });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)

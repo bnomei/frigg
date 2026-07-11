@@ -8,7 +8,7 @@ use crate::mcp::server_state::NavigationTargetSelection;
 use crate::mcp::types::{
     CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
     FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
-    NavigationLocation, NavigationMode, OutgoingCallsResponse, RecoveryFields,
+    NavigationLocation, NavigationMode, OutgoingCallsResponse, RecoveryFields, ResultUnit,
 };
 use rmcp::model::ErrorCode;
 use serde::Serialize;
@@ -792,13 +792,39 @@ fn call_hierarchy_availability_distinguishes_heuristic_and_unavailable_modes() {
 
 #[test]
 fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
-    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
+    let workspace_root = temp_workspace_root("compact-navigation-presenters");
+    fs::create_dir_all(workspace_root.join("src")).expect("fixture src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn target() {}\n").expect("fixture source");
+    let config =
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()]).expect("fixture config");
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("fixture workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("fixture workspace should attach");
+    let repository_id = workspace.repository_id.clone();
 
     let (metadata, note) = compact_metadata_note();
     let references = server.present_find_references_response(
         FindReferencesResponse {
             total_matches: 1,
-            matches: vec![reference_match()],
+            completeness: FriggMcpServer::navigation_completeness(
+                ResultUnit::Reference,
+                1,
+                Some(1),
+                NavigationMode::HeuristicNoPrecise,
+                false,
+                None,
+            ),
+            matches: vec![reference_match(&repository_id)],
             result_handle: None,
             handle_scope: None,
             handle_expires: None,
@@ -814,13 +840,27 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
     assert_eq!(references.total_matches, 1);
     assert_eq!(references.mode, NavigationMode::HeuristicNoPrecise);
     assert_eq!(references.matches[0].match_id.as_deref(), Some("nav:m1"));
-    assert_compact_handle(&server, &references.result_handle, 11, Some(7));
+    assert_compact_handle(
+        &server,
+        &references.result_handle,
+        &repository_id,
+        11,
+        Some(7),
+    );
     assert!(serialized.get("matches").is_some());
 
     let (metadata, note) = compact_metadata_note();
     let declarations = server.present_find_declarations_response(
         FindDeclarationsResponse {
-            matches: vec![navigation_location(12, 4)],
+            completeness: FriggMcpServer::navigation_completeness(
+                ResultUnit::Declaration,
+                1,
+                Some(1),
+                NavigationMode::PrecisePartial,
+                false,
+                None,
+            ),
+            matches: vec![navigation_location(&repository_id, 12, 4)],
             result_handle: None,
             mode: NavigationMode::PrecisePartial,
             target_selection: None,
@@ -834,12 +874,26 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
     assert_compact_shape("find_declarations", &declarations);
     assert_eq!(declarations.mode, NavigationMode::PrecisePartial);
     assert_eq!(declarations.matches[0].match_id.as_deref(), Some("nav:m1"));
-    assert_compact_handle(&server, &declarations.result_handle, 12, Some(4));
+    assert_compact_handle(
+        &server,
+        &declarations.result_handle,
+        &repository_id,
+        12,
+        Some(4),
+    );
 
     let (metadata, note) = compact_metadata_note();
     let implementations = server.present_find_implementations_response(
         FindImplementationsResponse {
-            matches: vec![implementation_match()],
+            completeness: FriggMcpServer::navigation_completeness(
+                ResultUnit::Implementation,
+                1,
+                Some(1),
+                NavigationMode::HeuristicNoPrecise,
+                false,
+                None,
+            ),
+            matches: vec![implementation_match(&repository_id)],
             result_handle: None,
             mode: NavigationMode::HeuristicNoPrecise,
             target_selection: None,
@@ -856,7 +910,13 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
         implementations.matches[0].match_id.as_deref(),
         Some("nav:m1")
     );
-    assert_compact_handle(&server, &implementations.result_handle, 13, Some(5));
+    assert_compact_handle(
+        &server,
+        &implementations.result_handle,
+        &repository_id,
+        13,
+        Some(5),
+    );
 
     let availability = NavigationAvailability {
         status: "heuristic".to_owned(),
@@ -867,7 +927,15 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
     let (metadata, note) = compact_metadata_note();
     let incoming = server.present_incoming_calls_response(
         IncomingCallsResponse {
-            matches: vec![call_match(17, 9, "calls")],
+            completeness: FriggMcpServer::navigation_completeness(
+                ResultUnit::IncomingCall,
+                1,
+                Some(1),
+                NavigationMode::HeuristicNoPrecise,
+                false,
+                None,
+            ),
+            matches: vec![call_match(&repository_id, 17, 9, "calls")],
             result_handle: None,
             mode: NavigationMode::HeuristicNoPrecise,
             availability: Some(availability.clone()),
@@ -895,12 +963,26 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
             .and_then(Value::as_str),
         Some("heuristic")
     );
-    assert_compact_handle(&server, &incoming.result_handle, 17, Some(9));
+    assert_compact_handle(
+        &server,
+        &incoming.result_handle,
+        &repository_id,
+        17,
+        Some(9),
+    );
 
     let (metadata, note) = compact_metadata_note();
     let outgoing = server.present_outgoing_calls_response(
         OutgoingCallsResponse {
-            matches: vec![call_match(19, 3, "calls")],
+            completeness: FriggMcpServer::navigation_completeness(
+                ResultUnit::OutgoingCall,
+                1,
+                Some(1),
+                NavigationMode::HeuristicNoPrecise,
+                false,
+                None,
+            ),
+            matches: vec![call_match(&repository_id, 19, 3, "calls")],
             result_handle: None,
             mode: NavigationMode::HeuristicNoPrecise,
             availability: Some(availability),
@@ -939,7 +1021,14 @@ fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
         serialized.get("note").is_none(),
         "full-mode diagnostic note still stripped in compact"
     );
-    assert_compact_handle(&server, &outgoing.result_handle, 19, Some(3));
+    assert_compact_handle(
+        &server,
+        &outgoing.result_handle,
+        &repository_id,
+        19,
+        Some(3),
+    );
+    let _ = fs::remove_dir_all(workspace_root);
 }
 
 fn compact_metadata_note() -> (Option<crate::mcp::types::MetadataObject>, Option<String>) {
@@ -967,6 +1056,7 @@ fn assert_compact_shape<T: Serialize>(label: &str, response: &T) -> Value {
 fn assert_compact_handle(
     server: &FriggMcpServer,
     result_handle: &Option<String>,
+    repository_id: &str,
     line: usize,
     column: Option<usize>,
 ) {
@@ -976,17 +1066,17 @@ fn assert_compact_handle(
     let anchor = server
         .session_result_handle_match(handle, "nav:m1")
         .expect("compact presenter should store match nav:m1");
-    assert_eq!(anchor.repository_id, "repo-compact");
+    assert_eq!(anchor.repository_id, repository_id);
     assert_eq!(anchor.path, "src/lib.rs");
     assert_eq!(anchor.line, line);
     assert_eq!(anchor.column, column);
 }
 
-fn reference_match() -> ReferenceMatch {
+fn reference_match(repository_id: &str) -> ReferenceMatch {
     ReferenceMatch {
         match_id: None,
         stable_symbol_id: None,
-        repository_id: "repo-compact".to_owned(),
+        repository_id: repository_id.to_owned(),
         symbol: "target".to_owned(),
         path: "src/lib.rs".to_owned(),
         line: 11,
@@ -1000,12 +1090,12 @@ fn reference_match() -> ReferenceMatch {
     }
 }
 
-fn navigation_location(line: usize, column: usize) -> NavigationLocation {
+fn navigation_location(repository_id: &str, line: usize, column: usize) -> NavigationLocation {
     NavigationLocation {
         match_id: None,
         stable_symbol_id: None,
         symbol: "target".to_owned(),
-        repository_id: "repo-compact".to_owned(),
+        repository_id: repository_id.to_owned(),
         path: "src/lib.rs".to_owned(),
         line,
         column,
@@ -1017,13 +1107,13 @@ fn navigation_location(line: usize, column: usize) -> NavigationLocation {
     }
 }
 
-fn implementation_match() -> ImplementationMatch {
+fn implementation_match(repository_id: &str) -> ImplementationMatch {
     ImplementationMatch {
         match_id: None,
         stable_symbol_id: None,
         symbol: "target".to_owned(),
         kind: Some("function".to_owned()),
-        repository_id: "repo-compact".to_owned(),
+        repository_id: repository_id.to_owned(),
         path: "src/lib.rs".to_owned(),
         line: 13,
         column: 5,
@@ -1036,14 +1126,19 @@ fn implementation_match() -> ImplementationMatch {
     }
 }
 
-fn call_match(line: usize, column: usize, relation: &str) -> CallHierarchyMatch {
+fn call_match(
+    repository_id: &str,
+    line: usize,
+    column: usize,
+    relation: &str,
+) -> CallHierarchyMatch {
     CallHierarchyMatch {
         match_id: None,
         source_stable_symbol_id: None,
         target_stable_symbol_id: None,
         source_symbol: "caller".to_owned(),
         target_symbol: "target".to_owned(),
-        repository_id: "repo-compact".to_owned(),
+        repository_id: repository_id.to_owned(),
         path: "src/lib.rs".to_owned(),
         line,
         column,

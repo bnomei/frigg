@@ -112,6 +112,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -191,6 +192,7 @@ async fn navigation_go_to_definition_defaults_to_compact_but_keeps_mode_and_hand
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: None,
         }))
         .await
@@ -273,6 +275,7 @@ async fn navigation_go_to_definition_falls_back_to_direct_precise_symbol_when_co
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -347,6 +350,7 @@ async fn navigation_go_to_definition_uses_php_helper_literal_for_direct_precise_
             column: Some(blade_source.find("Settings").expect("literal should exist") + 4),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -429,6 +433,7 @@ async fn navigation_go_to_definition_uses_route_helper_literal_for_direct_precis
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -515,6 +520,7 @@ async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_f
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -667,6 +673,7 @@ async fn navigation_go_to_definition_prefers_route_helper_precise_match_when_cur
             column: Some(route_helper_column),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -733,6 +740,7 @@ async fn navigation_go_to_definition_prefers_route_source_fallback_for_blade_att
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -783,6 +791,7 @@ async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_af
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -803,6 +812,7 @@ async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_af
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -831,6 +841,7 @@ async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_af
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -865,6 +876,7 @@ async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_
             column: Some(35),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -910,6 +922,7 @@ async fn navigation_go_to_definition_rust_use_path_prefers_imported_symbol_over_
             column: Some(use_line.find("helper").expect("import token present") + 1),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -962,6 +975,7 @@ async fn navigation_go_to_definition_rust_reexport_alias_resolves_underlying_sym
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1015,6 +1029,7 @@ async fn navigation_go_to_definition_rust_method_call_prefers_impl_method_over_f
             column: Some(call_line.rfind("render").expect("method token present") + 1),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1064,6 +1079,7 @@ async fn navigation_go_to_definition_requires_disambiguation_for_same_rank_symbo
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1192,6 +1208,7 @@ async fn navigation_go_to_definition_precise_results_round_trip_through_stable_s
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1286,6 +1303,7 @@ async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_bud
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1369,6 +1387,7 @@ async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_targ
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1409,6 +1428,7 @@ async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_da
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1451,6 +1471,7 @@ async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1471,6 +1492,7 @@ async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1499,6 +1521,7 @@ async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1534,6 +1557,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1557,6 +1581,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1599,6 +1624,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1721,6 +1747,7 @@ class NullAnalyticsRecorder implements AnalyticsRecorder\n\
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1769,6 +1796,7 @@ async fn navigation_find_implementations_classifies_blanket_rust_impls_without_p
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1852,6 +1880,7 @@ async fn navigation_find_implementations_degrades_when_scip_artifact_exceeds_bud
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1962,6 +1991,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -1988,6 +2018,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2009,6 +2040,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2133,6 +2165,7 @@ async fn navigation_find_implementations_prefers_relationship_bearing_precise_ca
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2239,6 +2272,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2256,6 +2290,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2273,6 +2308,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2337,6 +2373,7 @@ async fn navigation_find_implementations_uses_precise_occurrences_when_relations
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2430,6 +2467,7 @@ async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2519,6 +2557,7 @@ async fn navigation_incoming_calls_marks_callable_precise_occurrences_as_calls()
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2605,6 +2644,7 @@ async fn navigation_incoming_calls_matches_precise_typescript_symbols_without_di
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2706,6 +2746,7 @@ async fn navigation_incoming_calls_marks_unspecified_typescript_occurrences_as_c
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2811,6 +2852,7 @@ async fn navigation_outgoing_calls_uses_precise_occurrences_when_relationships_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -2923,6 +2965,7 @@ async fn navigation_outgoing_calls_matches_typescript_callees_with_unspecified_k
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -3013,6 +3056,7 @@ async fn navigation_outgoing_calls_ignores_precise_callable_references_without_c
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -3054,6 +3098,7 @@ async fn navigation_outgoing_calls_heuristic_fallback_keeps_empty_set_instead_of
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -3100,6 +3145,22 @@ async fn navigation_go_to_definition_empty_params_returns_recovery() {
             .any(|tool| tool == "search_symbol"),
         "related tools should include search_symbol"
     );
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_empty_params_reject_zero_limit() {
+    let server = server_for_fixture().await;
+    let error = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            limit: Some(0),
+            ..GoToDefinitionParams::default()
+        }))
+        .await
+    {
+        Ok(_) => panic!("zero-width navigation request must be rejected before recovery"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
 }
 
 #[tokio::test]

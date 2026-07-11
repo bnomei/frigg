@@ -1,6 +1,6 @@
 //! Navigation MCP wire types: references, definitions, declarations, implementations, and call hierarchy.
 
-use super::{MetadataObject, ResponseMode};
+use super::{MetadataObject, ResponseMode, ResultCompleteness};
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ pub struct FindReferencesParams {
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by a prior identical request.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -63,6 +65,8 @@ pub struct NavigationTargetSelectionSummary {
 pub struct FindReferencesResponse {
     pub total_matches: usize,
     pub matches: Vec<ReferenceMatch>,
+    /// Canonical cardinality, coverage, and paging truth for reference rows.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     /// Short scope label for `match_id` values (for example `nav`).
@@ -96,6 +100,8 @@ pub struct GoToDefinitionParams {
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by a prior identical request.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -126,6 +132,8 @@ pub struct NavigationLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionResponse {
     pub matches: Vec<NavigationLocation>,
+    /// Canonical cardinality, coverage, and paging truth for definition rows.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     /// Short scope label for `match_id` values (for example `nav`).
@@ -165,6 +173,8 @@ pub struct FindDeclarationsParams {
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by a prior identical request.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -173,6 +183,8 @@ pub struct FindDeclarationsParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsResponse {
     pub matches: Vec<NavigationLocation>,
+    /// Canonical cardinality, coverage, and paging truth for declaration rows.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
@@ -199,6 +211,8 @@ pub struct FindImplementationsParams {
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by a prior identical request.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -231,6 +245,8 @@ pub struct ImplementationMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsResponse {
     pub matches: Vec<ImplementationMatch>,
+    /// Canonical cardinality, coverage, and paging truth for implementation rows.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
@@ -257,6 +273,8 @@ pub struct IncomingCallsParams {
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by a prior identical request.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -272,6 +290,8 @@ pub struct OutgoingCallsParams {
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by a prior identical request.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -314,6 +334,8 @@ pub struct CallHierarchyMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    /// Canonical cardinality, coverage, and paging truth for incoming call rows.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
@@ -345,6 +367,8 @@ pub const OUTGOING_CALLS_TRUST_NOTE: &str = "Callee edges are provisional; confi
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    /// Canonical cardinality, coverage, and paging truth for outgoing call rows.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
@@ -808,9 +832,11 @@ mod tests {
         use super::{
             NavigationEdgeTrust, NavigationMode, OUTGOING_CALLS_TRUST_NOTE, OutgoingCallsResponse,
         };
-        use crate::mcp::types::RecoveryFields;
+        use crate::mcp::types::{RecoveryFields, ResultCompleteness, ResultUnit};
 
         let response = OutgoingCallsResponse {
+            completeness: ResultCompleteness::complete(ResultUnit::OutgoingCall, 0, 0)
+                .expect("empty fixture is complete"),
             matches: Vec::new(),
             result_handle: None,
             mode: NavigationMode::HeuristicNoPrecise,
@@ -835,10 +861,21 @@ mod tests {
     #[test]
     fn go_to_definition_ambiguous_location_serializes_when_true() {
         use super::GoToDefinitionResponse;
-        use crate::mcp::types::{NavigationMode, RecoveryFields};
+        use crate::mcp::types::{NavigationMode, RecoveryFields, ResultCompleteness, ResultUnit};
         use serde_json::json;
 
         let response = GoToDefinitionResponse {
+            completeness: ResultCompleteness::try_new(
+                ResultUnit::Definition,
+                0,
+                Some(0),
+                false,
+                false,
+                vec![],
+                vec![crate::mcp::types::ResultIncompleteReason::NavigationHeuristicCoverage],
+                None,
+            )
+            .expect("heuristic fixture is internally consistent"),
             matches: Vec::new(),
             result_handle: None,
             handle_scope: None,
@@ -860,6 +897,8 @@ mod tests {
         assert_eq!(value["correction_hint"], "retry with symbol");
 
         let quiet = GoToDefinitionResponse {
+            completeness: ResultCompleteness::complete(ResultUnit::Definition, 0, 0)
+                .expect("empty precise fixture is complete"),
             matches: Vec::new(),
             result_handle: None,
             handle_scope: None,

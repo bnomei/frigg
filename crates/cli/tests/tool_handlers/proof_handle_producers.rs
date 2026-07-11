@@ -251,6 +251,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             include_definition: Some(true),
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -271,6 +272,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -291,6 +293,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -314,6 +317,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -337,6 +341,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -357,6 +362,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await

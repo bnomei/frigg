@@ -187,6 +187,7 @@ impl FriggMcpServer {
                 include_definition: Some(false),
                 include_follow_up_structural: None,
                 limit: None,
+                continuation: None,
                 response_mode: params.response_mode,
             })
             .await?
@@ -201,6 +202,7 @@ impl FriggMcpServer {
                 column: selected_column,
                 include_follow_up_structural: None,
                 limit: None,
+                continuation: None,
                 response_mode: params.response_mode,
             })
             .await?
@@ -224,6 +226,7 @@ impl FriggMcpServer {
                         column: selected_column,
                         include_follow_up_structural: None,
                         limit: None,
+                        continuation: None,
                         response_mode: params.response_mode,
                     })
                     .await?

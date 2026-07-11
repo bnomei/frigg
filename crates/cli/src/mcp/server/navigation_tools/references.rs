@@ -4,6 +4,8 @@
 //! cache reuse.
 
 use super::*;
+use crate::mcp::server_cache::ContinuationBinding;
+use crate::mcp::types::ResultUnit;
 
 fn error_code_tag(error: &ErrorData) -> Option<&str> {
     error
@@ -365,6 +367,7 @@ impl FriggMcpServer {
         &self,
         params: FindReferencesParams,
     ) -> Result<Json<FindReferencesResponse>, ErrorData> {
+        let requested_page_limit = self.navigation_page_limit(params.limit)?;
         let execution_context =
             self.read_only_tool_execution_context("find_references", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -396,23 +399,22 @@ impl FriggMcpServer {
             let mut source_files_loaded = 0usize;
             let mut source_bytes_loaded = 0u64;
             let mut effective_limit: Option<usize> = None;
+            let page_limit = requested_page_limit;
+            let mut resume_offset = 0usize;
+            let mut continuation_binding: Option<ContinuationBinding> = None;
             let mut target_selection_candidate_count = 0usize;
             let mut target_selection_same_rank_count = 0usize;
             let result = (|| -> Result<Json<FindReferencesResponse>, ErrorData> {
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
+                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                    execution_context_for_blocking.tool_name,
+                    execution_context_for_blocking.repository_hint.clone(),
+                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                )?;
+                let cache_freshness = scoped_execution_context.cache_freshness;
+                let limit = page_limit;
                 let include_definition = params_for_blocking.include_definition.unwrap_or(true);
                 effective_limit = Some(limit);
-                let freshness_basis = server
-                    .scoped_read_only_tool_execution_context(
-                        execution_context_for_blocking.tool_name,
-                        execution_context_for_blocking.repository_hint.clone(),
-                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
-                    )?
-                    .cache_freshness
-                    .basis;
+                let freshness_basis = cache_freshness.basis.clone();
                 let attach_freshness = |metadata| {
                     Self::metadata_with_freshness_basis(metadata, &freshness_basis)
                 };
@@ -423,6 +425,43 @@ impl FriggMcpServer {
                     .iter()
                     .map(|corpus| corpus.repository_id.clone())
                     .collect::<Vec<_>>();
+                let snapshot_fingerprints = cache_freshness
+                    .scopes
+                    .as_ref()
+                    .map(|scopes| scopes.iter().map(|scope| {
+                        format!("{}:{}", scope.repository_id, scope.snapshot_id)
+                    }).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let request_digest = Self::navigation_continuation_digest(
+                    "find_references",
+                    &params_for_blocking,
+                    &scoped_repository_ids,
+                );
+                resume_offset = match params_for_blocking.continuation.as_deref() {
+                    Some(token) => server.session_continuation_lookup(
+                        token,
+                        "find_references",
+                        &request_digest,
+                        &scoped_repository_ids,
+                        &snapshot_fingerprints,
+                        ResultUnit::Reference,
+                    ).map(|binding| binding.next_position).map_err(|error| {
+                        Self::invalid_params(error.message.clone(), Some(json!({ "continuation": error })))
+                    })?,
+                    None => 0,
+                };
+                continuation_binding = (!snapshot_fingerprints.is_empty()).then_some(ContinuationBinding {
+                    tool: "find_references",
+                    request_digest,
+                    repository_ids: scoped_repository_ids.clone(),
+                    snapshot_fingerprints,
+                    unit: ResultUnit::Reference,
+                    next_position: 0,
+                });
+                // Pagination must count the active mode before applying a page bound. IO remains
+                // governed by the navigation resource budgets; this only removes the response cap.
+                let limit = usize::MAX;
+                effective_limit = Some(page_limit);
                 manifest_walk_diagnostics_count = corpora
                     .iter()
                     .map(|corpus| corpus.diagnostics.manifest_walk_count)
@@ -598,7 +637,17 @@ impl FriggMcpServer {
                                     Self::metadata_note_pair(attach_freshness(metadata));
 
                                 return Ok(Json(FindReferencesResponse {
-                                    total_matches: matches.len(),
+                                    total_matches,
+                                    completeness: FriggMcpServer::navigation_completeness(
+                                        ResultUnit::Reference,
+                                        matches.len(),
+                                        Some(total_matches),
+                                        FriggMcpServer::navigation_mode_from_precision_label(
+                                            Some(precision),
+                                        ),
+                                        matches.len() < total_matches,
+                                        None,
+                                    ),
                                     matches,
                                     result_handle: None,
                     handle_scope: None,
@@ -651,6 +700,14 @@ impl FriggMcpServer {
                             Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(FindReferencesResponse {
                             total_matches: 0,
+                            completeness: FriggMcpServer::navigation_completeness(
+                                ResultUnit::Reference,
+                                0,
+                                Some(0),
+                                NavigationMode::UnavailableNoPrecise,
+                                false,
+                                None,
+                            ),
                             matches: Vec::new(),
                             result_handle: None,
                     handle_scope: None,
@@ -926,7 +983,15 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
 
                     return Ok(Json(FindReferencesResponse {
-                        total_matches: matches.len(),
+                        total_matches,
+                        completeness: FriggMcpServer::navigation_completeness(
+                            ResultUnit::Reference,
+                            matches.len(),
+                            Some(total_matches),
+                            FriggMcpServer::navigation_mode_from_precision_label(Some(precision)),
+                            matches.len() < total_matches,
+                            None,
+                        ),
                         matches,
                         result_handle: None,
                     handle_scope: None,
@@ -1078,7 +1143,15 @@ impl FriggMcpServer {
                 resolution_precision = Some("heuristic".to_owned());
 
                 Ok(Json(FindReferencesResponse {
-                    total_matches: matches.len(),
+                    total_matches,
+                    completeness: FriggMcpServer::navigation_completeness(
+                        ResultUnit::Reference,
+                        matches.len(),
+                        Some(total_matches),
+                        NavigationMode::HeuristicNoPrecise,
+                        matches.len() < total_matches,
+                        None,
+                    ),
                     matches,
                     result_handle: None,
                     handle_scope: None,
@@ -1105,6 +1178,18 @@ impl FriggMcpServer {
                 None,
                 None,
             );
+            let result = result.map(|Json(mut response)| {
+                server.paginate_navigation_rows(
+                    &mut response.matches,
+                    &mut response.completeness,
+                    response.mode,
+                    page_limit,
+                    resume_offset,
+                    continuation_binding.clone(),
+                );
+                response.total_matches = response.completeness.total.unwrap_or(response.matches.len());
+                Json(response)
+            });
             let provenance_result = server.record_provenance_with_outcome_and_metadata(
                 execution_context_for_blocking.tool_name,
                 execution_context_for_blocking.repository_hint.as_deref(),
