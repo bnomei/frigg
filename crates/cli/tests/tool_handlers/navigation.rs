@@ -3258,6 +3258,27 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         response.summary.incoming_calls_count,
         response.incoming_calls.len()
     );
+    assert_eq!(
+        response.symbols_completeness.returned,
+        response.symbols.len()
+    );
+    assert_eq!(
+        response.references_completeness.returned,
+        response.references.len()
+    );
+    assert_eq!(
+        response.incoming_calls_completeness.returned,
+        response.incoming_calls.len()
+    );
+    assert!(
+        !response.completeness.complete
+            || (response.symbols_completeness.complete
+                && response.references_completeness.complete
+                && response.incoming_calls_completeness.complete),
+        "impact aggregate cannot upgrade a child section: {response:?}"
+    );
+    assert!(response.implementations_completeness.is_none());
+    assert!(!response.implementations_included);
     assert_eq!(response.summary.references_mode, response.references_mode);
     assert_eq!(
         response.summary.incoming_calls_mode,

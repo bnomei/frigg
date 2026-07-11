@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    MetadataObject, ReadPresentationMode, RecoveryFields, ResponseMode, SuggestedNext,
-    ZeroHitReason, ZeroHitScope,
+    MetadataObject, ReadPresentationMode, RecoveryFields, ResponseMode, ResultCompleteness,
+    SuggestedNext, ZeroHitReason, ZeroHitScope,
 };
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
@@ -788,6 +788,10 @@ pub struct SearchBatchParams {
     /// Continuation cursor for paginated batch results (match index).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<usize>,
+    /// Opaque v2 continuation for a previous identical batch request. Cannot be combined with
+    /// `resume_from`; the token binds every child probe's scope and repository snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<String>,
 }
 
 /// One merged match row from `search_batch`.
@@ -820,6 +824,9 @@ pub struct SearchBatchProbeSummary {
     pub id: String,
     pub kind: SearchBatchProbeKind,
     pub hits: usize,
+    /// Canonical child cardinality, coverage, and cap state. `hits` remains the legacy count
+    /// projection; consumers must use this envelope when a child cannot prove an exact total.
+    pub completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zero_hit_reason: Option<ZeroHitReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -835,6 +842,8 @@ pub struct SearchBatchProbeSummary {
 pub struct SearchBatchResponse {
     pub matches: Vec<SearchBatchMatch>,
     pub probe_summary: Vec<SearchBatchProbeSummary>,
+    /// Canonical merged-row cardinality, child coverage, and v2 paging truth.
+    pub completeness: ResultCompleteness,
     pub returned: usize,
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -183,6 +183,7 @@ async fn run_search_batch_multi_probe(report: &Mutex<harness::BenchReport>, root
                 repository_id: None,
                 response_mode: Some(ResponseMode::Compact),
                 resume_from: None,
+                continuation: None,
             }))
             .await
             .map_err(|e| format!("search_batch failed: {e}"))?

@@ -5,8 +5,23 @@
 use super::*;
 use crate::mcp::types::{
     FindImplementationsParams, FindReferencesParams, ImpactBundleParams, ImpactBundleResponse,
-    IncomingCallsParams, SearchSymbolParams, SearchSymbolPathClass, SuggestedNext,
+    IncomingCallsParams, ResultCompleteness, ResultIncompleteReason, ResultUnit,
+    SearchSymbolParams, SearchSymbolPathClass, SuggestedNext,
 };
+
+fn unavailable_section(unit: ResultUnit) -> ResultCompleteness {
+    ResultCompleteness::try_new(
+        unit,
+        0,
+        None,
+        false,
+        false,
+        Vec::new(),
+        vec![ResultIncompleteReason::NavigationUnavailable],
+        None,
+    )
+    .expect("unavailable impact section completeness is valid")
+}
 
 impl FriggMcpServer {
     pub(in crate::mcp::server) async fn impact_bundle_impl(
@@ -52,17 +67,22 @@ impl FriggMcpServer {
                         false,
                     ),
                     symbols: Vec::new(),
+                    symbols_completeness: unavailable_section(ResultUnit::Symbol),
                     symbols_result_handle: None,
                     references: Vec::new(),
+                    references_completeness: unavailable_section(ResultUnit::Reference),
                     references_result_handle: None,
                     references_mode: NavigationMode::UnavailableNoPrecise,
                     incoming_calls: Vec::new(),
+                    incoming_calls_completeness: unavailable_section(ResultUnit::IncomingCall),
                     incoming_calls_result_handle: None,
                     incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
                     implementations: Vec::new(),
+                    implementations_completeness: None,
                     implementations_result_handle: None,
                     implementations_mode: None,
                     implementations_included: false,
+                    completeness: unavailable_section(ResultUnit::ImpactSection),
                     recovery,
                 }
                 .with_computed_summary(),
@@ -132,6 +152,13 @@ impl FriggMcpServer {
                     &Ok::<(), ErrorData>(()),
                 )
                 .await;
+            let references_completeness = unavailable_section(ResultUnit::Reference);
+            let incoming_calls_completeness = unavailable_section(ResultUnit::IncomingCall);
+            let completeness = ImpactBundleResponse::aggregate_completeness(&[
+                &symbols_response.completeness,
+                &references_completeness,
+                &incoming_calls_completeness,
+            ]);
             let response = ImpactBundleResponse {
                 symbol,
                 path_class: path_class_label,
@@ -146,17 +173,22 @@ impl FriggMcpServer {
                     false,
                 ),
                 symbols: Vec::new(),
+                symbols_completeness: symbols_response.completeness.clone(),
                 symbols_result_handle: symbols_response.result_handle,
                 references: Vec::new(),
+                references_completeness,
                 references_result_handle: None,
                 references_mode: NavigationMode::UnavailableNoPrecise,
                 incoming_calls: Vec::new(),
+                incoming_calls_completeness,
                 incoming_calls_result_handle: None,
                 incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
                 implementations: Vec::new(),
+                implementations_completeness: None,
                 implementations_result_handle: None,
                 implementations_mode: None,
                 implementations_included: false,
+                completeness,
                 recovery,
             }
             .with_computed_summary();
@@ -215,30 +247,35 @@ impl FriggMcpServer {
         let include_implementations =
             params.include_implementations.unwrap_or(false) || kind_wants_impls;
 
-        let (implementations, implementations_result_handle, implementations_mode) =
-            if include_implementations {
-                let impl_response = self
-                    .find_implementations_impl(FindImplementationsParams {
-                        symbol: None,
-                        repository_id: selected_repository_id.clone(),
-                        path: selected_path.clone(),
-                        line: selected_line,
-                        column: selected_column,
-                        include_follow_up_structural: None,
-                        limit: None,
-                        continuation: None,
-                        response_mode: params.response_mode,
-                    })
-                    .await?
-                    .0;
-                (
-                    impl_response.matches,
-                    impl_response.result_handle,
-                    Some(impl_response.mode),
-                )
-            } else {
-                (Vec::new(), None, None)
-            };
+        let (
+            implementations,
+            implementations_completeness,
+            implementations_result_handle,
+            implementations_mode,
+        ) = if include_implementations {
+            let impl_response = self
+                .find_implementations_impl(FindImplementationsParams {
+                    symbol: None,
+                    repository_id: selected_repository_id.clone(),
+                    path: selected_path.clone(),
+                    line: selected_line,
+                    column: selected_column,
+                    include_follow_up_structural: None,
+                    limit: None,
+                    continuation: None,
+                    response_mode: params.response_mode,
+                })
+                .await?
+                .0;
+            (
+                impl_response.matches,
+                Some(impl_response.completeness),
+                impl_response.result_handle,
+                Some(impl_response.mode),
+            )
+        } else {
+            (Vec::new(), None, None, None)
+        };
 
         let mut suggested_next = vec![
             SuggestedNext::tool("search_text")
@@ -264,6 +301,18 @@ impl FriggMcpServer {
             ..RecoveryFields::default()
         };
 
+        let mut sections = vec![
+            &symbols_response.completeness,
+            &references_response.completeness,
+            &incoming_response.completeness,
+        ];
+        if let Some(implementations_completeness) = implementations_completeness.as_ref() {
+            sections.push(implementations_completeness);
+        }
+        let symbols_completeness = symbols_response.completeness.clone();
+        let references_completeness = references_response.completeness.clone();
+        let incoming_calls_completeness = incoming_response.completeness.clone();
+        let completeness = ImpactBundleResponse::aggregate_completeness(&sections);
         let response = ImpactBundleResponse {
             symbol: symbol.clone(),
             path_class: path_class_label,
@@ -278,17 +327,22 @@ impl FriggMcpServer {
                 include_implementations,
             ),
             symbols: symbols_response.matches,
+            symbols_completeness,
             symbols_result_handle: symbols_response.result_handle,
             references: references_response.matches,
+            references_completeness,
             references_result_handle: references_response.result_handle,
             references_mode: references_response.mode,
             incoming_calls: incoming_response.matches,
+            incoming_calls_completeness,
             incoming_calls_result_handle: incoming_response.result_handle,
             incoming_calls_mode: incoming_response.mode,
             implementations,
+            implementations_completeness,
             implementations_result_handle,
             implementations_mode,
             implementations_included: include_implementations,
+            completeness,
             recovery,
         };
 

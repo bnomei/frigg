@@ -598,23 +598,36 @@ pub struct ImpactBundleResponse {
     /// Always-on plan-friendly counts / modes / top paths (EXP-nav-impact-shape B).
     pub summary: ImpactBundleSummary,
     pub symbols: Vec<crate::domain::model::SymbolMatch>,
+    /// Cardinality and coverage for the symbol lookup section.
+    pub symbols_completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbols_result_handle: Option<String>,
     pub references: Vec<crate::domain::model::ReferenceMatch>,
+    /// Cardinality and coverage for the references section.
+    pub references_completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub references_result_handle: Option<String>,
     pub references_mode: NavigationMode,
     pub incoming_calls: Vec<CallHierarchyMatch>,
+    /// Cardinality and coverage for the incoming-call section.
+    pub incoming_calls_completeness: ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incoming_calls_result_handle: Option<String>,
     pub incoming_calls_mode: NavigationMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implementations: Vec<ImplementationMatch>,
+    /// Cardinality and coverage for implementations when that section was explicitly included.
+    /// `None` is a policy omission, not hidden truncation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementations_completeness: Option<ResultCompleteness>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub implementations_result_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub implementations_mode: Option<NavigationMode>,
     pub implementations_included: bool,
+    /// Aggregate truth across every included section. It never upgrades a child section's
+    /// coverage or truncation state.
+    pub completeness: ResultCompleteness,
     /// Flattened recovery + **only** `suggested_next` channel (success and zero-hit paths).
     #[serde(flatten, default)]
     pub recovery: super::RecoveryFields,
@@ -698,6 +711,36 @@ impl ImpactBundleResponse {
             self.implementations_included,
         );
         self
+    }
+
+    /// Preserve section truth in the bundle-level envelope. The aggregate's unit is the number
+    /// of included sections rather than a misleading sum of heterogeneous row units.
+    pub fn aggregate_completeness(sections: &[&ResultCompleteness]) -> ResultCompleteness {
+        let returned = sections.len();
+        let truncated = sections.iter().any(|section| section.truncated);
+        let complete = sections.iter().all(|section| section.complete);
+        let mut truncation_reasons = Vec::new();
+        let mut incomplete_reasons = Vec::new();
+        for section in sections {
+            if section.truncated {
+                truncation_reasons.push(super::ResultTruncationReason::ChildLimit);
+            }
+            if !section.complete {
+                incomplete_reasons.push(super::ResultIncompleteReason::ChildIncomplete);
+                incomplete_reasons.extend(section.incomplete_reasons.iter().copied());
+            }
+        }
+        ResultCompleteness::try_new(
+            super::ResultUnit::ImpactSection,
+            returned,
+            Some(returned),
+            complete,
+            truncated,
+            truncation_reasons,
+            incomplete_reasons,
+            None,
+        )
+        .expect("impact aggregate completeness must preserve valid child state")
     }
 }
 
@@ -809,7 +852,10 @@ mod tests {
         EvidencePacket, EvidencePacketClaim, ImpactBundlePathRole, ImpactBundleResponse,
         ImpactBundleSummary, NavigationMode,
     };
-    use crate::mcp::types::{RecoveryFields, SuggestedNext};
+    use crate::mcp::types::{
+        RecoveryFields, ResultCompleteness, ResultIncompleteReason, ResultTruncationReason,
+        ResultUnit, SuggestedNext,
+    };
 
     fn empty_impact_summary(
         references_mode: NavigationMode,
@@ -923,17 +969,30 @@ mod tests {
             path_class: "runtime".to_owned(),
             summary: empty_impact_summary(NavigationMode::Precise, NavigationMode::Precise),
             symbols: Vec::new(),
+            symbols_completeness: ResultCompleteness::complete(ResultUnit::Symbol, 0, 0)
+                .expect("empty symbols fixture is complete"),
             symbols_result_handle: Some("symbols:h1".to_owned()),
             references: Vec::new(),
+            references_completeness: ResultCompleteness::complete(ResultUnit::Reference, 0, 0)
+                .expect("empty references fixture is complete"),
             references_result_handle: Some("refs:h1".to_owned()),
             references_mode: NavigationMode::Precise,
             incoming_calls: Vec::new(),
+            incoming_calls_completeness: ResultCompleteness::complete(
+                ResultUnit::IncomingCall,
+                0,
+                0,
+            )
+            .expect("empty incoming fixture is complete"),
             incoming_calls_result_handle: None,
             incoming_calls_mode: NavigationMode::Precise,
             implementations: Vec::new(),
+            implementations_completeness: None,
             implementations_result_handle: None,
             implementations_mode: None,
             implementations_included: false,
+            completeness: ResultCompleteness::complete(ResultUnit::ImpactSection, 3, 3)
+                .expect("all included fixture sections are complete"),
             recovery: RecoveryFields {
                 suggested_next: vec![
                     SuggestedNext::tool("read_match").with_reason("proof clusters"),
@@ -970,17 +1029,62 @@ mod tests {
                 NavigationMode::UnavailableNoPrecise,
             ),
             symbols: Vec::new(),
+            symbols_completeness: ResultCompleteness::try_new(
+                ResultUnit::Symbol,
+                0,
+                None,
+                false,
+                false,
+                vec![],
+                vec![ResultIncompleteReason::NavigationUnavailable],
+                None,
+            )
+            .expect("unavailable symbols fixture is valid"),
             symbols_result_handle: None,
             references: Vec::new(),
+            references_completeness: ResultCompleteness::try_new(
+                ResultUnit::Reference,
+                0,
+                None,
+                false,
+                false,
+                vec![],
+                vec![ResultIncompleteReason::NavigationUnavailable],
+                None,
+            )
+            .expect("unavailable references fixture is valid"),
             references_result_handle: None,
             references_mode: NavigationMode::UnavailableNoPrecise,
             incoming_calls: Vec::new(),
+            incoming_calls_completeness: ResultCompleteness::try_new(
+                ResultUnit::IncomingCall,
+                0,
+                None,
+                false,
+                false,
+                vec![],
+                vec![ResultIncompleteReason::NavigationUnavailable],
+                None,
+            )
+            .expect("unavailable incoming fixture is valid"),
             incoming_calls_result_handle: None,
             incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
             implementations: Vec::new(),
+            implementations_completeness: None,
             implementations_result_handle: None,
             implementations_mode: None,
             implementations_included: false,
+            completeness: ResultCompleteness::try_new(
+                ResultUnit::ImpactSection,
+                3,
+                Some(3),
+                false,
+                false,
+                vec![],
+                vec![ResultIncompleteReason::ChildIncomplete],
+                None,
+            )
+            .expect("incomplete aggregate fixture is valid"),
             recovery: RecoveryFields {
                 error_code: Some("ZERO_HIT".to_owned()),
                 message: Some("no symbol hits".to_owned()),
@@ -1008,6 +1112,40 @@ mod tests {
         assert_eq!(back.recovery.error_code.as_deref(), Some("ZERO_HIT"));
 
         assert!(value.get("recovery").is_none());
+    }
+
+    #[test]
+    fn impact_bundle_aggregate_completeness_preserves_child_truncation() {
+        let complete = ResultCompleteness::complete(ResultUnit::Symbol, 1, 1)
+            .expect("complete symbol section");
+        let capped = ResultCompleteness::try_new(
+            ResultUnit::Reference,
+            10,
+            Some(11),
+            false,
+            true,
+            vec![ResultTruncationReason::PageLimit],
+            vec![],
+            Some("continuation-test".to_owned()),
+        )
+        .expect("capped reference section");
+        let aggregate = ImpactBundleResponse::aggregate_completeness(&[&complete, &capped]);
+        assert_eq!(aggregate.unit, ResultUnit::ImpactSection);
+        assert_eq!(aggregate.returned, 2);
+        assert_eq!(aggregate.total, Some(2));
+        assert!(!aggregate.complete);
+        assert!(aggregate.truncated);
+        assert!(
+            aggregate
+                .truncation_reasons
+                .contains(&ResultTruncationReason::ChildLimit)
+        );
+        assert!(
+            aggregate
+                .incomplete_reasons
+                .contains(&ResultIncompleteReason::ChildIncomplete)
+        );
+        assert!(aggregate.continuation.is_none());
     }
 
     #[test]

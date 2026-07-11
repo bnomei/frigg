@@ -7,13 +7,17 @@
 //! (still concurrent independent probes).
 
 use super::*;
+use crate::mcp::server_cache::ContinuationBinding;
 use crate::mcp::types::{
-    LatencyClass, RecoveryFields, SearchBatchMatch, SearchBatchMergeMode, SearchBatchParams,
-    SearchBatchProbe, SearchBatchProbeKind, SearchBatchProbeSummary, SearchBatchResponse,
-    SearchHybridParams, SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, SuggestedNext,
-    ZeroHitReason, ZeroHitScope,
+    ContinuationValidationError, LatencyClass, RecoveryFields, ResultCompleteness,
+    ResultIncompleteReason, ResultTruncationReason, ResultUnit, SearchBatchMatch,
+    SearchBatchMergeMode, SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind,
+    SearchBatchProbeSummary, SearchBatchResponse, SearchHybridParams, SearchSymbolParams,
+    SearchSymbolPathClass, SearchTextParams, SuggestedNext, ZeroHitReason, ZeroHitScope,
 };
 use crate::path_class::repository_path_class;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 const MIN_PROBES: usize = 2;
 const MAX_PROBES: usize = 8;
@@ -32,6 +36,16 @@ impl FriggMcpServer {
         &self,
         params: SearchBatchParams,
     ) -> Result<Json<SearchBatchResponse>, ErrorData> {
+        ContinuationValidationError::reject_mixed_cursor_forms(
+            params.resume_from.is_some(),
+            params.continuation.is_some(),
+        )
+        .map_err(|error| {
+            Self::invalid_params(
+                error.message.clone(),
+                Some(serde_json::json!({ "continuation": error })),
+            )
+        })?;
         let probe_count = params.probes.len();
         if !(MIN_PROBES..=MAX_PROBES).contains(&probe_count) {
             return Err(Self::invalid_params(
@@ -74,7 +88,8 @@ impl FriggMcpServer {
             .unwrap_or(self.config.max_search_results.min(30))
             .min(self.config.max_search_results.max(1))
             .max(1);
-        let resume_from = params.resume_from.unwrap_or(0);
+        let (resume_from, continuation_binding) =
+            self.search_batch_continuation_context(&params)?;
         let response_mode = params.response_mode;
         let _merge = params
             .merge
@@ -148,12 +163,55 @@ impl FriggMcpServer {
         let page: Vec<SearchBatchMatch> =
             merged.into_iter().skip(resume_from).take(limit).collect();
         let returned = page.len();
-        let truncated = resume_from + returned < total_merged;
-        let next_resume = truncated.then_some(resume_from + returned);
+        let merge_page_omitted = resume_from + returned < total_merged;
+        let child_truncated = probe_summaries
+            .iter()
+            .any(|summary| summary.completeness.truncated);
+        let child_incomplete = probe_summaries
+            .iter()
+            .any(|summary| !summary.completeness.complete);
+        let exact_merged_total = (!child_incomplete).then_some(total_merged);
+        let truncated = child_truncated || merge_page_omitted;
+        let continuation =
+            (merge_page_omitted && !child_incomplete && continuation_binding.is_some())
+                .then(|| {
+                    continuation_binding.clone().map(|mut binding| {
+                        binding.next_position = resume_from.saturating_add(returned);
+                        self.store_session_continuation(binding)
+                    })
+                })
+                .flatten();
+        let mut truncation_reasons = Vec::new();
+        if child_truncated {
+            truncation_reasons.push(ResultTruncationReason::ChildLimit);
+        }
+        if merge_page_omitted {
+            truncation_reasons.push(ResultTruncationReason::MergePageLimit);
+        }
+        let mut incomplete_reasons = Vec::new();
+        for summary in &probe_summaries {
+            if !summary.completeness.complete {
+                incomplete_reasons.push(ResultIncompleteReason::ChildIncomplete);
+                incomplete_reasons.extend(summary.completeness.incomplete_reasons.iter().copied());
+            }
+        }
+        let completeness = ResultCompleteness::try_new(
+            ResultUnit::BatchProbe,
+            returned,
+            exact_merged_total,
+            !child_incomplete && !merge_page_omitted,
+            truncated,
+            truncation_reasons,
+            incomplete_reasons,
+            continuation,
+        )
+        .expect("batch completeness must preserve child completeness invariants");
+        let next_resume = merge_page_omitted.then_some(resume_from.saturating_add(returned));
 
         let mut response = SearchBatchResponse {
             matches: page,
             probe_summary: probe_summaries,
+            completeness,
             returned,
             truncated,
             resume_from: next_resume,
@@ -201,6 +259,95 @@ impl FriggMcpServer {
         }
 
         Ok(Json(response))
+    }
+
+    /// Build one continuation identity across every effective child scope. We recompute child
+    /// rows on each page, so the token retains only this identity and the merged offset.
+    fn search_batch_continuation_context(
+        &self,
+        params: &SearchBatchParams,
+    ) -> Result<(usize, Option<ContinuationBinding>), ErrorData> {
+        let mut repository_hints = std::collections::BTreeSet::new();
+        for probe in &params.probes {
+            repository_hints.insert(
+                probe
+                    .repository_id
+                    .clone()
+                    .or_else(|| params.repository_id.clone()),
+            );
+        }
+        let mut repository_ids = Vec::new();
+        let mut snapshot_fingerprints = Vec::new();
+        for repository_hint in repository_hints {
+            let scoped = self.scoped_read_only_tool_execution_context(
+                "search_batch",
+                repository_hint,
+                RepositoryResponseCacheFreshnessMode::ManifestOnly,
+            )?;
+            repository_ids.extend(scoped.scoped_repository_ids);
+            snapshot_fingerprints.extend(
+                scoped
+                    .cache_freshness
+                    .scopes
+                    .as_ref()
+                    .into_iter()
+                    .flatten()
+                    .map(|scope| format!("{}:{}", scope.repository_id, scope.snapshot_id)),
+            );
+        }
+        repository_ids.sort();
+        repository_ids.dedup();
+        snapshot_fingerprints.sort();
+        snapshot_fingerprints.dedup();
+        let request_digest = Self::search_batch_continuation_digest(params, &repository_ids);
+        let resume_from = match params.continuation.as_deref() {
+            Some(token) => self
+                .session_continuation_lookup(
+                    token,
+                    "search_batch",
+                    &request_digest,
+                    &repository_ids,
+                    &snapshot_fingerprints,
+                    ResultUnit::BatchProbe,
+                )
+                .map(|binding| binding.next_position)
+                .map_err(|error| {
+                    Self::invalid_params(
+                        error.message.clone(),
+                        Some(serde_json::json!({ "continuation": error })),
+                    )
+                })?,
+            None => params.resume_from.unwrap_or(0),
+        };
+        let binding = (!snapshot_fingerprints.is_empty()).then_some(ContinuationBinding {
+            tool: "search_batch",
+            request_digest,
+            repository_ids,
+            snapshot_fingerprints,
+            unit: ResultUnit::BatchProbe,
+            next_position: 0,
+        });
+        Ok((resume_from, binding))
+    }
+
+    fn search_batch_continuation_digest(
+        params: &SearchBatchParams,
+        repository_ids: &[String],
+    ) -> String {
+        let mut request = serde_json::to_value(params)
+            .expect("search batch parameters must serialize for continuation binding");
+        if let Some(object) = request.as_object_mut() {
+            object.remove("resume_from");
+            object.remove("continuation");
+        }
+        let normalized = serde_json::json!({
+            "tool": "search_batch",
+            "request": request,
+            "repository_ids": repository_ids,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("batch-v2:{:016x}", hasher.finish())
     }
 
     /// Run probes concurrently (binary join tree) so multi-probe batches improve
@@ -306,6 +453,7 @@ impl FriggMcpServer {
                     id: probe.id.clone(),
                     kind: SearchBatchProbeKind::Text,
                     hits,
+                    completeness: body.completeness,
                     zero_hit_reason: body.recovery.zero_hit_reason,
                     correction_hint: body.recovery.correction_hint,
                     suggested_next: body.recovery.suggested_next,
@@ -328,7 +476,7 @@ impl FriggMcpServer {
                 if let Some(handle) = body.result_handle.as_deref() {
                     self.drop_session_result_handle(handle);
                 }
-                let hits = body.matches.len();
+                let hits = body.completeness.total.unwrap_or(body.matches.len());
                 let rows = body
                     .matches
                     .into_iter()
@@ -352,6 +500,7 @@ impl FriggMcpServer {
                     id: probe.id.clone(),
                     kind: SearchBatchProbeKind::Symbol,
                     hits,
+                    completeness: body.completeness,
                     zero_hit_reason: body.recovery.zero_hit_reason,
                     correction_hint: body.recovery.correction_hint,
                     suggested_next: body.recovery.suggested_next,
@@ -400,6 +549,7 @@ impl FriggMcpServer {
                     id: probe.id.clone(),
                     kind: SearchBatchProbeKind::Hybrid,
                     hits,
+                    completeness: body.completeness,
                     zero_hit_reason: body
                         .recovery
                         .zero_hit_reason
@@ -525,6 +675,8 @@ mod tests {
                 id: "a".to_owned(),
                 kind: SearchBatchProbeKind::Text,
                 hits: 0,
+                completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                    .expect("empty text probe is complete"),
                 zero_hit_reason: Some(ZeroHitReason::QueryMiss),
                 correction_hint: None,
                 suggested_next: Vec::new(),
@@ -534,6 +686,8 @@ mod tests {
                 id: "b".to_owned(),
                 kind: SearchBatchProbeKind::Text,
                 hits: 0,
+                completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                    .expect("empty text probe is complete"),
                 zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
                 correction_hint: None,
                 suggested_next: Vec::new(),

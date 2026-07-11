@@ -211,6 +211,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             repository_id: Some("repo-001".to_owned()),
             response_mode: Some(ResponseMode::Compact),
             resume_from: None,
+            continuation: None,
         }))
         .await
         .expect("search_batch should find target")
