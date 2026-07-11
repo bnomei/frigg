@@ -267,6 +267,8 @@ fn load_searchable_bytes(
     }
 
     match fs::read(path) {
+        // Preserve the native scanner's established lossy UTF-8 line policy. Ripgrep candidates
+        // with invalid UTF-8 are routed here before execution, keeping backend output identical.
         Ok(bytes) => Some(bytes),
         Err(err) => {
             diagnostics.push(SearchDiagnostic {

@@ -28,6 +28,47 @@ pub struct SearchTextQuery {
     pub limit: usize,
 }
 
+/// Path and row-shaping policy applied by the lexical engine before it counts or retains rows.
+///
+/// The MCP layer deliberately compiles globs before constructing this value. Keeping the compiled
+/// predicate at the searcher boundary ensures manifest, walk, native, ripgrep, and mixed paths
+/// all operate over the same candidate set.
+#[derive(Debug, Clone, Default)]
+pub struct SearchTextExecutionOptions {
+    /// Optional include glob compiled as a repository-relative path regex.
+    pub include_glob: Option<regex::Regex>,
+    /// Optional exclusion glob compiled as a repository-relative path regex.
+    pub exclude_glob: Option<regex::Regex>,
+    /// Row unit retained after all eligible occurrences have been collected.
+    pub row_mode: SearchTextRowMode,
+}
+
+impl SearchTextExecutionOptions {
+    /// Returns true only when a repository-relative candidate path satisfies the full path
+    /// predicate. `path_regex` remains on [`SearchTextQuery`] for existing callers.
+    pub(crate) fn allows_path(&self, path: &str) -> bool {
+        self.include_glob
+            .as_ref()
+            .is_none_or(|glob| glob.is_match(path))
+            && self
+                .exclude_glob
+                .as_ref()
+                .is_none_or(|glob| !glob.is_match(path))
+    }
+}
+
+/// The unit produced from eligible lexical occurrences before a requested page bound is applied.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchTextRowMode {
+    /// One row per matching occurrence.
+    #[default]
+    Occurrence,
+    /// One deterministic representative row per file with at least one occurrence.
+    UniqueFile,
+    /// At most this many deterministic occurrence rows per matching file.
+    PerFileCapped { max_count_per_file: usize },
+}
+
 #[derive(Debug, Clone)]
 /// Shared repository-level filters used to scope both lexical and hybrid retrieval paths.
 pub struct SearchFilters {
@@ -107,6 +148,41 @@ pub struct SearchExecutionOutput {
     pub lexical_backend: Option<SearchLexicalBackend>,
     /// Optional explanation when the backend fell back or mixed native and ripgrep paths.
     pub lexical_backend_note: Option<String>,
+}
+
+/// Exhaustive lexical execution after candidate filtering and row shaping.
+///
+/// This is intentionally separate from [`SearchExecutionOutput`], whose compatibility callers
+/// only consume bounded occurrence rows. New exact public surfaces use this record so page
+/// limits cannot alter their cardinality truth.
+#[derive(Debug, Clone, Default)]
+pub struct ExactSearchExecutionOutput {
+    /// Exact eligible occurrence count before row shaping or page retention. Absent when a
+    /// diagnostic can hide qualifying occurrences.
+    pub total_matches: Option<usize>,
+    /// Exact selected row-unit count before page retention. Absent when a diagnostic can hide
+    /// qualifying rows.
+    pub total_rows: Option<usize>,
+    /// Deterministically ordered page rows in the selected row unit.
+    pub matches: Vec<TextMatch>,
+    /// Candidate intake, read, and backend diagnostics.
+    pub diagnostics: SearchExecutionDiagnostics,
+    /// Backend used across the complete candidate universe.
+    pub lexical_backend: Option<SearchLexicalBackend>,
+    /// Optional backend fallback or mixed-execution explanation.
+    pub lexical_backend_note: Option<String>,
+    /// Whether diagnostics can hide otherwise eligible rows or counts.
+    pub coverage: SearchExecutionCoverage,
+}
+
+/// Whether a lexical execution covered every eligible candidate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchExecutionCoverage {
+    /// Every eligible candidate was accounted for; both totals are exact.
+    #[default]
+    Exact,
+    /// A walk, read, or backend diagnostic may have hidden qualifying rows.
+    Incomplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

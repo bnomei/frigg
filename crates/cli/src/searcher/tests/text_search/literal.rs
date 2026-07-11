@@ -1,6 +1,7 @@
 //! Regression tests for literal text search match ordering, path filters, and manifest-scoped candidate limits.
 
 use super::*;
+use crate::searcher::{SearchExecutionCoverage, SearchTextExecutionOptions, SearchTextRowMode};
 
 #[test]
 fn literal_search_returns_sorted_deterministic_matches() -> FriggResult<()> {
@@ -675,6 +676,177 @@ fn literal_search_low_limit_large_corpus_matches_sorted_prefix_deterministically
         "low-limit search should stay equal to deterministic sorted prefix on large corpus"
     );
 
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn exact_execution_filters_before_scan_and_shapes_before_paging_across_backends() -> FriggResult<()>
+{
+    let root = temp_workspace_root("exact-execution-eligibility-and-shaping");
+    prepare_workspace(
+        &root,
+        &[
+            ("src/a.rs", "needle\r\nneedle\r\nneedle\r\n"),
+            ("src/z.rs", "unicode needle caf\u{e9}"),
+            ("src/skip.rs", "needle\nneedle\nneedle\nneedle\n"),
+            ("other/out.txt", "needle"),
+        ],
+    )?;
+    let query = SearchTextQuery {
+        query: "needle".to_owned(),
+        path_regex: Some(Regex::new(r"^src/").expect("valid fixture regex")),
+        limit: 1,
+    };
+    let options = SearchTextExecutionOptions {
+        include_glob: Some(Regex::new(r"^src/[^/]+\.rs$").expect("valid fixture glob")),
+        exclude_glob: Some(Regex::new(r"^src/skip\.rs$").expect("valid fixture glob")),
+        row_mode: SearchTextRowMode::UniqueFile,
+    };
+
+    let mut native_config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    native_config.lexical_runtime.backend = LexicalBackendMode::Native;
+    let native = TextSearcher::new(native_config)
+        .search_literal_with_execution_options_diagnostics(
+            query.clone(),
+            SearchFilters::default(),
+            options.clone(),
+        )?;
+    assert_eq!(native.total_matches, Some(4));
+    assert_eq!(native.total_rows, Some(2));
+    assert_eq!(native.matches.len(), 1);
+    assert_eq!(native.matches[0].path, "src/a.rs");
+    assert_eq!(native.coverage, SearchExecutionCoverage::Exact);
+
+    let capped = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?)
+        .search_literal_with_execution_options_diagnostics(
+            query.clone(),
+            SearchFilters::default(),
+            SearchTextExecutionOptions {
+                row_mode: SearchTextRowMode::PerFileCapped {
+                    max_count_per_file: 1,
+                },
+                ..options.clone()
+            },
+        )?;
+    assert_eq!(capped.total_matches, Some(4));
+    assert_eq!(capped.total_rows, Some(2));
+    assert_eq!(capped.matches[0].path, "src/a.rs");
+
+    if std::process::Command::new("rg")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        clear_ripgrep_availability_cache();
+        let mut ripgrep_config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        ripgrep_config.lexical_runtime.backend = LexicalBackendMode::Ripgrep;
+        let ripgrep = TextSearcher::new(ripgrep_config)
+            .search_literal_with_execution_options_diagnostics(
+                query,
+                SearchFilters::default(),
+                options,
+            )?;
+        assert_eq!(ripgrep.total_matches, native.total_matches);
+        assert_eq!(ripgrep.total_rows, native.total_rows);
+        assert_eq!(ripgrep.matches, native.matches);
+        assert_eq!(ripgrep.coverage, native.coverage);
+    }
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn exact_execution_routes_invalid_utf8_candidates_to_native_without_backend_divergence()
+-> FriggResult<()> {
+    let root = temp_workspace_root("exact-execution-invalid-utf8");
+    prepare_workspace(&root, &[("src/valid.rs", "needle\n")])?;
+    fs::write(root.join("src/binary.rs"), b"needle\xff\n").map_err(FriggError::Io)?;
+    let query = SearchTextQuery {
+        query: "needle".to_owned(),
+        path_regex: None,
+        limit: 20,
+    };
+
+    let mut native_config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    native_config.lexical_runtime.backend = LexicalBackendMode::Native;
+    let native = TextSearcher::new(native_config)
+        .search_literal_with_execution_options_diagnostics(
+            query.clone(),
+            SearchFilters::default(),
+            SearchTextExecutionOptions::default(),
+        )?;
+    assert_eq!(native.total_matches, Some(2));
+    assert_eq!(native.total_rows, Some(2));
+    assert_eq!(native.coverage, SearchExecutionCoverage::Exact);
+
+    if std::process::Command::new("rg")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        clear_ripgrep_availability_cache();
+        let mut ripgrep_config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        ripgrep_config.lexical_runtime.backend = LexicalBackendMode::Ripgrep;
+        let ripgrep = TextSearcher::new(ripgrep_config)
+            .search_literal_with_execution_options_diagnostics(
+                query,
+                SearchFilters::default(),
+                SearchTextExecutionOptions::default(),
+            )?;
+        assert_eq!(ripgrep.total_matches, native.total_matches);
+        assert_eq!(ripgrep.total_rows, native.total_rows);
+        assert_eq!(ripgrep.coverage, native.coverage);
+    }
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn exact_execution_omits_totals_when_a_read_diagnostic_can_hide_matches() -> FriggResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_workspace_root("exact-execution-incomplete-read");
+    prepare_workspace(
+        &root,
+        &[
+            ("src/good.rs", "needle visible\n"),
+            ("src/unreadable.rs", "needle hidden\n"),
+        ],
+    )?;
+    let unreadable = root.join("src/unreadable.rs");
+    let mut permissions = std::fs::metadata(&unreadable)
+        .map_err(FriggError::Io)?
+        .permissions();
+    permissions.set_mode(0o000);
+    std::fs::set_permissions(&unreadable, permissions).map_err(FriggError::Io)?;
+
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.lexical_runtime.backend = LexicalBackendMode::Native;
+    let output = TextSearcher::new(config).search_literal_with_execution_options_diagnostics(
+        SearchTextQuery {
+            query: "needle".to_owned(),
+            path_regex: None,
+            limit: 20,
+        },
+        SearchFilters::default(),
+        SearchTextExecutionOptions::default(),
+    )?;
+
+    assert_eq!(output.coverage, SearchExecutionCoverage::Incomplete);
+    assert_eq!(output.total_matches, None);
+    assert_eq!(output.total_rows, None);
+    assert_eq!(output.matches.len(), 1);
+    assert_eq!(output.matches[0].path, "src/good.rs");
+
+    let mut restore = std::fs::metadata(&unreadable)
+        .map_err(FriggError::Io)?
+        .permissions();
+    restore.set_mode(0o644);
+    std::fs::set_permissions(&unreadable, restore).map_err(FriggError::Io)?;
     cleanup_workspace(&root);
     Ok(())
 }

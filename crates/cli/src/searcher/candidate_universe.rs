@@ -25,7 +25,7 @@ use super::{
     HybridRankingIntent, ManifestCandidateFilesBuild, NormalizedSearchFilters,
     RepositoryCandidateUniverse, SearchCandidateFile, SearchCandidateUniverse,
     SearchCandidateUniverseBuild, SearchDiagnostic, SearchDiagnosticKind,
-    SearchExecutionDiagnostics, SearchTextQuery, TextSearcher,
+    SearchExecutionDiagnostics, SearchTextExecutionOptions, SearchTextQuery, TextSearcher,
 };
 
 impl TextSearcher {
@@ -36,6 +36,22 @@ impl TextSearcher {
     ) -> SearchCandidateUniverse {
         self.build_candidate_universe_with_attribution(query, filters)
             .universe
+    }
+
+    /// Applies lexical-only path policy after manifest or walk intake but before any content
+    /// backend is invoked. This intentionally shares one candidate set between native, ripgrep,
+    /// mixed, and fallback execution.
+    pub(super) fn candidate_universe_with_text_execution_options(
+        &self,
+        mut universe: SearchCandidateUniverse,
+        options: &SearchTextExecutionOptions,
+    ) -> SearchCandidateUniverse {
+        for repository in &mut universe.repositories {
+            repository
+                .candidates
+                .retain(|candidate| options.allows_path(&candidate.relative_path));
+        }
+        universe
     }
 
     pub(super) fn build_candidate_universe_with_attribution(

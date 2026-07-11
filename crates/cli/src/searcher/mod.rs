@@ -134,10 +134,11 @@ use surfaces::{
 };
 /// Public query, result, and channel types for lexical and hybrid retrieval APIs.
 pub use types::{
-    HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridExecutionNote,
-    HybridRankedEvidence, HybridSemanticStatus, SearchDiagnostic, SearchDiagnosticKind,
-    SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters, SearchHybridExecutionOutput,
-    SearchHybridQuery, SearchLexicalBackend, SearchTextQuery,
+    ExactSearchExecutionOutput, HybridChannelHit, HybridChannelWeights, HybridDocumentRef,
+    HybridExecutionNote, HybridRankedEvidence, HybridSemanticStatus, SearchDiagnostic,
+    SearchDiagnosticKind, SearchExecutionCoverage, SearchExecutionDiagnostics,
+    SearchExecutionOutput, SearchFilters, SearchHybridExecutionOutput, SearchHybridQuery,
+    SearchLexicalBackend, SearchTextExecutionOptions, SearchTextQuery, SearchTextRowMode,
 };
 pub(crate) use types::{
     HybridGraphFileAnalysis, HybridGraphFileAnalysisCacheKey, ManifestCandidateFilesBuild,
@@ -520,6 +521,30 @@ impl TextSearcher {
         )
     }
 
+    /// Runs literal search with one normalized candidate predicate and row aggregation policy.
+    ///
+    /// Unlike the compatibility API above, this method intentionally collects the complete
+    /// eligible occurrence set before applying row shaping and the requested page limit. It is
+    /// therefore suitable for public exact-count surfaces.
+    pub fn search_literal_with_execution_options_diagnostics(
+        &self,
+        query: SearchTextQuery,
+        filters: SearchFilters,
+        options: SearchTextExecutionOptions,
+    ) -> FriggResult<ExactSearchExecutionOutput> {
+        if query.query.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "literal search query must not be empty".to_owned(),
+            ));
+        }
+        self.search_text_with_execution_options_diagnostics(
+            query,
+            filters,
+            options,
+            RipgrepPatternMode::Literal,
+        )
+    }
+
     fn search_literal_with_candidate_universe(
         &self,
         query: &SearchTextQuery,
@@ -619,6 +644,68 @@ impl TextSearcher {
             matcher,
             prefilter_plan,
         )
+    }
+
+    /// Regex equivalent of [`Self::search_literal_with_execution_options_diagnostics`].
+    pub fn search_regex_with_execution_options_diagnostics(
+        &self,
+        query: SearchTextQuery,
+        filters: SearchFilters,
+        options: SearchTextExecutionOptions,
+    ) -> FriggResult<ExactSearchExecutionOutput> {
+        self.search_text_with_execution_options_diagnostics(
+            query,
+            filters,
+            options,
+            RipgrepPatternMode::Regex,
+        )
+    }
+
+    fn search_text_with_execution_options_diagnostics(
+        &self,
+        query: SearchTextQuery,
+        filters: SearchFilters,
+        options: SearchTextExecutionOptions,
+        mode: RipgrepPatternMode,
+    ) -> FriggResult<ExactSearchExecutionOutput> {
+        let normalized_filters = normalize_search_filters(filters)?;
+        let candidate_universe = self.candidate_universe_with_text_execution_options(
+            self.build_candidate_universe(&query, &normalized_filters),
+            &options,
+        );
+        // Backends retain no page-bound rows here. Row shaping is a shared final step, so a
+        // dense early file cannot starve a later file-mode result and totals remain exact.
+        let exhaustive_query = SearchTextQuery {
+            limit: usize::MAX,
+            ..query.clone()
+        };
+        let output = match mode {
+            RipgrepPatternMode::Literal => {
+                let matcher = AhoCorasick::new([query.query.as_str()])
+                    .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
+                self.search_literal_with_candidate_universe_using_matcher(
+                    &exhaustive_query,
+                    &candidate_universe,
+                    &matcher,
+                )?
+            }
+            RipgrepPatternMode::Regex => {
+                let matcher =
+                    compile_safe_regex(&query.query).map_err(regex_error_to_frigg_error)?;
+                let prefilter_plan = build_regex_prefilter_plan(&query.query);
+                self.search_regex_with_candidate_universe(
+                    &exhaustive_query,
+                    &candidate_universe,
+                    matcher,
+                    prefilter_plan,
+                )?
+            }
+        };
+        Ok(finalize_exact_search_output(
+            output,
+            query.limit,
+            options.row_mode,
+        ))
     }
 
     fn search_regex_with_candidate_universe(
@@ -962,6 +1049,68 @@ impl TextSearcher {
     }
 }
 
+fn finalize_exact_search_output(
+    mut output: SearchExecutionOutput,
+    limit: usize,
+    row_mode: SearchTextRowMode,
+) -> ExactSearchExecutionOutput {
+    sort_matches_deterministically(&mut output.matches);
+    let mut rows = match row_mode {
+        SearchTextRowMode::Occurrence => output.matches.clone(),
+        SearchTextRowMode::UniqueFile => {
+            let mut first_by_file = BTreeMap::new();
+            for found in &output.matches {
+                first_by_file
+                    .entry((found.repository_id.clone(), found.path.clone()))
+                    .or_insert_with(|| found.clone());
+            }
+            first_by_file.into_values().collect()
+        }
+        SearchTextRowMode::PerFileCapped { max_count_per_file } => {
+            let mut retained_per_file = BTreeMap::<(String, String), usize>::new();
+            output
+                .matches
+                .iter()
+                .filter(|found| {
+                    let count = retained_per_file
+                        .entry((found.repository_id.clone(), found.path.clone()))
+                        .or_default();
+                    if *count >= max_count_per_file {
+                        return false;
+                    }
+                    *count = count.saturating_add(1);
+                    true
+                })
+                .cloned()
+                .collect()
+        }
+    };
+    sort_matches_deterministically(&mut rows);
+    let total_rows = rows.len();
+    rows.truncate(limit);
+    let coverage = if output.diagnostics.entries.iter().any(|diagnostic| {
+        !diagnostic
+            .message
+            .starts_with("failed to read validated manifest snapshot")
+    }) {
+        SearchExecutionCoverage::Incomplete
+    } else {
+        // A failed manifest read followed by a live walk is a recovered intake diagnostic, not
+        // hidden search coverage.
+        SearchExecutionCoverage::Exact
+    };
+    let totals_are_exact = coverage == SearchExecutionCoverage::Exact;
+    ExactSearchExecutionOutput {
+        total_matches: totals_are_exact.then_some(output.total_matches),
+        total_rows: totals_are_exact.then_some(total_rows),
+        matches: rows,
+        diagnostics: output.diagnostics,
+        lexical_backend: output.lexical_backend,
+        lexical_backend_note: output.lexical_backend_note,
+        coverage,
+    }
+}
+
 fn partition_candidate_universe_for_ripgrep(
     query: &SearchTextQuery,
     candidate_universe: &SearchCandidateUniverse,
@@ -983,7 +1132,9 @@ fn partition_candidate_universe_for_ripgrep(
             {
                 continue;
             }
-            if content_scrub::should_scrub_leading_markdown_comment(&candidate.relative_path) {
+            if content_scrub::should_scrub_leading_markdown_comment(&candidate.relative_path)
+                || candidate_contains_invalid_utf8(&candidate.absolute_path)
+            {
                 native_candidates.push(candidate.clone());
             } else {
                 ripgrep_candidates.push(candidate.clone());
@@ -1021,6 +1172,13 @@ fn partition_candidate_universe_for_ripgrep(
     } else {
         Some((ripgrep_universe, native_universe))
     }
+}
+
+/// Ripgrep's default binary handling cannot provide the same per-occurrence JSON stream as the
+/// native scanner. Route non-UTF-8 candidates through native, which intentionally applies
+/// Frigg's established lossy UTF-8 line policy to preserve deterministic rows and counts.
+fn candidate_contains_invalid_utf8(path: &std::path::Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| std::str::from_utf8(&bytes).is_err())
 }
 
 fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSearchFilters> {
