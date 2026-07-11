@@ -43,6 +43,7 @@ impl FriggMcpServer {
                     "find_references".to_owned(),
                     "incoming_calls".to_owned(),
                 ],
+                next_actions: Vec::new(),
                 suggested_next: vec![
                     SuggestedNext::tool("search_symbol")
                         .with_path_class("runtime")

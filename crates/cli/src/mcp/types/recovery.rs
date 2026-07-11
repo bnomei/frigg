@@ -4,6 +4,7 @@
 //! get actionable next steps without requesting `response_mode=full`. Builders cover the common
 //! situations including structured zero-hit diagnostics.
 
+use super::NextAction;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -264,7 +265,7 @@ pub struct ZeroHitInput<'a> {
 }
 
 /// Embeddable recovery grammar for empty/failed search, nav, and read paths. Flatten onto responses; all fields optional.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct RecoveryFields {
     /// Stable machine code (SCREAMING_SNAKE), for example `ZERO_HIT_SCOPE_TOO_TIGHT`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,7 +279,11 @@ pub struct RecoveryFields {
     /// Related MCP tools agents should consider next.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_tools: Vec<String>,
-    /// Concrete follow-up tool invocations with optional params.
+    /// Canonical executable follow-up actions. These are authoritative when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<NextAction>,
+    /// Deprecated lossy compatibility projection of [`Self::next_actions`]. New producers must
+    /// use [`Self::set_next_actions`] rather than authoring rows independently.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_next: Vec<SuggestedNext>,
     /// Structured zero-hit reason when the result set is empty.
@@ -299,10 +304,27 @@ impl RecoveryFields {
             && self.message.is_none()
             && self.correction_hint.is_none()
             && self.related_tools.is_empty()
+            && self.next_actions.is_empty()
             && self.suggested_next.is_empty()
             && self.zero_hit_reason.is_none()
             && self.scope.as_ref().is_none_or(ZeroHitScope::is_empty)
             && self.index.as_ref().is_none_or(ZeroHitIndex::is_empty)
+    }
+
+    /// Normalizes canonical actions and regenerates the deprecated compatibility projection.
+    pub fn set_next_actions(&mut self, actions: impl IntoIterator<Item = NextAction>) {
+        self.next_actions = super::normalize_next_actions(actions);
+        self.suggested_next = self
+            .next_actions
+            .iter()
+            .map(NextAction::to_legacy_suggestion)
+            .collect();
+    }
+
+    /// Builder form of [`Self::set_next_actions`].
+    pub fn with_next_actions(mut self, actions: impl IntoIterator<Item = NextAction>) -> Self {
+        self.set_next_actions(actions);
+        self
     }
 
     /// Attach optional scope + index diagnostics without clobbering recovery text.
@@ -562,6 +584,7 @@ impl RecoveryFields {
             );
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("ZERO_HIT".to_owned()),
             message: Some(format!(
                 "Indexed search via {tool} returned no matches for {query_label:?}."
@@ -599,6 +622,7 @@ impl RecoveryFields {
             );
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("QUERY_MISS".to_owned()),
             message: Some(format!(
                 "No matches for {query_label:?} via {tool}."
@@ -636,6 +660,7 @@ impl RecoveryFields {
                 .with_reason("textual fallback when precise navigation is unavailable");
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("PRECISE_GRAPH_UNAVAILABLE".to_owned()),
             message: Some(format!(
                 "{tool} has no precise graph/SCIP data for this request."
@@ -673,6 +698,7 @@ impl RecoveryFields {
                 .with_reason("search without path_class when class coverage is missing");
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("PATH_CLASS_NOT_INDEXED".to_owned()),
             message: Some(format!(
                 "Path class {path_class:?} is not covered by the index for this request."
@@ -697,6 +723,7 @@ impl RecoveryFields {
     pub fn literal_looks_like_regex(query: &str) -> Self {
         let query = query.trim();
         Self {
+            next_actions: Vec::new(),
             error_code: Some("QUERY_LOOKS_LIKE_REGEX".to_owned()),
             message: Some(format!(
                 "No literal matches for query that looks like a regular expression: {query:?}."
@@ -721,6 +748,7 @@ impl RecoveryFields {
     pub fn runtime_zero_name_known(name: &str) -> Self {
         let name = name.trim();
         Self {
+            next_actions: Vec::new(),
             error_code: Some("ZERO_HIT_RUNTIME_SCOPE".to_owned()),
             message: Some(format!("No runtime-class hits for known name {name:?}.")),
             correction_hint: Some(
@@ -755,6 +783,7 @@ impl RecoveryFields {
             next = next.with_path(path);
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("WRONG_REPOSITORY_POSSIBLE".to_owned()),
             message: Some(
                 "No matches; the session default or repository_id may not be the intended repo."
@@ -801,6 +830,7 @@ impl RecoveryFields {
             );
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("INDEX_STALE_POSSIBLE".to_owned()),
             message: Some(format!("No matches; index may be stale ({summary}).")),
             correction_hint: Some(
@@ -840,6 +870,7 @@ impl RecoveryFields {
                 .collect()
         };
         Self {
+            next_actions: Vec::new(),
             error_code: Some("MULTI_HYPOTHESIS".to_owned()),
             message: Some(
                 "Several plausible probes fit this task better than a single wide search."
@@ -879,6 +910,7 @@ impl RecoveryFields {
             suggested_next
         };
         Self {
+            next_actions: Vec::new(),
             error_code: Some("BATCH_ALL_ZERO".to_owned()),
             message: Some(
                 "All search_batch probes returned zero hits; inspect probe_summary for per-probe diagnostics."
@@ -904,6 +936,7 @@ impl RecoveryFields {
     pub fn impact_after_symbol(symbol: &str) -> Self {
         let symbol = symbol.trim();
         Self {
+            next_actions: Vec::new(),
             error_code: Some("IMPACT_AFTER_SYMBOL".to_owned()),
             message: Some(format!(
                 "Symbol {symbol:?} is resolved; gather references and callers for impact."
@@ -985,6 +1018,7 @@ impl RecoveryFields {
         }
 
         Self {
+            next_actions: Vec::new(),
             error_code: Some("HYBRID_DISCOVERY_PIVOT".to_owned()),
             message: Some(
                 "Hybrid ranked candidates; pivot to exact search_symbol or search_text before proof."
@@ -1041,6 +1075,7 @@ impl RecoveryFields {
                 .with_reason("verify the scoped path set still has files"),
         );
         Self {
+            next_actions: Vec::new(),
             error_code: Some("ZERO_HIT_SCOPE_TOO_TIGHT".to_owned()),
             message: Some(format!("No matches under {scope_desc}.")),
             correction_hint: Some(
@@ -1062,6 +1097,7 @@ impl RecoveryFields {
     /// No attached workspace / detached session.
     pub fn detached_session() -> Self {
         Self {
+            next_actions: Vec::new(),
             error_code: Some("DETACHED_SESSION".to_owned()),
             message: Some(
                 "No repository is attached for this session; Frigg cannot search indexed source."
@@ -1086,6 +1122,7 @@ impl RecoveryFields {
     pub fn tool_unavailable(tool_name: &str) -> Self {
         let tool_name = tool_name.trim();
         Self {
+            next_actions: Vec::new(),
             error_code: Some("TOOL_UNAVAILABLE".to_owned()),
             message: Some(format!(
                 "Tool {tool_name:?} is unavailable on the current Frigg tool surface."
@@ -1110,6 +1147,7 @@ impl RecoveryFields {
     /// Empty `go_to_definition({})` without a symbol or location anchor.
     pub fn empty_go_to_definition() -> Self {
         Self {
+            next_actions: Vec::new(),
             error_code: Some("EMPTY_GO_TO_DEFINITION".to_owned()),
             message: Some(
                 "go_to_definition requires a symbol, or a path+line location with optional column."
@@ -1157,6 +1195,7 @@ impl RecoveryFields {
             );
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("DISAMBIGUATION_REQUIRED".to_owned()),
             message: Some(
                 "multiple same-rank candidates (possibly across attached repositories); pass path+line, stable_symbol_id, or repository_id."
@@ -1183,6 +1222,7 @@ impl RecoveryFields {
     pub fn missing_line_column_pair(tool_name: &str) -> Self {
         let tool_name = tool_name.trim();
         Self {
+            next_actions: Vec::new(),
             error_code: Some("MISSING_LINE_COLUMN".to_owned()),
             message: Some(format!(
                 "{tool_name} requires both line and column (use column=1 if unknown)."
@@ -1213,6 +1253,7 @@ impl RecoveryFields {
         let handle = result_handle.unwrap_or("<missing>");
         let match_id = match_id.unwrap_or("<missing>");
         Self {
+            next_actions: Vec::new(),
             error_code: Some("STALE_HANDLE".to_owned()),
             message: Some(format!(
                 "Handle is no longer valid (result_handle={handle:?}, match_id={match_id:?})."
@@ -1267,6 +1308,7 @@ impl RecoveryFields {
             }
         }
         Self {
+            next_actions: Vec::new(),
             error_code: Some("STALE_PROOF_ANCHOR".to_owned()),
             message: Some(format!(
                 "Source proof for {repository_id}:{repository_path} changed or can no longer be verified (result_handle={result_handle:?}, match_id={match_id:?})."
@@ -1287,6 +1329,7 @@ impl RecoveryFields {
         let handle = result_handle.unwrap_or("<missing>");
         let match_id = match_id.unwrap_or("<missing>");
         Self {
+            next_actions: Vec::new(),
             error_code: Some("MIXED_HANDLE".to_owned()),
             message: Some(format!(
                 "match_id {match_id:?} does not belong to result_handle {handle:?}."

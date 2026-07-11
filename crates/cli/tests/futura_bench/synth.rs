@@ -208,6 +208,7 @@ async fn run_handle_path(report: &Mutex<harness::BenchReport>, fixture: &std::pa
                     after: None,
                     presentation_mode: Some(ReadPresentationMode::Json),
                     include_context_efficiency: None,
+                    origin: None,
                 }))
                 .await
                 .map_err(|e| format!("read_match failed: {e}"))?,

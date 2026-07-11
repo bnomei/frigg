@@ -333,6 +333,7 @@ async fn run_read_match_handle(report: &Mutex<harness::BenchReport>, root: &Path
                     after: Some(1),
                     presentation_mode: Some(ReadPresentationMode::Json),
                     include_context_efficiency: None,
+                    origin: None,
                 }))
                 .await
                 .map_err(|e| format!("read_match failed: {e}"))?,

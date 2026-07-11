@@ -363,6 +363,7 @@ async fn core_read_match_content_parity_with_equivalent_read_file_window() {
                 after: Some(after),
                 presentation_mode: Some(ReadPresentationMode::Json),
                 include_context_efficiency: None,
+                origin: None,
             }))
             .await
             .expect("read_match should reopen search hit"),
@@ -526,6 +527,7 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
             after: None,
             presentation_mode: None,
             include_context_efficiency: Some(true),
+            origin: None,
         }))
         .await
         .expect_err("context-efficiency read_match in text mode should fail");
@@ -551,6 +553,7 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
                 after: None,
                 presentation_mode: Some(ReadPresentationMode::Json),
                 include_context_efficiency: Some(true),
+                origin: None,
             }))
             .await
             .expect("context-efficiency read_match should succeed"),
@@ -916,6 +919,7 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .map(structured_tool_result::<ReadMatchResponse>)
@@ -1012,6 +1016,7 @@ async fn core_read_match_defaults_to_text_first_output() {
             after: None,
             presentation_mode: None,
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect("default read_match should succeed");
@@ -1710,6 +1715,7 @@ async fn core_read_match_invalid_handle_emits_failed_display_event() {
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect_err("invalid read_match handle should fail");

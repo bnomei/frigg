@@ -963,6 +963,7 @@ async fn read_match_reads_from_cached_result_handle() {
             after: Some(10),
             presentation_mode: None,
             include_context_efficiency: None,
+            origin: None,
         })
         .await
         .expect("read_match should succeed");
@@ -1062,6 +1063,7 @@ async fn read_match_result_handle_is_invalidated_after_workspace_index_refresh()
             after: Some(0),
             presentation_mode: None,
             include_context_efficiency: None,
+            origin: None,
         })
         .await;
     assert!(

@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    MetadataObject, ReadPresentationMode, RecoveryFields, ResponseMode, ResultCompleteness,
-    SuggestedNext, ZeroHitReason, ZeroHitScope,
+    MetadataObject, NextAction, ReadPresentationMode, RecoveryFields, ResponseMode,
+    ResultCompleteness, SuggestedNext, ZeroHitReason, ZeroHitScope,
 };
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
@@ -831,10 +831,26 @@ pub struct SearchBatchProbeSummary {
     pub zero_hit_reason: Option<ZeroHitReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correction_hint: Option<String>,
+    /// Canonical executable recovery actions. Deprecated suggestions are generated from this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<NextAction>,
+    /// Deprecated lossy projection retained for compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggested_next: Vec<SuggestedNext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<ZeroHitScope>,
+}
+
+impl SearchBatchProbeSummary {
+    /// Normalizes canonical actions and regenerates the deprecated compatibility projection.
+    pub fn set_next_actions(&mut self, actions: impl IntoIterator<Item = NextAction>) {
+        self.next_actions = super::normalize_next_actions(actions);
+        self.suggested_next = self
+            .next_actions
+            .iter()
+            .map(NextAction::to_legacy_suggestion)
+            .collect();
+    }
 }
 
 /// Response from `search_batch`.

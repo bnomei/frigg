@@ -456,6 +456,7 @@ impl FriggMcpServer {
                     completeness: body.completeness,
                     zero_hit_reason: body.recovery.zero_hit_reason,
                     correction_hint: body.recovery.correction_hint,
+                    next_actions: body.recovery.next_actions,
                     suggested_next: body.recovery.suggested_next,
                     scope: body.recovery.scope.or_else(|| probe_scope(probe)),
                 };
@@ -503,6 +504,7 @@ impl FriggMcpServer {
                     completeness: body.completeness,
                     zero_hit_reason: body.recovery.zero_hit_reason,
                     correction_hint: body.recovery.correction_hint,
+                    next_actions: body.recovery.next_actions,
                     suggested_next: body.recovery.suggested_next,
                     scope: body.recovery.scope.or_else(|| probe_scope(probe)),
                 };
@@ -560,6 +562,7 @@ impl FriggMcpServer {
                                 .to_owned()
                         })
                     }),
+                    next_actions: body.recovery.next_actions,
                     suggested_next: body.recovery.suggested_next,
                     scope: body.recovery.scope.or_else(|| probe_scope(probe)),
                 };
@@ -679,6 +682,7 @@ mod tests {
                     .expect("empty text probe is complete"),
                 zero_hit_reason: Some(ZeroHitReason::QueryMiss),
                 correction_hint: None,
+                next_actions: Vec::new(),
                 suggested_next: Vec::new(),
                 scope: None,
             },
@@ -690,6 +694,7 @@ mod tests {
                     .expect("empty text probe is complete"),
                 zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
                 correction_hint: None,
+                next_actions: Vec::new(),
                 suggested_next: Vec::new(),
                 scope: None,
             },

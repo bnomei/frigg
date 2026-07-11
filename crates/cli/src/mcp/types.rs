@@ -212,6 +212,8 @@ pub enum ReadPresentationMode {
 mod completeness;
 #[path = "types/navigation.rs"]
 mod navigation;
+#[path = "types/next_action.rs"]
+mod next_action;
 #[cfg(feature = "playbook")]
 #[path = "types/playbook.rs"]
 mod playbook;
@@ -226,6 +228,7 @@ mod workspace;
 
 pub use completeness::*;
 pub use navigation::*;
+pub use next_action::*;
 #[cfg(feature = "playbook")]
 pub use playbook::*;
 pub use recovery::*;

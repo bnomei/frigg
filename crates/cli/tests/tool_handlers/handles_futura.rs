@@ -55,6 +55,7 @@ async fn read_match_wrong_or_missing_handle_returns_stale_handle() {
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect_err("missing result_handle should fail");
@@ -69,6 +70,7 @@ async fn read_match_wrong_or_missing_handle_returns_stale_handle() {
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect_err("wrong result_handle should fail");
@@ -153,6 +155,7 @@ async fn read_match_cross_search_handle_and_match_id_returns_mixed_handle() {
                 after: Some(0),
                 presentation_mode: Some(ReadPresentationMode::Json),
                 include_context_efficiency: None,
+                origin: None,
             }))
             .await
             .expect("matched handle/match_id pair should succeed"),
@@ -168,6 +171,7 @@ async fn read_match_cross_search_handle_and_match_id_returns_mixed_handle() {
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect_err("cross-paired handle/match_id should fail");
@@ -194,6 +198,7 @@ async fn read_match_cross_search_handle_and_match_id_returns_mixed_handle() {
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect_err("inverse cross-paired handle/match_id should fail");

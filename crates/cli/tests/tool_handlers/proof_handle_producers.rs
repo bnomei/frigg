@@ -73,6 +73,7 @@ async fn assert_pair_is_stale_after_edit(server: &FriggMcpServer, pair: &IssuedP
             after: Some(0),
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect_err("mutated source must reject its historical proof pair");
@@ -536,6 +537,7 @@ async fn proof_handle_same_bytes_survive_and_all_presentations_fail_closed_after
                 after: Some(0),
                 presentation_mode: Some(mode),
                 include_context_efficiency: None,
+                origin: None,
             }))
             .await
             .expect("identical bytes must retain a valid proof for every presentation mode");
@@ -557,6 +559,7 @@ async fn proof_handle_same_bytes_survive_and_all_presentations_fail_closed_after
                 after: Some(0),
                 presentation_mode: Some(mode),
                 include_context_efficiency: None,
+                origin: None,
             }))
             .await
             .expect_err("changed source must reject proof before formatting content");
@@ -572,6 +575,7 @@ async fn proof_handle_same_bytes_survive_and_all_presentations_fail_closed_after
             after: Some(0),
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
+            origin: None,
         }))
         .await
         .expect("fresh producer rerun should issue a usable proof");

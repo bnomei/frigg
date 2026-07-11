@@ -571,6 +571,9 @@ pub struct ReadMatchParams {
     pub presentation_mode: Option<ReadPresentationMode>,
     /// Include context-efficiency metadata; requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
+    /// Exact non-recursive producer request used only to recover from stale handle reads.
+    /// Successful reads ignore this metadata.
+    pub origin: Option<super::NextActionOrigin>,
 }
 
 /// Response from `read_match` expanding a prior search or navigation hit with local context.
