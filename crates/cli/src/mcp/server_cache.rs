@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -358,19 +358,46 @@ pub(crate) struct CachedHeuristicReferences {
     pub(crate) source_bytes_loaded: u64,
 }
 
+/// Revision of the raw source bytes observed while issuing a proof handle.
+///
+/// This is deliberately session-memory-only: it proves an observed file revision without
+/// retaining another copy of the source body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResultHandleSourceRevision {
+    pub(crate) blake3: blake3::Hash,
+    pub(crate) byte_len: usize,
+}
+
+/// Source identity and revision shared by all anchors for one repository-relative file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResultHandleSourceSnapshot {
+    pub(crate) repository_id: String,
+    pub(crate) path: String,
+    pub(crate) revision: ResultHandleSourceRevision,
+}
+
 /// Repository path anchor stored for one `result_handle` match id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResultHandleMatchAnchor {
-    pub(crate) repository_id: String,
-    pub(crate) path: String,
+    pub(crate) source: Arc<ResultHandleSourceSnapshot>,
     pub(crate) line: usize,
     pub(crate) column: Option<usize>,
+}
+
+impl Deref for ResultHandleMatchAnchor {
+    type Target = ResultHandleSourceSnapshot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.source
+    }
 }
 
 /// Session-scoped `result_handle` entry mapping match ids to source anchors.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionResultHandleEntry {
     pub(crate) generated_at: Instant,
+    #[allow(dead_code)] // consumed by stale-proof recovery in the following task.
+    pub(crate) origin_tool: &'static str,
     pub(crate) matches: BTreeMap<String, ResultHandleMatchAnchor>,
 }
 
@@ -437,6 +464,14 @@ impl FileContentSnapshot {
 
     pub(crate) fn raw_bytes_len(&self) -> usize {
         self.raw_bytes.len()
+    }
+
+    /// Revision proof calculated from the exact raw bytes already owned by this snapshot.
+    pub(crate) fn source_revision(&self) -> ResultHandleSourceRevision {
+        ResultHandleSourceRevision {
+            blake3: blake3::hash(&self.raw_bytes),
+            byte_len: self.raw_bytes.len(),
+        }
     }
 
     pub(crate) fn read_file_content(&self) -> String {
@@ -710,5 +745,16 @@ mod tests {
         assert_eq!(scan.scope_content.as_deref(), Some("second\nthird"));
         assert_eq!(scan.total_matches, 1);
         assert_eq!(scan.matches.len(), 1);
+    }
+
+    #[test]
+    fn file_content_snapshot_revision_binds_exact_raw_bytes() {
+        let first = FileContentSnapshot::from_bytes(b"same\r\nbytes\n".to_vec());
+        let identical = FileContentSnapshot::from_bytes(b"same\r\nbytes\n".to_vec());
+        let changed = FileContentSnapshot::from_bytes(b"same\nbytes\n".to_vec());
+
+        assert_eq!(first.source_revision(), identical.source_revision());
+        assert_ne!(first.source_revision(), changed.source_revision());
+        assert_eq!(first.source_revision().byte_len, b"same\r\nbytes\n".len());
     }
 }

@@ -6,8 +6,8 @@
 use super::*;
 use crate::domain::model::TextMatch;
 use crate::mcp::types::{
-    DocumentSymbolItem, HybridPivotMatchSource, SearchHybridDiagnosticsSummary,
-    SearchHybridMatch, SearchHybridMetadata, SearchHybridRankReason,
+    DocumentSymbolItem, HybridPivotMatchSource, SearchHybridDiagnosticsSummary, SearchHybridMatch,
+    SearchHybridMetadata, SearchHybridRankReason,
 };
 
 /// Outcome of resolving a session `result_handle` + `match_id` pair for `read_match`.
@@ -89,6 +89,7 @@ impl FriggMcpServer {
             handle.clone(),
             SessionResultHandleEntry {
                 generated_at: now,
+                origin_tool: _tool_name,
                 matches,
             },
         );
@@ -343,27 +344,113 @@ impl FriggMcpServer {
         }
     }
 
+    /// Resolve and snapshot each distinct producer source once before assigning any match ids.
+    /// Failed containment, authorization, bounded-read, or digest work leaves that discovery row
+    /// visible but deliberately unhandleable.
+    fn bind_result_handle_source_snapshots(
+        &self,
+        pending: impl IntoIterator<Item = (String, String)>,
+    ) -> BTreeMap<(String, String), Arc<crate::mcp::server_cache::ResultHandleSourceSnapshot>> {
+        let mut snapshots = BTreeMap::new();
+        for (repository_id, path) in pending.into_iter().collect::<BTreeSet<_>>() {
+            let read_params = ReadFileParams {
+                path: path.clone(),
+                repository_id: Some(repository_id.clone()),
+                max_bytes: None,
+                start_line: None,
+                end_line: None,
+                line_count: None,
+                presentation_mode: None,
+                include_context_efficiency: None,
+            };
+            let Ok((resolved_repository_id, canonical_path, _)) =
+                self.resolve_file_path(&read_params)
+            else {
+                continue;
+            };
+            if resolved_repository_id != repository_id {
+                continue;
+            }
+            let Ok(workspaces) = self.attached_workspaces_for_repository(Some(&repository_id))
+            else {
+                continue;
+            };
+            let Some(workspace) = workspaces
+                .into_iter()
+                .find(|workspace| workspace.repository_id == repository_id)
+            else {
+                continue;
+            };
+            let Ok(snapshot) =
+                self.file_content_snapshot_for_workspace(&workspace, &canonical_path)
+            else {
+                continue;
+            };
+            snapshots.insert(
+                (repository_id.clone(), path.clone()),
+                Arc::new(crate::mcp::server_cache::ResultHandleSourceSnapshot {
+                    repository_id,
+                    path,
+                    revision: snapshot.source_revision(),
+                }),
+            );
+        }
+        snapshots
+    }
+
+    /// The only result-handle assignment path. It binds sources before exposing match ids so
+    /// every tool family shares identical containment and bounded-snapshot behavior.
+    fn assign_bound_result_handle<T>(
+        &self,
+        tool_name: &'static str,
+        matches: &mut [T],
+        source: impl Fn(&T) -> (String, String, usize, Option<usize>),
+        assign_match_id: impl Fn(&mut T, Option<String>),
+    ) -> Option<String> {
+        let snapshots = self.bind_result_handle_source_snapshots(matches.iter().map(|found| {
+            let (repository_id, path, _, _) = source(found);
+            (repository_id, path)
+        }));
+        let scope = Self::result_handle_scope_for_tool(tool_name);
+        let mut stored = BTreeMap::new();
+        for (index, found) in matches.iter_mut().enumerate() {
+            let (repository_id, path, line, column) = source(found);
+            let Some(snapshot) = snapshots.get(&(repository_id, path)).cloned() else {
+                assign_match_id(found, None);
+                continue;
+            };
+            let match_id = Self::scoped_match_id(scope, index);
+            stored.insert(
+                match_id.clone(),
+                crate::mcp::server_cache::ResultHandleMatchAnchor {
+                    source: snapshot,
+                    line,
+                    column,
+                },
+            );
+            assign_match_id(found, Some(match_id));
+        }
+        self.store_session_result_handle(tool_name, stored)
+    }
+
     fn assign_result_handle_for_text_matches(
         &self,
         tool_name: &'static str,
         matches: &mut [TextMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: Some(found.column),
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    Some(found.column),
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_symbol_matches(
@@ -371,22 +458,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [SymbolMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: found.column,
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    found.column,
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     pub(super) fn assign_result_handle_for_batch_matches(
@@ -394,22 +478,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [crate::mcp::types::SearchBatchMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: found.column,
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    found.column,
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_hybrid_matches(
@@ -417,22 +498,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [SearchHybridMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: Some(found.column),
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    Some(found.column),
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_reference_matches(
@@ -440,22 +518,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [ReferenceMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: Some(found.column),
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    Some(found.column),
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_navigation_locations(
@@ -463,22 +538,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [NavigationLocation],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: Some(found.column),
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    Some(found.column),
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_implementation_matches(
@@ -486,22 +558,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [ImplementationMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: Some(found.column),
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    Some(found.column),
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_call_hierarchy_matches(
@@ -509,22 +578,19 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [CallHierarchyMatch],
     ) -> Option<String> {
-        let scope = Self::result_handle_scope_for_tool(tool_name);
-        let mut stored = BTreeMap::new();
-        for (index, found) in matches.iter_mut().enumerate() {
-            let match_id = Self::scoped_match_id(scope, index);
-            stored.insert(
-                match_id.clone(),
-                crate::mcp::server_cache::ResultHandleMatchAnchor {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: found.line,
-                    column: Some(found.column),
-                },
-            );
-            found.match_id = Some(match_id);
-        }
-        self.store_session_result_handle(tool_name, stored)
+        self.assign_bound_result_handle(
+            tool_name,
+            matches,
+            |found| {
+                (
+                    found.repository_id.clone(),
+                    found.path.clone(),
+                    found.line,
+                    Some(found.column),
+                )
+            },
+            |found, match_id| found.match_id = match_id,
+        )
     }
 
     fn assign_result_handle_for_document_symbols(
@@ -533,32 +599,51 @@ impl FriggMcpServer {
         symbols: &mut [DocumentSymbolItem],
     ) -> Option<String> {
         let scope = Self::result_handle_scope_for_tool(tool_name);
+        fn pending_sources(symbols: &[DocumentSymbolItem], pending: &mut Vec<(String, String)>) {
+            for symbol in symbols {
+                pending.push((symbol.repository_id.clone(), symbol.path.clone()));
+                pending_sources(&symbol.children, pending);
+            }
+        }
         fn visit(
             scope: &str,
             symbols: &mut [DocumentSymbolItem],
             next_id: &mut usize,
             stored: &mut BTreeMap<String, crate::mcp::server_cache::ResultHandleMatchAnchor>,
+            snapshots: &BTreeMap<
+                (String, String),
+                Arc<crate::mcp::server_cache::ResultHandleSourceSnapshot>,
+            >,
         ) {
             for symbol in symbols {
                 let match_id = format!("{scope}:m{}", *next_id);
                 *next_id = next_id.saturating_add(1);
-                stored.insert(
-                    match_id.clone(),
-                    crate::mcp::server_cache::ResultHandleMatchAnchor {
-                        repository_id: symbol.repository_id.clone(),
-                        path: symbol.path.clone(),
-                        line: symbol.line,
-                        column: Some(symbol.column),
-                    },
-                );
-                symbol.match_id = Some(match_id);
-                visit(scope, &mut symbol.children, next_id, stored);
+                if let Some(snapshot) = snapshots
+                    .get(&(symbol.repository_id.clone(), symbol.path.clone()))
+                    .cloned()
+                {
+                    stored.insert(
+                        match_id.clone(),
+                        crate::mcp::server_cache::ResultHandleMatchAnchor {
+                            source: snapshot,
+                            line: symbol.line,
+                            column: Some(symbol.column),
+                        },
+                    );
+                    symbol.match_id = Some(match_id);
+                } else {
+                    symbol.match_id = None;
+                }
+                visit(scope, &mut symbol.children, next_id, stored, snapshots);
             }
         }
 
+        let mut pending = Vec::new();
+        pending_sources(symbols, &mut pending);
+        let snapshots = self.bind_result_handle_source_snapshots(pending);
         let mut stored = BTreeMap::new();
         let mut next_id = 1usize;
-        visit(scope, symbols, &mut next_id, &mut stored);
+        visit(scope, symbols, &mut next_id, &mut stored, &snapshots);
         self.store_session_result_handle(tool_name, stored)
     }
 
@@ -1332,10 +1417,19 @@ mod tests {
         let workspace_root = temp_workspace_root("limit-zero-presentation");
         fs::create_dir_all(workspace_root.join(".git"))
             .expect("fixture git marker should be creatable");
-        FriggMcpServer::new(
+        let server = FriggMcpServer::new(
             FriggConfig::from_workspace_roots(vec![workspace_root])
                 .expect("workspace root must produce valid config"),
-        )
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("presentation fixture workspace");
+        server
+            .adopt_workspace(&workspace, true)
+            .expect("presentation fixture workspace should be adopted");
+        server
     }
 
     fn sample_text_match(repository_id: &str, path: &str) -> TextMatch {
@@ -1349,6 +1443,19 @@ mod tests {
             witness_score_hint_millis: None,
             witness_provenance_ids: None,
         }
+    }
+
+    fn bound_text_match(server: &FriggMcpServer, path: &str) -> TextMatch {
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("presentation fixture workspace");
+        let source = workspace.root.join(path);
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("source parent should be creatable");
+        fs::write(&source, "fn proof_fixture() {}\n").expect("source should be writable");
+        sample_text_match(&workspace.repository_id, path)
     }
 
     #[test]
@@ -1391,7 +1498,7 @@ mod tests {
             .present_search_text_response(
                 SearchTextResponse {
                     total_matches: 1,
-                    matches: vec![sample_text_match("repo-001", "src/a.rs")],
+                    matches: vec![bound_text_match(&server, "src/a.rs")],
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,
@@ -1558,6 +1665,36 @@ mod tests {
             server.session_result_handle_lookup(&handle, "nav:m9"),
             SessionResultHandleLookup::MixedHandle { .. }
         ));
+    }
+
+    #[test]
+    fn bound_anchors_share_one_source_snapshot_and_skip_unreadable_rows() {
+        let server = presentation_test_server();
+        let mut matches = vec![
+            bound_text_match(&server, "src/shared.rs"),
+            bound_text_match(&server, "src/shared.rs"),
+            sample_text_match("missing-repository", "src/missing.rs"),
+        ];
+
+        let handle = server
+            .assign_result_handle_for_text_matches("search_text", &mut matches)
+            .expect("readable rows should create a handle");
+        assert_eq!(matches[0].match_id.as_deref(), Some("search:m1"));
+        assert_eq!(matches[1].match_id.as_deref(), Some("search:m2"));
+        assert!(matches[2].match_id.is_none());
+
+        let cache = server
+            .session_state
+            .inner
+            .result_handles
+            .read()
+            .expect("handle cache lock");
+        let entry = cache.entries.get(&handle).expect("stored handle");
+        assert_eq!(entry.origin_tool, "search_text");
+        let first = entry.matches.get("search:m1").expect("first anchor");
+        let second = entry.matches.get("search:m2").expect("second anchor");
+        assert!(Arc::ptr_eq(&first.source, &second.source));
+        assert_eq!(entry.matches.len(), 2);
     }
 
     #[test]
@@ -1928,16 +2065,7 @@ mod tests {
     #[test]
     fn drop_session_result_handle_removes_entry() {
         let server = presentation_test_server();
-        let mut matches = vec![crate::domain::model::TextMatch {
-            match_id: None,
-            repository_id: "repo".to_owned(),
-            path: "src/lib.rs".to_owned(),
-            line: 1,
-            column: 1,
-            excerpt: "fn x() {}".to_owned(),
-            witness_score_hint_millis: None,
-            witness_provenance_ids: None,
-        }];
+        let mut matches = vec![bound_text_match(&server, "src/lib.rs")];
         let handle = server
             .assign_result_handle_for_text_matches("search_text", &mut matches)
             .expect("handle should be stored");
@@ -1963,11 +2091,12 @@ mod tests {
     #[test]
     fn path_scoped_handle_invalidation_drops_only_dirty_anchors() {
         let server = presentation_test_server();
-        let mut dirty_matches = vec![sample_text_match("repo-001", "src/dirty.rs")];
-        let mut clean_matches = vec![sample_text_match("repo-001", "src/clean.rs")];
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let mut dirty_matches = vec![bound_text_match(&server, "src/dirty.rs")];
+        let mut clean_matches = vec![bound_text_match(&server, "src/clean.rs")];
         let mut mixed_matches = vec![
-            sample_text_match("repo-001", "src/dirty.rs"),
-            sample_text_match("repo-001", "src/other.rs"),
+            bound_text_match(&server, "src/dirty.rs"),
+            bound_text_match(&server, "src/other.rs"),
         ];
         let dirty_handle = server
             .assign_result_handle_for_text_matches("search_text", &mut dirty_matches)
@@ -1980,11 +2109,17 @@ mod tests {
             .expect("mixed handle");
         let dirty_mid = dirty_matches[0].match_id.clone().expect("dirty match_id");
         let clean_mid = clean_matches[0].match_id.clone().expect("clean match_id");
-        let mixed_dirty_mid = mixed_matches[0].match_id.clone().expect("mixed dirty match_id");
-        let mixed_clean_mid = mixed_matches[1].match_id.clone().expect("mixed clean match_id");
+        let mixed_dirty_mid = mixed_matches[0]
+            .match_id
+            .clone()
+            .expect("mixed dirty match_id");
+        let mixed_clean_mid = mixed_matches[1]
+            .match_id
+            .clone()
+            .expect("mixed clean match_id");
 
         server.invalidate_session_result_handles_for_paths(
-            &["repo-001"],
+            &[&repository_id],
             &["src/dirty.rs".to_owned()],
         );
 
@@ -2021,13 +2156,14 @@ mod tests {
     #[test]
     fn empty_dirty_paths_skips_handle_invalidation() {
         let server = presentation_test_server();
-        let mut matches = vec![sample_text_match("repo-001", "src/a.rs")];
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let mut matches = vec![bound_text_match(&server, "src/a.rs")];
         let handle = server
             .assign_result_handle_for_text_matches("search_text", &mut matches)
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
-        server.invalidate_session_result_handles_for_paths(&["repo-001"], &[]);
+        server.invalidate_session_result_handles_for_paths(&[&repository_id], &[]);
 
         assert!(matches!(
             server.session_result_handle_lookup(&handle, &mid),
@@ -2038,13 +2174,14 @@ mod tests {
     #[test]
     fn whole_repo_invalidation_drops_all_repo_handles() {
         let server = presentation_test_server();
-        let mut matches = vec![sample_text_match("repo-001", "src/a.rs")];
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let mut matches = vec![bound_text_match(&server, "src/a.rs")];
         let handle = server
             .assign_result_handle_for_text_matches("search_text", &mut matches)
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
-        server.invalidate_session_result_handles_for_repository_ids(["repo-001"]);
+        server.invalidate_session_result_handles_for_repository_ids([repository_id.as_str()]);
 
         assert!(matches!(
             server.session_result_handle_lookup(&handle, &mid),
@@ -2055,16 +2192,14 @@ mod tests {
     #[test]
     fn directory_dirty_path_invalidates_nested_anchors() {
         let server = presentation_test_server();
-        let mut matches = vec![sample_text_match("repo-001", "src/nested/lib.rs")];
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let mut matches = vec![bound_text_match(&server, "src/nested/lib.rs")];
         let handle = server
             .assign_result_handle_for_text_matches("search_text", &mut matches)
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
-        server.invalidate_session_result_handles_for_paths(
-            &["repo-001"],
-            &["src".to_owned()],
-        );
+        server.invalidate_session_result_handles_for_paths(&[&repository_id], &["src".to_owned()]);
 
         assert!(matches!(
             server.session_result_handle_lookup(&handle, &mid),
@@ -2075,16 +2210,15 @@ mod tests {
     #[test]
     fn basename_dirty_does_not_overmatch_nested_paths() {
         let server = presentation_test_server();
-        let mut matches = vec![sample_text_match("repo-001", "src/nested/foo.rs")];
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let mut matches = vec![bound_text_match(&server, "src/nested/foo.rs")];
         let handle = server
             .assign_result_handle_for_text_matches("search_text", &mut matches)
             .expect("handle");
         let mid = matches[0].match_id.clone().expect("match_id");
 
-        server.invalidate_session_result_handles_for_paths(
-            &["repo-001"],
-            &["foo.rs".to_owned()],
-        );
+        server
+            .invalidate_session_result_handles_for_paths(&[&repository_id], &["foo.rs".to_owned()]);
 
         assert!(matches!(
             server.session_result_handle_lookup(&handle, &mid),
@@ -2093,10 +2227,11 @@ mod tests {
     }
 
     #[test]
-    fn path_scoped_invalidation_does_not_touch_other_repositories() {
+    fn path_scoped_invalidation_does_not_touch_other_paths() {
         let server = presentation_test_server();
-        let mut repo_a = vec![sample_text_match("repo-a", "src/lib.rs")];
-        let mut repo_b = vec![sample_text_match("repo-b", "src/lib.rs")];
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let mut repo_a = vec![bound_text_match(&server, "src/lib.rs")];
+        let mut repo_b = vec![bound_text_match(&server, "src/other.rs")];
         let handle_a = server
             .assign_result_handle_for_text_matches("search_text", &mut repo_a)
             .expect("handle a");
@@ -2107,7 +2242,7 @@ mod tests {
         let mid_b = repo_b[0].match_id.clone().expect("mid b");
 
         server.invalidate_session_result_handles_for_paths(
-            &["repo-a"],
+            &[&repository_id],
             &["src/lib.rs".to_owned()],
         );
 
