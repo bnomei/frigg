@@ -544,6 +544,7 @@ fn human_index_progress_detail(event: &IndexProgressEvent) -> Option<String> {
         }
         IndexProgressPhase::SemanticRefresh => vec![
             progress_duration_detail(event),
+            progress_semantic_file_count_detail(event),
             progress_semantic_records_detail(event),
             progress_semantic_mode_detail(event),
             progress_semantic_path_delta(event),
@@ -563,6 +564,13 @@ fn human_index_progress_detail(event: &IndexProgressEvent) -> Option<String> {
     } else {
         Some(parts.join(" · "))
     }
+}
+
+fn progress_semantic_file_count_detail(event: &IndexProgressEvent) -> Option<String> {
+    Some(format!(
+        "{} / {} files",
+        event.semantic_files_completed?, event.semantic_files_total?
+    ))
 }
 
 fn human_semantic_progress_title(event: &IndexProgressEvent) -> String {
@@ -754,6 +762,12 @@ fn index_progress_fields(
     }
     if let Some(records) = event.records {
         fields.push(field("records", records));
+    }
+    if let Some(files_completed) = event.semantic_files_completed {
+        fields.push(field("semantic_files_completed", files_completed));
+    }
+    if let Some(files_total) = event.semantic_files_total {
+        fields.push(field("semantic_files_total", files_total));
     }
     if let Some(changed_paths) = event.changed_paths {
         fields.push(field("changed_paths", changed_paths));

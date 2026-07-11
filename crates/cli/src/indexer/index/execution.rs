@@ -126,6 +126,16 @@ pub(super) fn execute_index_plan(
         semantic_runtime,
         credentials,
         executor,
+        &mut |files_completed, files_total| {
+            on_progress(
+                index_execution_progress_event(
+                    plan,
+                    IndexProgressPhase::SemanticRefresh,
+                    IndexProgressStatus::Starting,
+                )
+                .with_semantic_file_progress(files_completed, files_total),
+            );
+        },
     )?;
     if semantics_written {
         on_progress(
@@ -337,6 +347,7 @@ fn execute_semantic_refresh_phase(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
+    on_file_progress: &mut impl FnMut(usize, usize),
 ) -> FriggResult<bool> {
     if plan.semantic_refresh.mode == SemanticRefreshMode::Disabled {
         return Ok(false);
@@ -352,6 +363,7 @@ fn execute_semantic_refresh_phase(
         credentials,
         executor,
         storage_session,
+        on_file_progress,
     );
 
     if let Err(err) = semantic_result {

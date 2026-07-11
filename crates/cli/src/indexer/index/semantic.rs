@@ -230,6 +230,33 @@ pub(crate) fn index_repository_with_semantic_executor(
     )
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn index_repository_with_semantic_executor_and_progress(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: IndexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    executor: &dyn SemanticRuntimeEmbeddingExecutor,
+    on_progress: impl FnMut(IndexProgressEvent),
+) -> FriggResult<IndexSummary> {
+    index_repository_with_semantic_executor_and_dirty_paths(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        &[],
+        executor,
+        |_| Ok(()),
+        |_| Ok(()),
+        on_progress,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn index_repository_with_semantic_executor_and_dirty_paths(
     repository_id: &str,
@@ -626,6 +653,7 @@ pub(crate) fn execute_semantic_refresh_plan(
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     storage: &mut StorageSession,
+    on_file_progress: &mut impl FnMut(usize, usize),
 ) -> FriggResult<()> {
     let provider = semantic_refresh
         .provider
@@ -648,6 +676,7 @@ pub(crate) fn execute_semantic_refresh_plan(
                 credentials,
                 executor,
                 Some(&*storage as &dyn SemanticIndexStorage),
+                on_file_progress,
             )?;
             storage.replace_semantic_embeddings_for_repository(
                 repository_id,
@@ -671,6 +700,7 @@ pub(crate) fn execute_semantic_refresh_plan(
                 credentials,
                 executor,
                 Some(&*storage as &dyn SemanticIndexStorage),
+                on_file_progress,
             )?;
             storage.advance_semantic_embeddings_for_repository(
                 repository_id,

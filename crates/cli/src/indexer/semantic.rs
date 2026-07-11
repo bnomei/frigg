@@ -294,6 +294,7 @@ pub(super) fn build_semantic_embedding_records(
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     storage: Option<&dyn SemanticIndexStorage>,
+    on_file_progress: &mut impl FnMut(usize, usize),
 ) -> FriggResult<SemanticEmbeddingBuild> {
     semantic_runtime
         .validate_startup(credentials)
@@ -337,16 +338,28 @@ pub(super) fn build_semantic_embedding_records(
     )?;
     let trace_id = deterministic_semantic_trace_id(repository_id, snapshot_id, provider, model);
     if !chunks_to_embed.is_empty() {
+        let files_total = semantic_chunk_file_count(&chunks_to_embed);
+        on_file_progress(0, files_total);
         records.extend(execute_semantic_embedding_batches(
             provider,
             model,
             &chunks_to_embed,
             &trace_id,
             executor,
+            on_file_progress,
+            files_total,
         )?);
     }
     sort_semantic_embedding_records(&mut records);
     Ok(SemanticEmbeddingBuild { records })
+}
+
+fn semantic_chunk_file_count(chunks: &[SemanticChunkCandidate]) -> usize {
+    chunks
+        .windows(2)
+        .filter(|pair| pair[0].path != pair[1].path)
+        .count()
+        .saturating_add(usize::from(!chunks.is_empty()))
 }
 
 fn reuse_existing_semantic_embedding_records(
@@ -455,15 +468,31 @@ fn execute_semantic_embedding_batches(
     chunks: &[SemanticChunkCandidate],
     trace_id: &str,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
+    on_file_progress: &mut impl FnMut(usize, usize),
+    files_total: usize,
 ) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return std::thread::scope(|scope| {
-            let handle = scope.spawn(|| {
+            let (progress_sender, progress_receiver) = std::sync::mpsc::channel();
+            let handle = scope.spawn(move || {
                 let runtime = build_semantic_embedding_runtime()?;
+                let mut send_progress = |files_completed, files_total| {
+                    let _ = progress_sender.send((files_completed, files_total));
+                };
                 build_semantic_embedding_records_with_runtime(
-                    provider, model, chunks, trace_id, executor, &runtime,
+                    provider,
+                    model,
+                    chunks,
+                    trace_id,
+                    executor,
+                    &runtime,
+                    &mut send_progress,
+                    files_total,
                 )
             });
+            for (files_completed, files_total) in progress_receiver {
+                on_file_progress(files_completed, files_total);
+            }
             match handle.join() {
                 Ok(result) => result,
                 Err(_) => Err(FriggError::Internal(
@@ -476,7 +505,14 @@ fn execute_semantic_embedding_batches(
 
     let runtime = build_semantic_embedding_runtime()?;
     build_semantic_embedding_records_with_runtime(
-        provider, model, chunks, trace_id, executor, &runtime,
+        provider,
+        model,
+        chunks,
+        trace_id,
+        executor,
+        &runtime,
+        on_file_progress,
+        files_total,
     )
 }
 
@@ -487,9 +523,13 @@ fn build_semantic_embedding_records_with_runtime(
     trace_id: &str,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     runtime: &tokio::runtime::Runtime,
+    on_file_progress: &mut impl FnMut(usize, usize),
+    files_total: usize,
 ) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
     let mut output = Vec::with_capacity(chunks.len());
     let total_batches = chunks.len().div_ceil(SEMANTIC_EMBEDDING_BATCH_SIZE);
+    let mut completed_files = 0usize;
+    let mut previous_path: Option<&Arc<str>> = None;
     for (batch_index, batch) in chunks.chunks(SEMANTIC_EMBEDDING_BATCH_SIZE).enumerate() {
         let batch_input = batch
             .iter()
@@ -563,6 +603,16 @@ fn build_semantic_embedding_records_with_runtime(
                 embedding,
             });
         }
+        for chunk in batch {
+            if previous_path.is_some_and(|path| *path != chunk.path) {
+                completed_files = completed_files.saturating_add(1);
+            }
+            previous_path = Some(&chunk.path);
+        }
+        if batch_index + 1 == total_batches {
+            completed_files = completed_files.saturating_add(1);
+        }
+        on_file_progress(completed_files, files_total);
     }
 
     sort_semantic_embedding_records(&mut output);

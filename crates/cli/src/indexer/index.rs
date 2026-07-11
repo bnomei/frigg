@@ -16,7 +16,10 @@ pub use plan::{
     SemanticRefreshPlan,
 };
 #[cfg(test)]
-pub(crate) use semantic::index_repository_with_semantic_executor;
+pub(crate) use semantic::{
+    index_repository_with_semantic_executor,
+    index_repository_with_semantic_executor_and_progress,
+};
 pub use semantic::{
     index_repository, index_repository_with_runtime_config,
     index_repository_with_runtime_config_and_dirty_paths,

@@ -23,7 +23,8 @@ pub(super) use super::super::{
     extract_php_source_evidence_from_source, extract_symbols_for_paths,
     extract_symbols_from_source, file_digest_order,
     generated_follow_up_structural_at_location_in_source, index_repository_with_runtime_config,
-    index_repository_with_semantic_executor, inspect_syntax_tree_with_follow_up_in_source,
+    index_repository_with_semantic_executor, index_repository_with_semantic_executor_and_progress,
+    inspect_syntax_tree_with_follow_up_in_source,
     mark_local_flux_overlays, navigation_symbol_target_rank, register_symbol_definitions,
     resolve_heuristic_references, search_structural_in_source, semantic_chunk_language_for_path,
 };

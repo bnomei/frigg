@@ -34,7 +34,9 @@ mod symbols;
 #[cfg(test)]
 pub(crate) use index::build_index_plan_for_tests;
 #[cfg(test)]
-use index::index_repository_with_semantic_executor;
+use index::{
+    index_repository_with_semantic_executor, index_repository_with_semantic_executor_and_progress,
+};
 pub use index::{
     IndexDiagnostics, IndexMode, IndexPlan, IndexProgressEvent, IndexProgressPhase,
     IndexProgressStatus, IndexSummary, ManifestSnapshotPlan, ManifestStore, SemanticRefreshMode,

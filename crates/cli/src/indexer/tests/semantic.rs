@@ -82,6 +82,63 @@ fn semantic_indexing_index_persists_deterministic_embeddings_when_enabled() -> F
 }
 
 #[test]
+fn semantic_indexing_emits_batched_file_progress() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-file-progress");
+    let workspace_root = temp_workspace_root("semantic-file-progress");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            ("src/first.rs", "pub fn first() {}\n"),
+            ("src/second.rs", "pub fn second() {}\n"),
+        ],
+    )?;
+
+    let events = Mutex::new(Vec::new());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    runtime.block_on(async {
+        index_repository_with_semantic_executor_and_progress(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            IndexMode::Full,
+            &semantic_runtime_enabled_openai(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+                openai_compat_api_key: None,
+            },
+            &FixtureSemanticEmbeddingExecutor,
+            |event| {
+                events
+                    .lock()
+                    .expect("semantic progress events lock should not be poisoned")
+                    .push(event);
+            },
+        )
+    })?;
+
+    let progress = events
+        .into_inner()
+        .expect("semantic progress events lock should not be poisoned")
+        .into_iter()
+        .filter_map(|event| {
+            Some((
+                event.semantic_files_completed?,
+                event.semantic_files_total?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(progress, vec![(0, 2), (2, 2)]);
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_indexing_local_provider_persists_local_model_rows_and_projects_short_vectors()
 -> FriggResult<()> {
     let db_path = temp_db_path("semantic-local-provider-short-vector");

@@ -203,6 +203,8 @@ pub struct IndexProgressEvent {
     pub files_deleted: Option<usize>,
     pub diagnostics: Option<usize>,
     pub records: Option<usize>,
+    pub semantic_files_completed: Option<usize>,
+    pub semantic_files_total: Option<usize>,
     pub changed_paths: Option<usize>,
     pub deleted_paths: Option<usize>,
     pub pruned_snapshots: Option<usize>,
@@ -229,6 +231,8 @@ impl IndexProgressEvent {
             files_deleted: None,
             diagnostics: None,
             records: None,
+            semantic_files_completed: None,
+            semantic_files_total: None,
             changed_paths: None,
             deleted_paths: None,
             pruned_snapshots: None,
@@ -265,6 +269,17 @@ impl IndexProgressEvent {
 
     pub fn with_records(mut self, records: usize) -> Self {
         self.records = Some(records);
+        self
+    }
+
+    /// Attaches a bounded file-level snapshot for semantic embedding work.
+    pub fn with_semantic_file_progress(
+        mut self,
+        files_completed: usize,
+        files_total: usize,
+    ) -> Self {
+        self.semantic_files_completed = Some(files_completed);
+        self.semantic_files_total = Some(files_total);
         self
     }
 

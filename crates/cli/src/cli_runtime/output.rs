@@ -967,6 +967,22 @@ mod tests {
     }
 
     #[test]
+    fn human_semantic_progress_event_shows_file_counter() {
+        let event = IndexProgressEvent::new(
+            "repo-001",
+            IndexMode::Full,
+            IndexProgressPhase::SemanticRefresh,
+            IndexProgressStatus::Starting,
+        )
+        .with_semantic_refresh_mode(SemanticRefreshMode::FullRebuild)
+        .with_semantic_file_progress(2, 7);
+        let output = super::index::format_human_index_progress_event(&event, &[], false, 100);
+
+        assert!(output.contains("Rebuilding semantic chunks"));
+        assert!(output.contains("2 / 7 files"));
+    }
+
+    #[test]
     fn human_semantic_phase_completion_uses_semantic_delta() {
         let output = format_human_event_with_width(
             OutputLevel::Ok,
