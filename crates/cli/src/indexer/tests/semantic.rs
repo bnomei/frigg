@@ -85,10 +85,15 @@ fn semantic_indexing_index_persists_deterministic_embeddings_when_enabled() -> F
 fn semantic_indexing_emits_batched_file_progress() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-file-progress");
     let workspace_root = temp_workspace_root("semantic-file-progress");
+    let first_file = format!(
+        "{}\n",
+        "x".repeat(SEMANTIC_CHUNK_MAX_CHARS.saturating_sub(1))
+    )
+    .repeat(24);
     prepare_workspace(
         &workspace_root,
         &[
-            ("src/first.rs", "pub fn first() {}\n"),
+            ("src/first.rs", first_file.as_str()),
             ("src/second.rs", "pub fn second() {}\n"),
         ],
     )?;
@@ -131,7 +136,7 @@ fn semantic_indexing_emits_batched_file_progress() -> FriggResult<()> {
             ))
         })
         .collect::<Vec<_>>();
-    assert_eq!(progress, vec![(0, 2), (2, 2)]);
+    assert_eq!(progress, vec![(0, 2), (1, 2), (2, 2)]);
 
     cleanup_workspace(&workspace_root);
     cleanup_db(&db_path);

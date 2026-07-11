@@ -529,7 +529,6 @@ fn build_semantic_embedding_records_with_runtime(
     let mut output = Vec::with_capacity(chunks.len());
     let total_batches = chunks.len().div_ceil(SEMANTIC_EMBEDDING_BATCH_SIZE);
     let mut completed_files = 0usize;
-    let mut previous_path: Option<&Arc<str>> = None;
     for (batch_index, batch) in chunks.chunks(SEMANTIC_EMBEDDING_BATCH_SIZE).enumerate() {
         let batch_input = batch
             .iter()
@@ -603,13 +602,17 @@ fn build_semantic_embedding_records_with_runtime(
                 embedding,
             });
         }
-        for chunk in batch {
-            if previous_path.is_some_and(|path| *path != chunk.path) {
-                completed_files = completed_files.saturating_add(1);
-            }
-            previous_path = Some(&chunk.path);
-        }
-        if batch_index + 1 == total_batches {
+        completed_files = completed_files.saturating_add(
+            batch
+                .windows(2)
+                .filter(|pair| pair[0].path != pair[1].path)
+                .count(),
+        );
+        let next_chunk_index = (batch_index + 1) * SEMANTIC_EMBEDDING_BATCH_SIZE;
+        if chunks
+            .get(next_chunk_index)
+            .is_none_or(|next_chunk| batch.last().is_some_and(|last_chunk| last_chunk.path != next_chunk.path))
+        {
             completed_files = completed_files.saturating_add(1);
         }
         on_file_progress(completed_files, files_total);
