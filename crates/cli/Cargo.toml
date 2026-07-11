@@ -74,7 +74,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/frigg-v{ version }-{ target }
 pkg-fmt = "zip"
 
 [build-dependencies]
-cc = "1.1"
+cc = "1.2.67"
 
 [dev-dependencies]
 criterion = "0.8.2"

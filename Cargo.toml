@@ -35,14 +35,14 @@ fastembed = { version = "5.17.2", default-features = false, features = ["hf-hub-
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "rustls-tls"] }
 ignore = "0.4.25"
 indicatif = { version = "0.18.0", default-features = false, features = ["unicode-width"] }
-memchr = "2.7.6"
+memchr = "2.8.3"
 notify = "8.2.0"
 petgraph = { version = "0.8.3", default-features = false, features = ["std"] }
 protobuf = "=3.7.2"
-rayon = "1.11.0"
-regex = "1.12.3"
+rayon = "1.12.0"
+regex = "1.13.0"
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "2.1.0", default-features = false, features = ["macros", "server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "2.2.0", default-features = false, features = ["macros", "server", "transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled"] }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 scip = "0.7.1"
@@ -50,7 +50,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 smallvec = "1.15.1"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["fs", "io-std", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.52.3", features = ["fs", "io-std", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 tree-sitter = "0.26.6"
@@ -61,7 +61,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-php = "0.24.2"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
-uuid = { version = "1.21.0", features = ["v7"] }
+uuid = { version = "1.23.4", features = ["v7"] }
 walkdir = "2.5.0"
 
 [workspace.lints.rust]
