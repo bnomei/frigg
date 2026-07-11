@@ -1180,7 +1180,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "list_files",
-        description = "List repository files with path/glob/language/class/hidden filters and pagination. Use search_text/search_symbol for content.",
+        description = "List repository files with filters. Pages expose completeness and snapshot-bound continuation; use search_text/search_symbol for content.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2045,7 +2045,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_match",
-        description = "Read a revision-bound source window for a prior result_handle and match_id. Use after search/nav proof; if the bound source changed or cannot be verified, returns RESOURCE_NOT_FOUND with STALE_PROOF_ANCHOR instead of content.",
+        description = "Read revision-bound source by result_handle and match_id. Stale or unverifiable source returns RESOURCE_NOT_FOUND/STALE_PROOF_ANCHOR.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2063,7 +2063,8 @@ impl FriggMcpServer {
 
     #[tool(
         name = "explore",
-        description = "Probe/refine/zoom inside one known repository file. Use after you have a path; use search_text/search_symbol/search_hybrid for discovery.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<ExploreResponse>(),
+        description = "Probe/refine/zoom inside one repository file. Paged probe/refine rows expose completeness and continuation; use search tools for discovery.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2081,7 +2082,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Exact text search, literal by default. Use pattern_type=regex, glob/path_regex to scope, count_only for counts; not vague discovery.",
+        description = "Exact text search, literal by default. Paged rows expose completeness and canonical continuation; use regex/glob/path_regex to scope.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2097,7 +2098,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Discovery pivots for broad code questions without known text, symbol, or path. Follow with search_text/search_symbol/read_match for proof.",
+        description = "Discovery pivots for broad questions. Ranked results are incomplete and non-exhaustive; never use a continuation. Confirm with exact search.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2113,7 +2114,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Use path_class for tests/support; not free-text search.",
+        description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Paged rows expose completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2129,7 +2130,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_batch",
-        description = "Run 2-8 independent text/symbol/hybrid probes concurrently; merge hits. Prefer multi-hypothesis; single tools for one probe.",
+        description = "Run 2-8 text/symbol/hybrid probes concurrently. Per-probe and aggregate completeness expose caps and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2145,7 +2146,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_references",
-        description = "Find definition and usage rows for a symbol or cursor location. Prefer symbol= when known; use over shell rg for impact checks.",
+        description = "Find definition and usage rows for a symbol or cursor location. Pages expose active-mode completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2161,7 +2162,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "go_to_definition",
-        description = "Default agent route for definitions. Prefer symbol=. Do not call find_declarations first for ordinary where-implemented questions.",
+        description = "Default agent route for definitions. Prefer symbol=. Pages expose active-mode completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2177,7 +2178,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_declarations",
-        description = "Secondary to go_to_definition when decl vs def matters. Prefer symbol=. Do not call serially with go_to_definition by default.",
+        description = "Secondary to go_to_definition when declaration vs definition matters. Pages expose active-mode completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2193,7 +2194,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_implementations",
-        description = "Find implementations for traits/interfaces (not ordinary structs). Prefer symbol= for the trait/interface name.",
+        description = "Find implementations for traits/interfaces, not ordinary structs. Pages expose active-mode completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2209,7 +2210,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "incoming_calls",
-        description = "Who calls this? Find callers for a callable symbol or cursor location. Prefer for impact/blast-radius after a symbol anchor.",
+        description = "Who calls this? Find callers for a callable symbol or cursor location. Pages expose active-mode completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2225,7 +2226,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "outgoing_calls",
-        description = "Find callees for a callable symbol or cursor location. Provisional until confirmed with body proof reads (read_match/read_file).",
+        description = "Find callees for a callable symbol or cursor location. Pages expose active-mode completeness and continuation; confirm provisional edges.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2241,7 +2242,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "document_symbols",
-        description = "File outline for one supported source file. Defaults top_level_only=true; paginates with limit/resume_from. Known name: use search_symbol.",
+        description = "File outline for one supported source file. Pages expose completeness and canonical continuation; known name: use search_symbol.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2257,7 +2258,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "inspect_syntax_tree",
-        description = "Return AST focus, ancestors, and children around a source location. Requires line and column; use before search_structural.",
+        description = "Return AST focus, ancestors, and children around a source location. Bounded ancestor/child collections expose completeness.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2273,7 +2274,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_structural",
-        description = "Run a bounded Tree-sitter query and return structural matches.",
+        description = "Run a bounded Tree-sitter query. Paged structural rows expose completeness and canonical continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2289,7 +2290,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "impact_bundle",
-        description = "Bundle hits/refs/callers/impls for planning+proof. Nav tools remain source of truth. Default omits outgoing_calls and tests.",
+        description = "Bundle hits/refs/callers/impls for planning and proof. Section and aggregate completeness expose caps; nav tools remain source of truth.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

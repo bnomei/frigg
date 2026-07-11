@@ -62,6 +62,7 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
         .await
         .expect("tools/list should route through RMCP");
     assert_tools_list_descriptions_are_concise(&tools.tools);
+    assert_collection_contracts_are_discoverable(&tools.tools);
 
     let read_file = tool_named(&tools.tools, "read_file");
     let read_file_annotations = read_file
@@ -295,6 +296,119 @@ fn assert_tools_list_descriptions_are_concise(tools: &[Tool]) {
             );
         }
     }
+}
+
+/// Keep the public `tools/list` contract aligned with the canonical completeness envelope.
+/// This covers the schema projection, the v2 continuation input surface, and the concise
+/// descriptions agents receive before issuing a bounded collection request.
+fn assert_collection_contracts_are_discoverable(tools: &[Tool]) {
+    const PAGED_COLLECTIONS: &[&str] = &[
+        "list_files",
+        "explore",
+        "search_text",
+        "search_symbol",
+        "search_batch",
+        "find_references",
+        "go_to_definition",
+        "find_declarations",
+        "find_implementations",
+        "incoming_calls",
+        "outgoing_calls",
+        "document_symbols",
+        "search_structural",
+    ];
+    const COMPLETENESS_OUTPUTS: &[(&str, &[&str])] = &[
+        ("list_files", &["completeness"]),
+        ("explore", &["completeness"]),
+        ("search_text", &["completeness"]),
+        ("search_hybrid", &["completeness"]),
+        ("search_symbol", &["completeness"]),
+        ("search_batch", &["completeness"]),
+        ("find_references", &["completeness"]),
+        ("go_to_definition", &["completeness"]),
+        ("find_declarations", &["completeness"]),
+        ("find_implementations", &["completeness"]),
+        ("incoming_calls", &["completeness"]),
+        ("outgoing_calls", &["completeness"]),
+        ("document_symbols", &["completeness"]),
+        (
+            "inspect_syntax_tree",
+            &["ancestors_completeness", "children_completeness"],
+        ),
+        ("search_structural", &["completeness"]),
+        (
+            "impact_bundle",
+            &[
+                "symbols_completeness",
+                "references_completeness",
+                "incoming_calls_completeness",
+                "completeness",
+            ],
+        ),
+    ];
+
+    for tool_name in PAGED_COLLECTIONS {
+        let tool = tool_named(tools, tool_name);
+        let input_properties =
+            schema_properties(&tool.input_schema, &format!("{tool_name} inputSchema"));
+        assert!(
+            input_properties.contains_key("continuation"),
+            "{tool_name} must expose the canonical v2 continuation input"
+        );
+        let description = tool.description.as_deref().unwrap_or("");
+        assert!(
+            description.contains("completeness") && description.contains("continuation"),
+            "{tool_name} description must name canonical completeness and continuation behavior: {description}"
+        );
+    }
+
+    for (tool_name, required_properties) in COMPLETENESS_OUTPUTS {
+        let tool = tool_named(tools, tool_name);
+        let output_schema = tool
+            .output_schema
+            .as_ref()
+            .unwrap_or_else(|| panic!("{tool_name} should publish an outputSchema"));
+        let output_properties =
+            schema_properties(output_schema, &format!("{tool_name} outputSchema"));
+        for property in *required_properties {
+            assert!(
+                output_properties.contains_key(*property),
+                "{tool_name} outputSchema must expose `{property}`"
+            );
+        }
+    }
+
+    let hybrid_description = tool_named(tools, "search_hybrid")
+        .description
+        .as_deref()
+        .unwrap_or("");
+    assert!(
+        hybrid_description.contains("incomplete")
+            && hybrid_description.contains("non-exhaustive")
+            && hybrid_description.contains("continuation"),
+        "search_hybrid description must not overclaim exhaustive continuation coverage: {hybrid_description}"
+    );
+
+    for tool_name in ["inspect_syntax_tree", "impact_bundle", "search_batch"] {
+        let description = tool_named(tools, tool_name)
+            .description
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            description.contains("completeness"),
+            "{tool_name} description must disclose bounded collection completeness: {description}"
+        );
+    }
+}
+
+fn schema_properties<'a>(
+    schema: &'a serde_json::Map<String, Value>,
+    label: &str,
+) -> &'a serde_json::Map<String, Value> {
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("{label} should define object properties"))
 }
 
 fn assert_schema_descriptions_are_concise(value: &Value, label: &str) {
