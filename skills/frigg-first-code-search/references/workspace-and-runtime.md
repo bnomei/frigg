@@ -82,7 +82,8 @@ For explicit semantic troubleshooting only, inspect `workspace.runtime`.
 - If a tool says it cannot resolve a repository, call `workspace` with `path=<repo root or any file inside it>`.
 - Use `workspace` to see the session default and runtime tasks when debugging wrong-repo or freshness issues.
 - After edits: check workspace freshness, then either re-search with Frigg or use **path-scoped** live reads for touched files only — never treat live-disk as a license for repo-wide shell grep.
-- Do not reuse a pre-edit `result_handle` / `read_match` for touched paths after a freshness transition; re-search for a new handle. Watch may drop only dirty-path anchors; reindex and unknown dirty sets wipe the repo's handles.
+- Do not reuse a pre-edit `result_handle` / `read_match` pair for touched paths after a freshness transition; re-run the originating search/navigation tool for a new pair. `read_match` also fail-closes with `STALE_PROOF_ANCHOR` (and no bytes) if its revision-bound source changed, was deleted, or cannot be verified. Watch may drop only dirty-path anchors; reindex and unknown dirty sets wipe the repo's handles.
+- `read_file` is the explicit current-live-content path. It is appropriate when historical proof is not needed, but it does not refresh a stale proof pair.
 - Branch on gate: `ready` → Frigg; `use_live_disk_for_touched_files` → touched paths only; `wait_watch` → wait for watch (read `runtime.watch_status`); `reindex` → CLI `frigg index` / operator (not MCP).
 - Health vocab: prefer `recommended_action` + recovery zeros; use `lexical_ready`/`semantic_ready` only as secondary substrate signals (never full generator scorecards mid-task).
 - Progressive disclosure: skill scenarios are agent SSOT; `frigg://policy/*` resources are machine/host secondary surfaces — keep aligned but not a second full skill.

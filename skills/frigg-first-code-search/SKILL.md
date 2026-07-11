@@ -396,9 +396,9 @@ Prefer anchored path filters (`^ontology/`) over bare substrings (`ontology`).
 | **Habit** | Host Read with line prefixes |
 | **Frigg path** | Prefer `read_match(result_handle, match_id)`; else `read_file(path, start_line, end_line)` |
 | **Fallback** | Host Read acceptable only when needed outside Frigg scope |
-| **Proof** | Bounded source window from Frigg |
+| **Proof** | Bounded source window from the source revision observed when the pair was issued |
 | **Done** | Internal proof stays on Frigg handles/paths |
-| **Product support** | Scoped handles, stale/mixed-handle failures |
+| **Product support** | Revision-bound scoped handles; `STALE_HANDLE`, `MIXED_HANDLE`, and `STALE_PROOF_ANCHOR` failures |
 
 ```text
 match_id is valid ONLY with its own result_handle from the SAME call.
@@ -414,10 +414,16 @@ Handle lifetime (session-scoped, not a durable citation id):
     **re-run search** before trusting an old result_handle for proof or citations.
   Do not chain pre-edit handles across a freshness transition for those paths.
 
-Stale handle → re-run search.
-Mixed/foreign match_id → use the matching handle from the same call; if the handle is known
-but the match vanished after a path-scoped watch drop, re-run search (do not treat as a
-cross-call mix-up alone).
+`read_match` verifies the live source against the revision bound to the pair before returning
+content. If the source changed, was deleted, or cannot be verified, it returns
+`STALE_PROOF_ANCHOR` and no source bytes. Re-run the originating search/navigation tool and use
+its new `result_handle` + `match_id`; do not retry the old pair. `read_file` is the explicit path
+for current live content, not a way to refresh historical proof.
+
+`STALE_HANDLE` → the pair expired or was invalidated; re-run search.
+`MIXED_HANDLE` / foreign `match_id` → use the matching handle from the same call; if the handle
+is known but the match vanished after a path-scoped watch drop, re-run search (do not treat it as
+a cross-call mix-up alone).
 Text mode returns raw source (no line prefixes) — fine for internal proof.
 ```
 
@@ -541,9 +547,11 @@ Multi-attach (common on HTTP):
      - do not "verify" with whole-repo rg or invent micro-retry loops
 5. If reindex → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
 6. **Handles after freshness:** do not `read_match` a pre-edit result_handle for touched paths.
-     Re-run search_text / search_symbol / nav after ready (or after watch commits dirty paths).
-     Untouched-path handles may still resolve; treat that as opportunistic, not guaranteed
-     across reindex or whole-repo invalidation.
+     Re-run the originating search_text / search_symbol / navigation tool after ready (or after
+     watch commits dirty paths) and use its new paired IDs. `STALE_PROOF_ANCHOR` is a
+     fail-closed proof result: it returns no historical bytes, and `read_file` is only the
+     explicit current-live-content path. Untouched-path handles may still resolve; treat that as
+     opportunistic, not guaranteed across reindex or whole-repo invalidation.
 BAD: workspace dirty → rg -n across the repo
 BAD: recommended_action=reindex → call invented MCP workspace_reindex
 BAD: wait_watch → invent a retry loop without reading watch_status

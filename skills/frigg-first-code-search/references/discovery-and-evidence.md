@@ -204,7 +204,13 @@ Default behavior:
 - 10 lines of context after the hit
 - text-first output by default: selected source bytes only, with no `structuredContent`
 - use `presentation_mode=json` for repository, path, line window, byte, metadata, or machine-readable `content` fields
-- typed `resource_not_found` if the handle or match has expired
+- every `result_handle` + `match_id` pair is session-local and bound to the source revision
+  observed when it was issued
+- typed `resource_not_found` with `STALE_HANDLE` if the pair has expired or been invalidated
+- typed `resource_not_found` with `MIXED_HANDLE` if a `match_id` is paired with a different
+  result handle
+- typed `resource_not_found` with `STALE_PROOF_ANCHOR` if the bound source changed, was deleted,
+  or cannot be verified; this returns no source bytes rather than current content
 
 Handle lifetime:
 - Session-scoped bookmarks (`handle_expires="session"`), not durable citation ids
@@ -212,6 +218,14 @@ Handle lifetime:
 - Watch refresh with known dirty paths: anchors on those paths only are dropped; clean-path anchors may remain
 - Known-empty success (noop refresh) does not wipe handles; unknown dirty set (notify drop, failed refresh) → whole-repo wipe
 - After post-edit, `use_live_disk`, or `wait_watch`→ready for paths you care about: **re-run search** before trusting an old `result_handle`
+
+Recovery:
+- `STALE_HANDLE`: rerun the original search/navigation tool for a new pair.
+- `MIXED_HANDLE`: keep the `match_id` with the `result_handle` from the same tool call.
+- `STALE_PROOF_ANCHOR`: rerun the originating search/navigation tool and use its new pair. Do
+  not retry the old handle or treat current bytes as proof of the old result. `read_file` remains
+  the explicit current-live-content path when historical proof is not needed; it does not refresh
+  a proof pair.
 
 ## `read_file`
 
@@ -235,7 +249,7 @@ Important outputs:
 Notes:
 - paths are canonical repository-relative paths
 - line numbers are 1-based
-- reads reflect live disk state
+- reads reflect live disk state; unlike `read_match`, `read_file` does not claim historical proof
 - default output is text-first: selected source bytes only, with no `structuredContent`
 - use `presentation_mode=json` for repository, path, byte, metadata, or machine-readable `content` fields
 

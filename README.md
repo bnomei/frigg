@@ -284,9 +284,12 @@ Frigg returns handles, recovery hints, and citation-ready source windows so an a
 
 - Multi-hypothesis probes: `search_batch` (concurrent merge of several search probes).
 - Impact navigation: `impact_bundle` when one symbol needs defs/refs/calls together.
-- Structured zero-hit / recovery fields, scoped result handles, explicit stale or mixed-handle failures, and workspace freshness gates (dirty paths, path-scoped live-disk when needed).
+- Revision-bound proof pairs: a `result_handle` + `match_id` is session-local and proves the source revision observed when that pair was issued. `read_match` rejects changed, deleted, or unverifiable source with `STALE_PROOF_ANCHOR`; it never substitutes current bytes as historical proof.
+- Structured zero-hit / recovery fields, explicit `STALE_HANDLE`, `MIXED_HANDLE`, and `STALE_PROOF_ANCHOR` failures, plus workspace freshness gates (dirty paths, path-scoped live-disk when needed).
 - Citation-friendly reads: `presentation_mode=citation` on `read_file` / `read_match` (`LINE|content`).
 - Local routing stats: start the HTTP service with `FRIGG_ROUTING_STATS=1 frigg serve`, then run `frigg stats` or read `frigg://stats/routing`.
+
+If a proof pair returns `STALE_PROOF_ANCHOR`, rerun the originating search or navigation tool and use the newly issued pair. Use `read_file` only when current live content is what you need; it cannot refresh historical proof. Keep each `match_id` paired with the `result_handle` from the same call, and never retry an old handle after editing a source path.
 
 Use `search_batch` when several independent hypotheses should run together. It accepts two to eight text, symbol, or hybrid probes, executes them concurrently, and returns deduplicated matches plus a result handle when matches exist:
 
