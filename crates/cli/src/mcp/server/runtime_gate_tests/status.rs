@@ -70,12 +70,7 @@ fn watch_status_refreshing_matches_runtime_repository_id_alias() {
     runtime_task_registry
         .write()
         .expect("task registry lock")
-        .start_task(
-            RuntimeTaskKind::ChangedIndex,
-            "repo-001",
-            "refresh",
-            None,
-        );
+        .start_task(RuntimeTaskKind::ChangedIndex, "repo-001", "refresh", None);
 
     let active = server
         .runtime_state
@@ -300,13 +295,18 @@ fn runtime_status_tools_exposed_matches_filtered_router() {
     );
     assert_eq!(extended_status.tool_surface_profile, "extended");
     assert!(
-        extended_status.tools_exposed.contains(&"explore".to_owned()),
+        extended_status
+            .tools_exposed
+            .contains(&"explore".to_owned()),
         "extended tools_exposed should include explore"
     );
 
     let value = serde_json::to_value(&core_status).expect("runtime status should serialize");
     assert!(
-        value.get("tools_exposed").and_then(|v| v.as_array()).is_some(),
+        value
+            .get("tools_exposed")
+            .and_then(|v| v.as_array())
+            .is_some(),
         "tools_exposed must always be present in JSON (not skip_serializing_if empty)"
     );
 }

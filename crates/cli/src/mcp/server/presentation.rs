@@ -5,9 +5,11 @@
 
 use super::*;
 use crate::domain::model::TextMatch;
+use crate::mcp::server_cache::{ContinuationBinding, SessionContinuationCache};
 use crate::mcp::types::{
-    DocumentSymbolItem, HybridPivotMatchSource, SearchHybridDiagnosticsSummary, SearchHybridMatch,
-    SearchHybridMetadata, SearchHybridRankReason,
+    ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, ResultUnit,
+    SearchHybridDiagnosticsSummary, SearchHybridMatch, SearchHybridMetadata,
+    SearchHybridRankReason,
 };
 
 /// Outcome of resolving a session `result_handle` + `match_id` pair for `read_match`.
@@ -117,6 +119,97 @@ impl FriggMcpServer {
         }
     }
 
+    /// Allocate an opaque, metadata-only v2 continuation in this MCP session.
+    #[allow(dead_code)] // public-to-crate lifecycle hook consumed by subsequent surface tasks.
+    pub(crate) fn store_session_continuation(&self, binding: ContinuationBinding) -> String {
+        let now = Instant::now();
+        let mut cache = self
+            .session_state
+            .inner
+            .result_handles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::prune_session_continuations(&mut cache.continuations, now);
+        cache.continuations.next_id = cache.continuations.next_id.saturating_add(1);
+        let session_prefix = self.session_state.display_session_id();
+        let token = format!(
+            "continuation-{}-{:06}",
+            session_prefix, cache.continuations.next_id
+        );
+        cache.continuations.insertion_order.push_back(token.clone());
+        cache.continuations.entries.insert(
+            token.clone(),
+            crate::mcp::server_cache::SessionContinuationEntry {
+                generated_at: now,
+                binding,
+            },
+        );
+        while cache.continuations.entries.len() > Self::SESSION_CONTINUATION_MAX_ENTRIES {
+            if let Some(oldest) = cache.continuations.insertion_order.pop_front() {
+                cache.continuations.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        token
+    }
+
+    /// Resolve a continuation only when all behavior-affecting request and snapshot bindings
+    /// match. The returned entry carries just a next position, never retained result rows.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)] // public-to-crate lifecycle hook consumed by subsequent surface tasks.
+    pub(crate) fn session_continuation_lookup(
+        &self,
+        token: &str,
+        tool: &str,
+        request_digest: &str,
+        repository_ids: &[String],
+        snapshot_fingerprints: &[String],
+        unit: ResultUnit,
+    ) -> Result<ContinuationBinding, ContinuationValidationError> {
+        let now = Instant::now();
+        let session_prefix = self.session_state.display_session_id();
+        let expected_prefix = format!("continuation-{session_prefix}-");
+        if !token.starts_with(&expected_prefix) {
+            return Err(ContinuationValidationError::scope_mismatch());
+        }
+        let mut cache = self
+            .session_state
+            .inner
+            .result_handles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::prune_session_continuations(&mut cache.continuations, now);
+        let Some(entry) = cache.continuations.entries.get(token) else {
+            return Err(ContinuationValidationError::stale());
+        };
+        let binding = &entry.binding;
+        if binding.tool != tool
+            || binding.request_digest != request_digest
+            || binding.repository_ids != repository_ids
+            || binding.snapshot_fingerprints != snapshot_fingerprints
+            || binding.unit != unit
+        {
+            return Err(ContinuationValidationError::scope_mismatch());
+        }
+        Ok(binding.clone())
+    }
+
+    #[allow(dead_code)] // reached through the continuation hooks above.
+    fn prune_session_continuations(cache: &mut SessionContinuationCache, now: Instant) {
+        while let Some(oldest) = cache.insertion_order.front().cloned() {
+            let Some(entry) = cache.entries.get(&oldest) else {
+                cache.insertion_order.pop_front();
+                continue;
+            };
+            if now.duration_since(entry.generated_at) < Self::SESSION_CONTINUATION_TTL {
+                break;
+            }
+            cache.insertion_order.pop_front();
+            cache.entries.remove(&oldest);
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn session_result_handle_match(
         &self,
@@ -183,6 +276,7 @@ impl FriggMcpServer {
                 .insertion_order
                 .retain(|handle| retained_handles.contains(handle));
         });
+        self.invalidate_session_continuations_for_repository_ids(repository_ids);
     }
 
     /// Drop only anchors whose paths are in `dirty_paths` (EXP-handle-inval D).
@@ -232,6 +326,10 @@ impl FriggMcpServer {
                 cache.insertion_order.retain(|h| h != &handle);
             }
         });
+        // Continuation entries intentionally do not retain source paths. A dirty path can alter
+        // cardinality/order anywhere in a deterministic result set, so invalidate the affected
+        // repository conservatively instead of risking a cross-snapshot page.
+        self.invalidate_session_continuations_for_repository_ids(repository_ids.iter().copied());
     }
 
     /// Normalize paths for handle dirty-matching: slash style, strip `./`, leading `/`,
@@ -285,6 +383,48 @@ impl FriggMcpServer {
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 f(&mut guard);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    fn invalidate_session_continuations_for_repository_ids<'a>(
+        &self,
+        repository_ids: impl IntoIterator<Item = &'a str>,
+    ) {
+        let repository_ids = repository_ids.into_iter().collect::<Vec<_>>();
+        if repository_ids.is_empty() {
+            return;
+        }
+        let mut registry = self
+            .runtime_state
+            .session_result_handle_caches
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry.retain(|weak| {
+            if let Some(cache) = weak.upgrade() {
+                let mut cache = cache
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                cache.continuations.entries.retain(|_, entry| {
+                    !entry.binding.repository_ids.iter().any(|repository_id| {
+                        repository_ids
+                            .iter()
+                            .any(|invalidated| repository_id == invalidated)
+                    })
+                });
+                let retained = cache
+                    .continuations
+                    .entries
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                cache
+                    .continuations
+                    .insertion_order
+                    .retain(|token| retained.contains(token));
                 true
             } else {
                 false
@@ -1329,6 +1469,114 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn continuation_binding(repository_id: &str) -> ContinuationBinding {
+        ContinuationBinding {
+            tool: "search_text",
+            request_digest: "normalized-request-v1".to_owned(),
+            repository_ids: vec![repository_id.to_owned()],
+            snapshot_fingerprints: vec!["snapshot-v1".to_owned()],
+            unit: ResultUnit::Occurrence,
+            next_position: 10,
+        }
+    }
+
+    #[test]
+    fn continuation_is_bound_to_session_request_scope_and_repository_snapshot() {
+        let server = presentation_test_server();
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let token = server.store_session_continuation(continuation_binding(&repository_id));
+
+        let resolved = server
+            .session_continuation_lookup(
+                &token,
+                "search_text",
+                "normalized-request-v1",
+                std::slice::from_ref(&repository_id),
+                &["snapshot-v1".to_owned()],
+                ResultUnit::Occurrence,
+            )
+            .expect("matching continuation should resolve");
+        assert_eq!(resolved.next_position, 10);
+
+        let error = server
+            .session_continuation_lookup(
+                &token,
+                "search_text",
+                "different-normalized-request",
+                std::slice::from_ref(&repository_id),
+                &["snapshot-v1".to_owned()],
+                ResultUnit::Occurrence,
+            )
+            .expect_err("changed request must reject the token");
+        assert_eq!(
+            error.kind,
+            crate::mcp::types::ContinuationErrorKind::ScopeMismatch
+        );
+
+        let other_session = server.clone_for_new_session();
+        let error = other_session
+            .session_continuation_lookup(
+                &token,
+                "search_text",
+                "normalized-request-v1",
+                std::slice::from_ref(&repository_id),
+                &["snapshot-v1".to_owned()],
+                ResultUnit::Occurrence,
+            )
+            .expect_err("another session must reject the token");
+        assert_eq!(
+            error.kind,
+            crate::mcp::types::ContinuationErrorKind::ScopeMismatch
+        );
+    }
+
+    #[test]
+    fn continuation_expires_and_repository_lifecycle_invalidation_makes_it_stale() {
+        let server = presentation_test_server();
+        let repository_id = server.known_workspaces()[0].repository_id.clone();
+        let token = server.store_session_continuation(continuation_binding(&repository_id));
+        {
+            let mut cache = server
+                .session_state
+                .inner
+                .result_handles
+                .write()
+                .expect("continuation cache lock");
+            cache
+                .continuations
+                .entries
+                .get_mut(&token)
+                .expect("stored continuation")
+                .generated_at =
+                Instant::now() - FriggMcpServer::SESSION_CONTINUATION_TTL - Duration::from_secs(1);
+        }
+        let error = server
+            .session_continuation_lookup(
+                &token,
+                "search_text",
+                "normalized-request-v1",
+                std::slice::from_ref(&repository_id),
+                &["snapshot-v1".to_owned()],
+                ResultUnit::Occurrence,
+            )
+            .expect_err("expired continuation must be stale");
+        assert_eq!(error.kind, crate::mcp::types::ContinuationErrorKind::Stale);
+
+        let token = server.store_session_continuation(continuation_binding(&repository_id));
+        server.invalidate_session_result_handles_for_repository_ids([repository_id.as_str()]);
+        let error = server
+            .session_continuation_lookup(
+                &token,
+                "search_text",
+                "normalized-request-v1",
+                std::slice::from_ref(&repository_id),
+                &["snapshot-v1".to_owned()],
+                ResultUnit::Occurrence,
+            )
+            .expect_err("repository invalidation must make continuation stale");
+        assert_eq!(error.kind, crate::mcp::types::ContinuationErrorKind::Stale);
+    }
 
     fn temp_workspace_root(test_name: &str) -> PathBuf {
         let nonce = SystemTime::now()

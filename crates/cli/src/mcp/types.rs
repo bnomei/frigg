@@ -208,6 +208,8 @@ pub enum ReadPresentationMode {
     Citation,
 }
 
+#[path = "types/completeness.rs"]
+mod completeness;
 #[path = "types/navigation.rs"]
 mod navigation;
 #[cfg(feature = "playbook")]
@@ -222,6 +224,7 @@ mod search;
 #[path = "types/workspace.rs"]
 mod workspace;
 
+pub use completeness::*;
 pub use navigation::*;
 #[cfg(feature = "playbook")]
 pub use playbook::*;

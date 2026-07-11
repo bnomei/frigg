@@ -18,7 +18,7 @@ use crate::mcp::explorer::{
     LossyLineSliceError, normalize_lossy_line_bytes, position_is_before_cursor,
 };
 use crate::mcp::types::{
-    ExploreAnchor, ExploreCursor, ExploreLineWindow, WorkspacePreciseGenerationSummary,
+    ExploreAnchor, ExploreCursor, ExploreLineWindow, ResultUnit, WorkspacePreciseGenerationSummary,
     WorkspacePreciseGeneratorState,
 };
 
@@ -405,6 +405,38 @@ pub(crate) struct SessionResultHandleEntry {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionResultHandleCache {
     pub(crate) entries: BTreeMap<String, SessionResultHandleEntry>,
+    pub(crate) insertion_order: VecDeque<String>,
+    pub(crate) next_id: u64,
+    /// A separate metadata-only family which shares the same session lifetime/invalidation fanout.
+    pub(crate) continuations: SessionContinuationCache,
+}
+
+/// Metadata-only binding for one opaque continuation. This deliberately owns no rows, source
+/// text, or result bodies: handlers recompute their deterministic result set after validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContinuationBinding {
+    pub(crate) tool: &'static str,
+    pub(crate) request_digest: String,
+    pub(crate) repository_ids: Vec<String>,
+    pub(crate) snapshot_fingerprints: Vec<String>,
+    pub(crate) unit: ResultUnit,
+    pub(crate) next_position: usize,
+}
+
+/// Expiring continuation state for a single MCP session.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // constructed by continuation hooks consumed by subsequent surface tasks.
+pub(crate) struct SessionContinuationEntry {
+    pub(crate) generated_at: Instant,
+    pub(crate) binding: ContinuationBinding,
+}
+
+/// Bounded, session-local continuation cache. Tokens are opaque ids; their binding is never sent
+/// to clients and never contains result rows or source content.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // retained in the session cache for subsequent surface handlers.
+pub(crate) struct SessionContinuationCache {
+    pub(crate) entries: BTreeMap<String, SessionContinuationEntry>,
     pub(crate) insertion_order: VecDeque<String>,
     pub(crate) next_id: u64,
 }

@@ -85,10 +85,10 @@ use crate::mcp::explorer::{
     validate_cursor,
 };
 use crate::mcp::guidance::{
-    ROUTING_GUIDE_PROMPT_NAME, ROUTING_STATS_RESOURCE_URI, SHELL_GUIDANCE_RESOURCE_URI,
-    SEMANTIC_MODELS_RESOURCE_URI, SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
-    TOOL_SURFACE_RESOURCE_URI,
-    guidance_prompts, policy_resources, read_guidance_prompt, read_policy_resource,
+    ROUTING_GUIDE_PROMPT_NAME, ROUTING_STATS_RESOURCE_URI, SEMANTIC_MODELS_RESOURCE_URI,
+    SHELL_GUIDANCE_RESOURCE_URI, SHELL_REPLACEMENT_MAP_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
+    TOOL_SURFACE_RESOURCE_URI, guidance_prompts, policy_resources, read_guidance_prompt,
+    read_policy_resource,
 };
 use crate::mcp::server_cache::{
     CachedHeuristicReferences, CachedPreciseGeneratorProbe, CachedRepositoryResponseFreshness,
@@ -121,31 +121,30 @@ use crate::mcp::types::{
     GoToDefinitionParams, GoToDefinitionResponse, ImpactBundleParams, ImpactBundleResponse,
     ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, InspectSyntaxTreeParams,
     InspectSyntaxTreeResponse, ListFilesParams, ListFilesResponse, ListRepositoriesParams,
-    ListRepositoriesResponse, NavigationAvailability, NavigationLocation, NavigationMode,
-    NavigationEdgeTrust, NavigationTargetSelectionStatus, NavigationTargetSelectionSummary,
+    ListRepositoriesResponse, NavigationAvailability, NavigationEdgeTrust, NavigationLocation,
+    NavigationMode, NavigationTargetSelectionStatus, NavigationTargetSelectionSummary,
     OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadFileResponse, ReadMatchParams,
-    ReadMatchResponse,
-    ReadPresentationMode, RecoveryFields, RepositorySummary, ResponseMode, RuntimeStatusSummary,
-    RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary, SearchBatchParams, SearchBatchResponse,
-    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
-    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
-    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
-    SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
-    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
-    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
-    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceGateAction, WorkspaceIndexAction,
-    workspace_gate_hint,
-    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
-    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
-    WorkspaceIndexResponse, WorkspaceParams, WorkspacePreciseArtifactFailureSummary,
-    WorkspacePreciseCoverageMode, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
-    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
-    WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
-    WorkspacePreciseLifecycleSummary, WorkspacePreciseState, WorkspacePreciseSummary,
-    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
-    WorkspaceResolveMode, WorkspaceResponse, WorkspaceStorageIndexState, WorkspaceStorageSummary,
-    ZeroHitDiagnostics, ZeroHitIndex, ZeroHitInput, ZeroHitReason, ZeroHitScope,
+    ReadMatchResponse, ReadPresentationMode, RecoveryFields, RepositorySummary, ResponseMode,
+    RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary,
+    SearchBatchParams, SearchBatchResponse, SearchHybridChannelWeightsParams, SearchHybridMatch,
+    SearchHybridParams, SearchHybridResponse, SearchPatternType, SearchStructuralParams,
+    SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse,
+    SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM,
+    WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction, WorkspaceAttachIndexMode,
+    WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
+    WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceGateAction,
+    WorkspaceIndexAction, WorkspaceIndexComponentState, WorkspaceIndexComponentSummary,
+    WorkspaceIndexHealthSummary, WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary,
+    WorkspaceIndexParams, WorkspaceIndexResponse, WorkspaceParams,
+    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
+    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
+    WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
+    WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
+    WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseState,
+    WorkspacePreciseSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
+    WorkspaceRecommendedAction, WorkspaceResolveMode, WorkspaceResponse,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary, ZeroHitDiagnostics, ZeroHitIndex,
+    ZeroHitInput, ZeroHitReason, ZeroHitScope, workspace_gate_hint,
 };
 #[cfg(feature = "playbook")]
 use crate::mcp::types::{
@@ -477,6 +476,10 @@ impl FriggMcpServer {
     const PRECISE_GENERATOR_PROBE_CACHE_MAX_ENTRIES: usize = 128;
     const SESSION_RESULT_HANDLE_TTL: Duration = Duration::from_secs(300);
     const SESSION_RESULT_HANDLE_MAX_ENTRIES: usize = 64;
+    #[allow(dead_code)] // wired by the bounded surface handlers in later completeness tasks.
+    const SESSION_CONTINUATION_TTL: Duration = Duration::from_secs(300);
+    #[allow(dead_code)] // wired by the bounded surface handlers in later completeness tasks.
+    const SESSION_CONTINUATION_MAX_ENTRIES: usize = 64;
     pub fn new(config: FriggConfig) -> Self {
         let enable_extended_tools =
             active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
@@ -676,10 +679,7 @@ impl FriggMcpServer {
         let storage = Self::workspace_storage_summary(workspace);
         let lexical = self.workspace_lexical_index_summary(workspace, &storage);
         let semantic = self.workspace_semantic_index_summary(workspace, &storage);
-        let lexical_ready = Some(matches!(
-            lexical.state,
-            WorkspaceIndexComponentState::Ready
-        ));
+        let lexical_ready = Some(matches!(lexical.state, WorkspaceIndexComponentState::Ready));
         let semantic_ready = Some(matches!(
             semantic.state,
             WorkspaceIndexComponentState::Ready | WorkspaceIndexComponentState::Disabled
