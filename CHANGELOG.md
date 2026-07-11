@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Exact-search completeness rollout: bounded MCP collections now expose typed `completeness`
+  (`unit`, page-local `returned`, exact-or-absent `total`, complete/truncated state, typed
+  reasons, and canonical v2 `continuation`); valid legacy `resume_from` remains accepted during
+  its compatibility window. Documented request/snapshot-bound continuation recovery, raw
+  occurrence `search_text.total_matches` versus shaped row totals, hybrid ranked-discovery
+  honesty, per-probe/per-section propagation, and the corrected pre-page active-mode meaning of
+  `find_references.total_matches`.
 - Hygiene (EXP-when-to-grow-surface / EXP-split-mega-modules): skill surface-growth filter (skill → internal → thin composer → new tool last); operator runbook contributor rules for opportunistic module splits (no split-for-LOC, one registration manifest); `mcp/server.rs` module-doc pointer to that policy.
 - Hybrid graph channel honesty (EXP-nav-hybrid-graph-channel): per-match `graph_mode`, ranking_note when graph contributes (“ranking signal not nav call edges”), full channel `pipeline: hybrid_ephemeral`; skill/operator dual-pipeline docs. Hybrid graph remains separate from MCP navigation.
 - Google Gemini embeddings positioned as **credential_peer** (use when `GEMINI_API_KEY` is already present; not an unmeasured preferred-quality cloud default) in catalog, README, operator runbook, and skill.

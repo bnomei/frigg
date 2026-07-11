@@ -253,6 +253,38 @@ Notes:
 - default output is text-first: selected source bytes only, with no `structuredContent`
 - use `presentation_mode=json` for repository, path, byte, metadata, or machine-readable `content` fields
 
+## Completeness and v2 paging
+
+Bounded discovery responses carry `completeness` as the authoritative collection contract. Read
+`unit`, page-local `returned`, and exact-or-absent `total` before deciding a page proves absence.
+`complete=true` has no omissions or continuation; `truncated=true` names deliberate omissions in
+`truncation_reasons`; `incomplete_reasons` describe coverage Frigg cannot prove.
+
+When `completeness.continuation` is present, replay the same request with that opaque value in
+`continuation`. The v2 token binds the tool, normalized request, session, repository scope, and
+snapshot; changed input or source state is rejected as scope mismatch or stale. Do not also send
+legacy `resume_from`. Legacy cursors remain accepted only for the compatibility window, while
+new output uses v2 continuation.
+
+Surface-specific rules:
+
+- `list_files` keeps `total_files`, `truncated`, and legacy `resume_from` synchronized with the
+  canonical envelope; use `completeness.total` and `continuation` for new paging clients.
+- `search_text.total_matches` is the raw occurrence total, separate from `completeness.total` for
+  selected rows. Normal search rows use occurrence units; `files_with_matches` and
+  `collapse_by_file` use file units; `max_count_per_file` caps rows before page retention.
+  `count_only=true` intentionally returns zero `matches[]`, so read the count and completeness.
+- `search_symbol`, `list_files`, `explore` probe/refine, `document_symbols`, and
+  `search_structural` can issue v2 continuation only for deliberately truncated exhaustive rows.
+  A final suffix page may be
+  `complete=true` with a smaller page-local `returned` than the request-wide total.
+- `search_hybrid` is ranked discovery, not exhaustive paging: its total is absent,
+  `complete=false` includes `ranked_discovery`, and it provides no exhaustive continuation. Use
+  an exact text or symbol pivot before treating discovery candidates as proof.
+- `search_batch` has both merged `completeness` and per-probe
+  `probe_summary[].completeness`; inspect both because a child cap or diagnostic propagates to
+  the aggregate.
+
 ## `explore` (core product surface)
 
 Use `explore` after you already know the file and want bounded follow-up inside it. It is on the **core** tool surface (not extended-only).
@@ -272,10 +304,11 @@ Important inputs:
 - `context_lines`
 - `max_matches`
 - `resume_from`
+- `continuation`
 - `presentation_mode`
 
 Important outputs:
-- `probe` and `refine`: structured `scan_scope`, `window`, `matches`, `truncated`, `resume_from`, and `metadata`
+- `probe` and `refine`: structured `scan_scope`, `window`, `matches`, `truncated`, legacy `resume_from`, canonical `completeness`, and `metadata`
 - `zoom` default: selected source bytes only
 - `zoom` with `presentation_mode=json`: structured window and metadata fields
 - `zoom` with `presentation_mode=json`: the structured compatibility payload

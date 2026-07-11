@@ -269,6 +269,53 @@ maps to:
 
 Use shell only for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, ripgrep-specific flags outside `search_text`, or unavailable Frigg results. When shell finds relevant code, return to Frigg for `read_match`, `read_file`, symbols, or navigation when possible.
 
+### Bounded-result truth and continuation
+
+Every bounded collection now carries a `completeness` envelope. Read it before treating an
+empty or short page as absence:
+
+- `unit` says what one returned row represents; `returned` is the number of rows in this
+  **page**; `total`, when present, is the exact cardinality for the normalized request and mode.
+  A missing `total` means Frigg could not prove exhaustive coverage—it is never a lower bound.
+- `complete=true` means the collection is exhaustive: it has an exact total and no continuation,
+  truncation, or incomplete reason. A final continuation page may therefore be complete even
+  when its page-local `returned` is smaller than the request-wide `total`.
+- `truncated=true` means a deliberate bound omitted otherwise qualifying rows. Inspect typed
+  `truncation_reasons` such as `page_limit`, `per_file_limit`, `top_k_limit`, `child_limit`, or
+  `merge_page_limit`. `incomplete_reasons` instead explain coverage Frigg cannot prove, such as
+  diagnostics, unreadable candidates, ranked discovery, or partial/heuristic navigation.
+- A non-empty opaque `completeness.continuation` is the canonical way to fetch the next
+  exhaustive page. It is v2, session/request/tool/repository-snapshot bound, and must be sent
+  back as `continuation`; a changed request or repository produces structured scope or stale
+  recovery. Do not combine it with a legacy `resume_from` cursor. Valid legacy cursors remain
+  accepted during the compatibility window, but Frigg emits v2 continuation as canonical output.
+
+For example, use the returned v2 token without changing behavior-affecting inputs:
+
+```json
+{
+  "query": "ResultCompleteness",
+  "path_regex": "^crates/",
+  "limit": 20,
+  "continuation": "<opaque token from completeness.continuation>"
+}
+```
+
+`search_text.total_matches` remains the exact **raw occurrence** count when coverage is
+complete. It is intentionally separate from `completeness.total`, whose `unit` follows the row
+shape: occurrence rows normally, file rows for `files_with_matches=true` or
+`collapse_by_file=true`, and capped occurrence rows after `max_count_per_file` is applied.
+`count_only=true` intentionally returns no `matches[]`; read `total_matches` and
+`completeness` instead. Similarly, `find_references.total_matches` is the known pre-page
+active-mode reference total, not the length of the current page.
+
+`search_hybrid` is ranked discovery rather than exhaustive retrieval: its completeness truth is
+`total` absent, `complete=false`, `incomplete_reasons` including `ranked_discovery`, and no
+exhaustive continuation. Treat a top-k truncation as a ranked candidate list, then pivot to
+exact text, symbol, or navigation tools for proof. `search_batch` exposes completeness for each
+`probe_summary` row and for the merged result; `impact_bundle` does the same for each included
+section and its aggregate, so child limits or incomplete coverage cannot be hidden.
+
 Example prompts:
 
 - "Where is authentication bootstrapped?"

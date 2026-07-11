@@ -167,6 +167,38 @@ After edit: workspace freshness before reusing Frigg for touched paths; re-searc
 
 Multi-hypothesis answers must cite at least one Frigg proof window with no parallel shell grep on indexed source while Frigg is healthy.
 
+## Bounded-result truth
+
+Before concluding that a short or empty response proves absence, read its `completeness` envelope:
+
+- `unit` declares the row unit; `returned` is page-local; `total` is exact for the normalized
+  request only when present. Absent `total` means coverage is unproven, never “at least this
+  many.”
+- `complete=true` means exact and exhausted, with no continuation or omission reasons. A final
+  page can be complete even if its page-local `returned` is less than request-wide `total`.
+- `truncated=true` is an intentional bound; inspect `truncation_reasons`. `complete=false` with
+  `incomplete_reasons` signals diagnostics, ranked discovery, or navigation coverage that cannot
+  establish exhaustiveness.
+- Continue only when `completeness.continuation` is present, replaying the same normalized
+  request with that opaque v2 token in `continuation`. It is bound to tool, request, session,
+  repository scope, and snapshot. Do not combine it with legacy `resume_from`; old cursors are a
+  compatibility input, while v2 is canonical output.
+
+Search-specific reading rules:
+
+- `search_text.total_matches` is raw occurrence cardinality; use `completeness.unit` and
+  `completeness.total` for the shaped row collection. `count_only=true` intentionally has no
+  `matches[]`. File-collapse modes count files, and `max_count_per_file` affects capped rows
+  without redefining the raw occurrence total.
+- `search_hybrid` is ranked discovery: total is absent, coverage is incomplete for
+  `ranked_discovery`, and it has no exhaustive continuation. Pivot to exact tools before proof.
+- For navigation, page completeness is independent of `mode`. `heuristic_no_precise` and
+  `unavailable_no_precise` remain weaker or unavailable semantic coverage even if a returned page
+  is otherwise complete. `find_references.total_matches` is the known pre-page active-mode total.
+- `search_batch` exposes child truth in each `probe_summary.completeness`; `impact_bundle` does
+  the same per included section. Read both child and aggregate envelopes before asserting a
+  complete investigation.
+
 ---
 
 ## Positive fallback boundary

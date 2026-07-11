@@ -12,6 +12,19 @@
 
 Treat `heuristic_no_precise` as useful but weaker. Treat `unavailable_no_precise` as an honest “not enough precise data” signal, not as proof that nothing exists.
 
+## Navigation completeness is separate from navigation precision
+
+Bounded navigation collections expose `completeness`: `unit`, page-local `returned`,
+exact-or-absent `total`, `complete`, `truncated`, typed reasons, and optional v2
+`continuation`. A complete page proves the returned active-mode collection was exhausted; it does
+**not** upgrade `mode` from `precise_partial`, `heuristic_no_precise`, or
+`unavailable_no_precise` to precise semantic coverage. Read both fields before making a claim.
+
+Use `completeness.continuation` only by replaying the same tool and normalized request with
+`continuation=<opaque token>`. It is request/session/repository-snapshot bound, so changed inputs
+or source state fail as scope mismatch or stale. Navigation tools use v2 continuation as output;
+do not combine it with any legacy cursor form.
+
 Compact-first rule:
 - navigation and outline tools default to compact responses
 - compact mode keeps the important top-level contract fields such as `mode`, `availability`, and the result rows themselves
@@ -36,6 +49,7 @@ Important inputs:
 Important outputs:
 - `total_matches`
 - `matches`
+- `completeness`
 - `result_handle`
 - `mode`
 - `metadata` and `note` only when `response_mode=full`
@@ -48,6 +62,10 @@ Each reference hit carries `match_kind`, so distinguish:
 When opted in, each match may also carry `follow_up_structural` suggestions for replayable structural narrowing.
 
 Use `include_definition=false` when you want caller or usage sites without the defining row mixed in.
+
+`total_matches` is the exact known pre-page total for the active navigation mode, not the length
+of `matches` on this page. If coverage cannot establish that total, use the exact-or-absent total
+and reasons in `completeness` rather than inferring one from rows.
 
 ## `go_to_definition`, `find_declarations`, `find_implementations`
 
@@ -74,6 +92,7 @@ Common inputs:
 
 Common outputs:
 - `matches`
+- `completeness`
 - `result_handle`
 - `mode`
 - `ambiguous_location` / `location_warning` when path+line was used **without** `symbol` (do not edit from those defs until re-resolved with `symbol=`)
@@ -101,6 +120,7 @@ Call hierarchy is the most precise-data-sensitive part of Frigg.
 
 Important outputs:
 - `matches`
+- `completeness`
 - `result_handle`
 - `mode`
 - `availability`
@@ -133,6 +153,7 @@ Important inputs:
 
 Important outputs:
 - `symbols`
+- `completeness`
 - `result_handle`
 - `metadata` and `note` only when `response_mode=full`
 
@@ -158,6 +179,8 @@ Important outputs:
 - `focus`
 - `ancestors`
 - `children`
+- `ancestors_completeness`
+- `children_completeness`
 - `follow_up_structural`
 
 This is the safest way to learn the real Tree-sitter node kinds before writing a structural query.
@@ -183,6 +206,7 @@ Important inputs:
 Important outputs:
 - `matches`
 - `result_mode`
+- `completeness`
 - `metadata`
 - `note`
 
@@ -202,3 +226,13 @@ Example flow:
 - Default grouped result: one row per function, typically anchored to `@match`
 - If you want the function name token as the visible row: set `primary_capture=name`
 - If you want every capture as its own row to debug the query: set `result_mode=captures`
+
+## `impact_bundle`
+
+`impact_bundle` composes symbol lookup, references, incoming calls, and (when requested by policy)
+implementations. Its section envelopes are `symbols_completeness`,
+`references_completeness`, `incoming_calls_completeness`, and optional
+`implementations_completeness`; the top-level `completeness` is an `impact_section` aggregate.
+It never upgrades a child that is truncated or incomplete. Read each included section before
+claiming the overall investigation is exhaustive. `implementations_included=false` is an
+explicit policy omission, not hidden truncation.
