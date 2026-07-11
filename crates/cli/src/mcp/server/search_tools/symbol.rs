@@ -4,6 +4,12 @@
 //! navigation-oriented lookup.
 
 use super::*;
+use crate::mcp::server_cache::ContinuationBinding;
+use crate::mcp::types::{
+    ResultCompleteness, ResultIncompleteReason, ResultTruncationReason, ResultUnit,
+};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 impl FriggMcpServer {
     pub(crate) async fn search_symbol_impl(
@@ -68,6 +74,42 @@ impl FriggMcpServer {
                         .iter()
                         .map(|corpus| corpus.repository_id.clone())
                         .collect::<Vec<_>>();
+                    let snapshot_fingerprints = cache_freshness
+                        .scopes
+                        .as_ref()
+                        .map(|scopes| {
+                            scopes
+                                .iter()
+                                .map(|scope| {
+                                    format!("{}:{}", scope.repository_id, scope.snapshot_id)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let request_digest = Self::search_symbol_continuation_digest(
+                        &query,
+                        &params_for_blocking,
+                        &scoped_repository_ids,
+                    );
+                    let resume_offset = match params_for_blocking.continuation.as_deref() {
+                        Some(token) => server
+                            .session_continuation_lookup(
+                                token,
+                                "search_symbol",
+                                &request_digest,
+                                &scoped_repository_ids,
+                                &snapshot_fingerprints,
+                                ResultUnit::Symbol,
+                            )
+                            .map(|binding| binding.next_position)
+                            .map_err(|error| {
+                                Self::invalid_params(
+                                    error.message.clone(),
+                                    Some(json!({ "continuation": error })),
+                                )
+                            })?,
+                        None => 0,
+                    };
                     manifest_walk_diagnostics_count = corpora
                         .iter()
                         .map(|corpus| corpus.diagnostics.manifest_walk_count)
@@ -209,41 +251,72 @@ impl FriggMcpServer {
                             }
                         }
                     }
-                    if ranked_matches.len() < limit {
-                        let infix_limit = limit.saturating_sub(ranked_matches.len());
-                        let mut infix_matches = Vec::new();
-                        for corpus in &corpora {
-                            for (symbol_index, symbol) in corpus.symbols.iter().enumerate() {
-                                if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
-                                    != Some(3)
-                                {
-                                    continue;
-                                }
-                                if let Some(candidate) = Self::build_ranked_symbol_match(
-                                    corpus,
-                                    symbol_index,
-                                    if query_looks_canonical { 6 } else { 3 },
-                                    path_class_filter,
-                                    path_regex.as_ref(),
-                                ) {
-                                    Self::retain_bounded_ranked_symbol_match(
-                                        &mut infix_matches,
-                                        infix_limit,
-                                        candidate,
-                                    );
-                                }
+                    for corpus in &corpora {
+                        for (symbol_index, symbol) in corpus.symbols.iter().enumerate() {
+                            if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
+                                != Some(3)
+                            {
+                                continue;
+                            }
+                            if let Some(candidate) = Self::build_ranked_symbol_match(
+                                corpus,
+                                symbol_index,
+                                if query_looks_canonical { 6 } else { 3 },
+                                path_class_filter,
+                                path_regex.as_ref(),
+                            ) {
+                                ranked_matches.push(candidate);
                             }
                         }
-                        ranked_matches.extend(infix_matches);
                     }
 
                     Self::sort_ranked_symbol_matches(&mut ranked_matches);
                     Self::dedup_ranked_symbol_matches(&mut ranked_matches);
+                    let total_symbols = ranked_matches.len();
                     let matches = ranked_matches
                         .into_iter()
+                        .skip(resume_offset)
                         .take(limit)
                         .map(|ranked| ranked.matched)
                         .collect::<Vec<_>>();
+                    let rows_omitted = resume_offset.saturating_add(matches.len()) < total_symbols;
+                    let coverage_is_exact = diagnostics_count == 0;
+                    let continuation = (rows_omitted
+                        && !matches.is_empty()
+                        && coverage_is_exact
+                        && !snapshot_fingerprints.is_empty())
+                    .then(|| {
+                        server.store_session_continuation(ContinuationBinding {
+                            tool: "search_symbol",
+                            request_digest: request_digest.clone(),
+                            repository_ids: scoped_repository_ids.clone(),
+                            snapshot_fingerprints: snapshot_fingerprints.clone(),
+                            unit: ResultUnit::Symbol,
+                            next_position: resume_offset.saturating_add(matches.len()),
+                        })
+                    });
+                    let completeness = ResultCompleteness::try_new(
+                        ResultUnit::Symbol,
+                        matches.len(),
+                        coverage_is_exact.then_some(total_symbols),
+                        coverage_is_exact && !rows_omitted,
+                        rows_omitted,
+                        rows_omitted
+                            .then_some(ResultTruncationReason::PageLimit)
+                            .into_iter()
+                            .collect(),
+                        (!coverage_is_exact)
+                            .then_some(ResultIncompleteReason::DiagnosticCoverage)
+                            .into_iter()
+                            .collect(),
+                        continuation,
+                    )
+                    .map_err(|error| {
+                        Self::invalid_params(
+                            format!("invalid search completeness state: {error}"),
+                            None,
+                        )
+                    })?;
 
                     let metadata = json!({
                         "source": "tree_sitter",
@@ -264,6 +337,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     let response = SearchSymbolResponse {
                         matches,
+                        completeness,
                         result_handle: None,
                         handle_scope: None,
                         handle_expires: None,
@@ -323,5 +397,24 @@ impl FriggMcpServer {
             )
             .await;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    fn search_symbol_continuation_digest(
+        query: &str,
+        params: &SearchSymbolParams,
+        repository_ids: &[String],
+    ) -> String {
+        let normalized = json!({
+            "query": query,
+            "repository_id": params.repository_id,
+            "repository_ids": repository_ids,
+            "path_class": params.path_class,
+            "path_regex": params.path_regex,
+            "limit": params.limit,
+            "unit": ResultUnit::Symbol,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("search-symbol-v2:{:016x}", hasher.finish())
     }
 }

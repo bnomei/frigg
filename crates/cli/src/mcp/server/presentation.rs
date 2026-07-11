@@ -1953,6 +1953,17 @@ mod tests {
         let with_lexical_only = server.present_search_hybrid_response(
             SearchHybridResponse {
                 matches: Vec::new(),
+                completeness: ResultCompleteness::try_new(
+                    ResultUnit::Occurrence,
+                    0,
+                    None,
+                    false,
+                    false,
+                    vec![],
+                    vec![crate::mcp::types::ResultIncompleteReason::RankedDiscovery],
+                    None,
+                )
+                .expect("ranked discovery completeness"),
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
@@ -2011,6 +2022,17 @@ mod tests {
         let multi_channel = server.present_search_hybrid_response(
             SearchHybridResponse {
                 matches: Vec::new(),
+                completeness: ResultCompleteness::try_new(
+                    ResultUnit::Occurrence,
+                    0,
+                    None,
+                    false,
+                    false,
+                    vec![],
+                    vec![crate::mcp::types::ResultIncompleteReason::RankedDiscovery],
+                    None,
+                )
+                .expect("ranked discovery completeness"),
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
@@ -2080,6 +2102,17 @@ mod tests {
                     navigation_hint: None,
                     rank_reasons: vec![],
                 }],
+                completeness: ResultCompleteness::try_new(
+                    ResultUnit::Occurrence,
+                    1,
+                    None,
+                    false,
+                    false,
+                    vec![],
+                    vec![crate::mcp::types::ResultIncompleteReason::RankedDiscovery],
+                    None,
+                )
+                .expect("ranked discovery completeness"),
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
@@ -2156,6 +2189,17 @@ mod tests {
                     navigation_hint: None,
                     rank_reasons: vec![],
                 }],
+                completeness: ResultCompleteness::try_new(
+                    ResultUnit::Occurrence,
+                    1,
+                    None,
+                    false,
+                    false,
+                    vec![],
+                    vec![crate::mcp::types::ResultIncompleteReason::RankedDiscovery],
+                    None,
+                )
+                .expect("ranked discovery completeness"),
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
@@ -2210,6 +2254,17 @@ mod tests {
         let hybrid = server.present_search_hybrid_response(
             SearchHybridResponse {
                 matches: Vec::new(),
+                completeness: ResultCompleteness::try_new(
+                    ResultUnit::Occurrence,
+                    0,
+                    None,
+                    false,
+                    false,
+                    vec![],
+                    vec![crate::mcp::types::ResultIncompleteReason::RankedDiscovery],
+                    None,
+                )
+                .expect("ranked discovery completeness"),
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,
@@ -2238,6 +2293,8 @@ mod tests {
         let symbol = server.present_search_symbol_response(
             SearchSymbolResponse {
                 matches: Vec::new(),
+                completeness: ResultCompleteness::complete(ResultUnit::Symbol, 0, 0)
+                    .expect("empty symbol completeness"),
                 result_handle: None,
                 handle_scope: None,
                 handle_expires: None,

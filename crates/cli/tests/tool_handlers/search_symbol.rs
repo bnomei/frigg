@@ -13,6 +13,7 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -47,6 +48,7 @@ async fn core_search_symbol_defaults_to_compact_with_handles() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: None,
         }))
         .await
@@ -81,6 +83,7 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
          pub fn other_target() {}\n",
     )
     .expect("failed to seed temporary fixture source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
     let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
@@ -90,6 +93,7 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -105,6 +109,236 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
         symbols,
         vec!["target", "Target", "target_prefix", "other_target"]
     );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_pages_the_full_deterministic_symbol_set_with_v2_continuation() {
+    let workspace_root = temp_workspace_root("search-symbol-completeness-pages");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\n\
+         pub fn Target() {}\n\
+         pub fn target_prefix() {}\n\
+         pub fn other_target() {}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let unbounded = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+            continuation: None,
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("unbounded symbol lookup should succeed")
+        .0;
+    assert_eq!(unbounded.completeness.total, Some(4));
+    assert!(unbounded.completeness.complete);
+
+    let first = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(2),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("first symbol page should succeed")
+        .0;
+    assert_eq!(first.completeness.returned, 2);
+    assert_eq!(first.completeness.total, Some(4));
+    assert!(first.completeness.truncated);
+    let continuation = first
+        .completeness
+        .continuation
+        .clone()
+        .expect("truncated exact symbol page should continue");
+
+    assert!(
+        server
+            .search_symbol(Parameters(SearchSymbolParams {
+                query: "other_target".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                path_class: None,
+                path_regex: None,
+                limit: Some(2),
+                continuation: Some(continuation.clone()),
+                response_mode: Some(ResponseMode::Compact),
+            }))
+            .await
+            .is_err(),
+        "a v2 symbol continuation must reject a changed normalized request"
+    );
+
+    let second = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(2),
+            continuation: Some(continuation),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("second symbol page should succeed")
+        .0;
+    assert_eq!(second.completeness.total, Some(4));
+    assert!(second.completeness.complete);
+    assert!(!second.completeness.truncated);
+    assert_eq!(
+        first
+            .matches
+            .iter()
+            .chain(second.matches.iter())
+            .map(|matched| matched.symbol.as_str())
+            .collect::<Vec<_>>(),
+        unbounded
+            .matches
+            .iter()
+            .map(|matched| matched.symbol.as_str())
+            .collect::<Vec<_>>(),
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_rejects_stale_v2_continuation_after_snapshot_change() {
+    let workspace_root = temp_workspace_root("search-symbol-stale-continuation");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let source_path = src_root.join("lib.rs");
+    fs::write(
+        &source_path,
+        "pub fn target_one() {}\npub fn target_two() {}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+    let server = server_for_workspace_root(&workspace_root).await;
+    let first = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(1),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("first symbol page should succeed")
+        .0;
+    let continuation = first
+        .completeness
+        .continuation
+        .expect("first page should continue");
+    rewrite_file_with_new_mtime(
+        &source_path,
+        "pub fn target_one() {}\npub fn target_three() {}\n",
+    );
+    assert!(
+        server
+            .search_symbol(Parameters(SearchSymbolParams {
+                query: "target".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                path_class: None,
+                path_regex: None,
+                limit: Some(1),
+                continuation: Some(continuation),
+                response_mode: Some(ResponseMode::Compact),
+            }))
+            .await
+            .is_err(),
+        "a changed snapshot must stale a symbol continuation"
+    );
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_zero_limit_never_issues_a_non_progressing_continuation() {
+    let workspace_root = temp_workspace_root("search-symbol-zero-limit");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(src_root.join("lib.rs"), "pub fn target() {}\n")
+        .expect("failed to seed temporary fixture source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+    let server = server_for_workspace_root(&workspace_root).await;
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(0),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("zero-limit symbol lookup should succeed")
+        .0;
+    assert!(response.matches.is_empty());
+    assert!(response.completeness.truncated);
+    assert!(response.completeness.continuation.is_none());
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_hybrid_declares_ranked_discovery_incompleteness_and_top_k() {
+    let workspace_root = temp_workspace_root("search-hybrid-completeness");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\n\
+         pub fn target_one() {}\n\
+         pub fn target_two() {}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(1),
+            weights: None,
+            semantic: Some(false),
+            response_mode: Some(ResponseMode::Compact),
+            include_context_efficiency: None,
+        }))
+        .await
+        .expect("hybrid lookup should succeed")
+        .0;
+    assert_eq!(response.completeness.total, None);
+    assert!(!response.completeness.complete);
+    assert!(
+        response
+            .completeness
+            .incomplete_reasons
+            .contains(&frigg::mcp::types::ResultIncompleteReason::RankedDiscovery)
+    );
+    assert!(response.completeness.truncated);
+    assert!(
+        response
+            .completeness
+            .truncation_reasons
+            .contains(&frigg::mcp::types::ResultTruncationReason::TopKLimit)
+    );
+    assert!(response.completeness.continuation.is_none());
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -132,6 +366,7 @@ async fn search_symbol_returns_blade_symbols_from_runtime_corpus() {
             path_class: Some(SearchSymbolPathClass::Support),
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -177,6 +412,7 @@ async fn search_symbol_returns_typescript_symbols_from_runtime_corpus() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -223,6 +459,7 @@ async fn search_symbol_returns_python_symbols_from_runtime_corpus() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -308,6 +545,7 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
                 path_class: None,
                 path_regex: None,
                 limit: Some(20),
+                continuation: None,
                 response_mode: Some(ResponseMode::Full),
             }))
             .await
@@ -355,6 +593,7 @@ async fn search_symbol_resolves_php_canonical_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -376,6 +615,7 @@ async fn search_symbol_resolves_php_canonical_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -426,6 +666,7 @@ async fn search_symbol_defaults_to_runtime_path_class() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -453,6 +694,7 @@ async fn search_symbol_defaults_to_runtime_path_class() {
             path_class: Some(SearchSymbolPathClass::Any),
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -501,6 +743,7 @@ async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
             path_class: Some(SearchSymbolPathClass::Runtime),
             path_regex: Some("^src/".to_owned()),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -534,6 +777,7 @@ async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
             path_class: Some(SearchSymbolPathClass::Any),
             path_regex: Some("^src/".to_owned()),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -584,6 +828,7 @@ async fn search_symbol_filters_by_path_class_and_path_regex() {
             path_class: Some(SearchSymbolPathClass::Support),
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -599,6 +844,7 @@ async fn search_symbol_filters_by_path_class_and_path_regex() {
             path_class: None,
             path_regex: Some(r"^src/.*\.rs$".to_owned()),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -622,6 +868,7 @@ async fn core_search_symbol_rejects_abusive_path_regex_with_typed_invalid_params
             path_class: None,
             path_regex: Some(abusive_path_regex.clone()),
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -663,6 +910,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -680,6 +928,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -695,6 +944,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -722,6 +972,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
             path_class: None,
             path_regex: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -739,6 +990,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
             path_class: None,
             path_regex: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await
@@ -807,6 +1059,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
             path_class: None,
             path_regex: None,
             limit: Some(10),
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await

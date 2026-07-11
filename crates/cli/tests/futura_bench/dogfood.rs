@@ -183,7 +183,6 @@ async fn run_search_batch_multi_probe(report: &Mutex<harness::BenchReport>, root
                 repository_id: None,
                 response_mode: Some(ResponseMode::Compact),
                 resume_from: None,
-                continuation: None,
             }))
             .await
             .map_err(|e| format!("search_batch failed: {e}"))?
@@ -222,6 +221,7 @@ async fn run_known_symbol(report: &Mutex<harness::BenchReport>, root: &Path) {
                 path_class: None,
                 path_regex: Some(r"^crates/cli/src/mcp/".to_owned()),
                 limit: Some(20),
+                continuation: None,
                 response_mode: Some(ResponseMode::Compact),
             }))
             .await

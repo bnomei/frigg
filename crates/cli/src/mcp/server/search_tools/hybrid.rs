@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::mcp::types::{
+    ResultCompleteness, ResultIncompleteReason, ResultTruncationReason, ResultUnit,
     SearchHybridExactPivotAssistance, SearchHybridQueryShape, SearchHybridRankReason,
 };
 use crate::path_class::classify_repository_path;
@@ -212,6 +213,10 @@ impl FriggMcpServer {
                     ));
                     stage_attribution = search_output.stage_attribution.clone();
 
+                    // Diversification receives a fixed-cap pool, so its stage input can equal
+                    // the returned page even while higher-ranked anchors were omitted. The
+                    // pre-diversification ranked set is the truthful top-k bound witness.
+                    let ranked_candidate_count = search_output.ranked_anchors.len();
                     let mut matches = search_output
                         .matches
                         .into_iter()
@@ -342,8 +347,24 @@ impl FriggMcpServer {
                             &pivot_sources,
                         )
                     };
+                    let returned = matches.len();
+                    let ranked_truncated = ranked_candidate_count > returned;
                     let response = SearchHybridResponse {
                         matches,
+                        completeness: ResultCompleteness::try_new(
+                            ResultUnit::Occurrence,
+                            returned,
+                            None,
+                            false,
+                            ranked_truncated,
+                            ranked_truncated
+                                .then_some(ResultTruncationReason::TopKLimit)
+                                .into_iter()
+                                .collect(),
+                            vec![ResultIncompleteReason::RankedDiscovery],
+                            None,
+                        )
+                        .expect("ranked discovery completeness is internally consistent"),
                         result_handle: None,
                         handle_scope: None,
                         handle_expires: None,
@@ -1124,8 +1145,8 @@ impl FriggMcpServer {
             }
         }
         lexical_sources.sort();
-        let graph_mode = Self::hybrid_graph_mode_from_sources(&evidence.graph_sources)
-            .map(str::to_owned);
+        let graph_mode =
+            Self::hybrid_graph_mode_from_sources(&evidence.graph_sources).map(str::to_owned);
         SearchHybridMatch {
             match_id: None,
             repository_id: evidence.document.repository_id,
@@ -1361,10 +1382,7 @@ mod tests {
 
     #[test]
     fn hybrid_graph_mode_from_sources_prefers_lowest_confidence_when_mixed() {
-        assert_eq!(
-            FriggMcpServer::hybrid_graph_mode_from_sources(&[]),
-            None
-        );
+        assert_eq!(FriggMcpServer::hybrid_graph_mode_from_sources(&[]), None);
         assert_eq!(
             FriggMcpServer::hybrid_graph_mode_from_sources(&[
                 "graph_projection:foo:src/a.rs:1".to_owned()

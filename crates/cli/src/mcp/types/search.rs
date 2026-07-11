@@ -609,6 +609,8 @@ pub struct SearchHybridMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
+    /// Hybrid is ranked discovery, so its corpus total is deliberately unknown.
+    pub completeness: super::ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     /// Short scope label for `match_id` values (for example `hybrid`).
@@ -649,6 +651,8 @@ pub struct SearchSymbolParams {
     pub path_regex: Option<String>,
     /// Optional max matches.
     pub limit: Option<usize>,
+    /// Opaque v2 continuation returned by an earlier exhaustive symbol page.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -657,6 +661,8 @@ pub struct SearchSymbolParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
+    /// Canonical cardinality and paging truth for symbol rows.
+    pub completeness: super::ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     /// Short scope label for `match_id` values (for example `symbols`).
