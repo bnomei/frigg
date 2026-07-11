@@ -787,13 +787,6 @@ impl FriggMcpServer {
         self.store_session_result_handle(tool_name, stored)
     }
 
-    fn search_text_requested_limit(&self, params: &SearchTextParams) -> usize {
-        params
-            .limit
-            .unwrap_or(self.config.max_search_results)
-            .min(self.config.max_search_results.max(1))
-    }
-
     fn expand_text_match_excerpt(
         &self,
         found: &mut TextMatch,
@@ -851,7 +844,6 @@ impl FriggMcpServer {
         mut response: SearchTextResponse,
         params: &SearchTextParams,
     ) -> Result<SearchTextResponse, ErrorData> {
-        let requested_limit = self.search_text_requested_limit(params);
         let context_lines = params.context_lines.unwrap_or(0).min(MAX_CONTEXT_LINES);
         if context_lines > 0 {
             for found in &mut response.matches {
@@ -872,35 +864,6 @@ impl FriggMcpServer {
                 response.metadata = None;
             }
             return Ok(response);
-        }
-
-        let per_file_limit =
-            if params.files_with_matches == Some(true) || params.collapse_by_file == Some(true) {
-                1usize
-            } else {
-                params.max_count_per_file.unwrap_or(usize::MAX)
-            };
-        if requested_limit == 0 {
-            response.matches.clear();
-            response.total_matches = 0;
-        } else if per_file_limit != usize::MAX {
-            let mut retained = Vec::with_capacity(response.matches.len());
-            let mut counts = BTreeMap::<(String, String), usize>::new();
-            for found in response.matches {
-                if retained.len() >= requested_limit {
-                    break;
-                }
-                let key = (found.repository_id.clone(), found.path.clone());
-                let count = counts.entry(key).or_insert(0);
-                if *count >= per_file_limit {
-                    continue;
-                }
-                *count += 1;
-                retained.push(found);
-            }
-            response.matches = retained;
-        } else if response.matches.len() > requested_limit {
-            response.matches.truncate(requested_limit);
         }
 
         response.result_handle =
@@ -1463,7 +1426,7 @@ impl FriggMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::types::SearchPatternType;
+    use crate::mcp::types::{ResultCompleteness, SearchPatternType};
     use crate::settings::FriggConfig;
     use rmcp::model::ErrorCode;
     use std::fs;
@@ -1632,6 +1595,8 @@ mod tests {
                         witness_score_hint_millis: None,
                         witness_provenance_ids: None,
                     }],
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 1, 1)
+                        .expect("complete fixture"),
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,
@@ -1714,9 +1679,11 @@ mod tests {
                 SearchTextResponse {
                     total_matches: 2,
                     matches: vec![
-                        sample_text_match("repo-001", "src/a.rs"),
-                        sample_text_match("repo-001", "src/b.rs"),
+                        bound_text_match(&server, "src/a.rs"),
+                        bound_text_match(&server, "src/b.rs"),
                     ],
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 2, 2)
+                        .expect("complete fixture"),
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,
@@ -1732,11 +1699,11 @@ mod tests {
                     ..Default::default()
                 },
             )
-            .expect("limit-zero collapse_by_file shaping should succeed");
+            .expect("presentation should preserve handler-selected rows");
 
-        assert_eq!(response.matches.len(), 0);
-        assert_eq!(response.total_matches, 0);
-        assert!(response.result_handle.is_none());
+        assert_eq!(response.matches.len(), 2);
+        assert_eq!(response.total_matches, 2);
+        assert!(response.result_handle.is_some());
     }
 
     #[test]
@@ -1747,6 +1714,8 @@ mod tests {
                 SearchTextResponse {
                     total_matches: 1,
                     matches: vec![bound_text_match(&server, "src/a.rs")],
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 1, 1)
+                        .expect("complete fixture"),
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,
@@ -1762,11 +1731,11 @@ mod tests {
                     ..Default::default()
                 },
             )
-            .expect("limit-zero files_with_matches shaping should succeed");
+            .expect("presentation should preserve handler-selected rows");
 
-        assert_eq!(response.matches.len(), 0);
-        assert_eq!(response.total_matches, 0);
-        assert!(response.result_handle.is_none());
+        assert_eq!(response.matches.len(), 1);
+        assert_eq!(response.total_matches, 1);
+        assert!(response.result_handle.is_some());
     }
 
     #[test]
@@ -1777,6 +1746,8 @@ mod tests {
                 SearchTextResponse {
                     total_matches: 0,
                     matches: Vec::new(),
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                        .expect("complete fixture"),
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,
@@ -1831,6 +1802,8 @@ mod tests {
                 SearchTextResponse {
                     total_matches: 0,
                     matches: Vec::new(),
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                        .expect("complete fixture"),
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,
@@ -1880,6 +1853,8 @@ mod tests {
                 SearchTextResponse {
                     total_matches: 1,
                     matches: vec![sample_text_match("repo-001", "src/a.rs")],
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 1, 1)
+                        .expect("complete fixture"),
                     result_handle: None,
                     handle_scope: None,
                     handle_expires: None,

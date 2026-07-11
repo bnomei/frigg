@@ -66,8 +66,6 @@ pub enum CompletenessInvariantError {
     ReturnedExceedsTotal,
     #[error("complete results require an exact total")]
     CompleteWithoutTotal,
-    #[error("complete row collections require returned rows to equal the exact total")]
-    CompleteReturnedCountMismatch,
     #[error("complete results cannot be truncated, incomplete, or continued")]
     CompleteHasOmissions,
     #[error("a truncation flag requires at least one truncation reason")]
@@ -121,9 +119,6 @@ impl ResultCompleteness {
         if complete && total.is_none() {
             return Err(CompletenessInvariantError::CompleteWithoutTotal);
         }
-        if complete && total.is_some_and(|total| returned != total) {
-            return Err(CompletenessInvariantError::CompleteReturnedCountMismatch);
-        }
         if complete
             && (truncated
                 || !truncation_reasons.is_empty()
@@ -156,7 +151,10 @@ impl ResultCompleteness {
         })
     }
 
-    /// An exhaustive row collection. Its serialized row count must equal its exact total.
+    /// A page that exhausts an exact row collection.
+    ///
+    /// `returned` is page-local while `total` is cardinality for the normalized request, so a
+    /// final continuation page may be complete even when it contains only the remaining suffix.
     pub fn complete(
         unit: ResultUnit,
         returned: usize,
@@ -296,27 +294,23 @@ mod tests {
             Err(CompletenessInvariantError::ContinuationWithoutTruncation)
         );
         assert_eq!(
+            ResultCompleteness::complete(ResultUnit::File, 1, 2),
+            Ok(ResultCompleteness {
+                unit: ResultUnit::File,
+                returned: 1,
+                total: Some(2),
+                complete: true,
+                truncated: false,
+                truncation_reasons: vec![],
+                incomplete_reasons: vec![],
+                continuation: None,
+            })
+        );
+        assert_eq!(
             ResultCompleteness::try_new(
                 ResultUnit::File,
                 1,
                 Some(2),
-                true,
-                false,
-                vec![],
-                vec![],
-                None
-            ),
-            Err(CompletenessInvariantError::CompleteReturnedCountMismatch)
-        );
-        assert_eq!(
-            ResultCompleteness::complete(ResultUnit::File, 1, 2),
-            Err(CompletenessInvariantError::CompleteReturnedCountMismatch)
-        );
-        assert_eq!(
-            ResultCompleteness::try_new(
-                ResultUnit::File,
-                1,
-                Some(1),
                 true,
                 true,
                 vec![],
@@ -329,7 +323,7 @@ mod tests {
             ResultCompleteness::try_new(
                 ResultUnit::File,
                 1,
-                Some(1),
+                Some(2),
                 true,
                 true,
                 vec![ResultTruncationReason::PageLimit],
@@ -342,7 +336,7 @@ mod tests {
             ResultCompleteness::try_new(
                 ResultUnit::File,
                 1,
-                Some(1),
+                Some(2),
                 true,
                 false,
                 vec![],
@@ -355,7 +349,7 @@ mod tests {
             ResultCompleteness::try_new(
                 ResultUnit::File,
                 1,
-                Some(1),
+                Some(2),
                 true,
                 false,
                 vec![],

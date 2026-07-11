@@ -171,6 +171,8 @@ pub struct SearchTextParams {
     pub max_count_per_file: Option<usize>,
     /// Collapse repeated paths.
     pub collapse_by_file: Option<bool>,
+    /// Opaque v2 continuation returned by an earlier `search_text` page.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
     /// Include context-efficiency metadata.
@@ -180,8 +182,11 @@ pub struct SearchTextParams {
 /// Response from `search_text` with optional `result_handle` for `read_match`. Empty results may include flattened recovery fields.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
+    /// Exact raw eligible occurrence count when coverage is complete, retained for compatibility.
     pub total_matches: usize,
     pub matches: Vec<TextMatch>,
+    /// Canonical cardinality and paging truth for the selected response row unit.
+    pub completeness: super::ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     /// Short scope label for `match_id` values (for example `search`).

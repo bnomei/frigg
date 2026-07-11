@@ -1557,6 +1557,7 @@ mod tests {
                 include_hidden: None,
                 max_count_per_file: None,
                 collapse_by_file: None,
+                continuation: None,
                 response_mode: None,
                 include_context_efficiency: None,
             })
@@ -1686,6 +1687,7 @@ mod tests {
                 include_hidden: None,
                 max_count_per_file: None,
                 collapse_by_file: None,
+                continuation: None,
                 response_mode: None,
                 include_context_efficiency: None,
             })

@@ -1,6 +1,71 @@
 //! search_text / hybrid polish integration tests.
 
 use super::*;
+use frigg::mcp::types::ResultUnit;
+
+#[tokio::test]
+async fn search_text_exact_pages_preserve_raw_total_and_exhaust_without_duplicates() {
+    let workspace_root = fresh_fixture_root("tool-handlers-search-text-continuation");
+    fs::write(workspace_root.join("src/a.rs"), "needle\nneedle\n")
+        .expect("seed first exact-search page fixture");
+    fs::write(workspace_root.join("src/b.rs"), "needle\n")
+        .expect("seed later exact-search page fixture");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let params = SearchTextParams {
+        query: "needle".to_owned(),
+        pattern_type: Some(SearchPatternType::Literal),
+        limit: Some(1),
+        response_mode: Some(ResponseMode::Compact),
+        ..Default::default()
+    };
+
+    let first = server
+        .search_text(Parameters(params.clone()))
+        .await
+        .expect("first exact-search page should succeed")
+        .0;
+    assert_eq!(first.total_matches, 3);
+    assert_eq!(first.completeness.unit, ResultUnit::Occurrence);
+    assert_eq!(first.completeness.total, Some(3));
+    assert_eq!(first.completeness.returned, 1);
+    assert!(!first.completeness.complete);
+    assert!(first.completeness.truncated);
+    let second_params = SearchTextParams {
+        continuation: first.completeness.continuation.clone(),
+        ..params.clone()
+    };
+    let second = server
+        .search_text(Parameters(second_params))
+        .await
+        .expect("second exact-search page should succeed")
+        .0;
+    let third_params = SearchTextParams {
+        continuation: second.completeness.continuation.clone(),
+        ..params.clone()
+    };
+    let third = server
+        .search_text(Parameters(third_params))
+        .await
+        .expect("third exact-search page should succeed")
+        .0;
+
+    assert!(third.completeness.complete);
+    assert_eq!(third.completeness.returned, 1);
+    assert_eq!(third.completeness.total, Some(3));
+    assert_eq!(third.completeness.continuation, None);
+    let rows = [first, second, third]
+        .into_iter()
+        .flat_map(|page| page.matches)
+        .map(|matched| (matched.path, matched.line, matched.column))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        rows.len(),
+        3,
+        "continuation must not duplicate or omit rows"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
 
 #[tokio::test]
 async fn search_text_count_only_echoes_flag_and_total() {
@@ -25,6 +90,7 @@ async fn search_text_count_only_echoes_flag_and_total() {
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
             include_context_efficiency: None,
         }))
@@ -70,6 +136,7 @@ async fn search_text_scope_echo_and_regex_trap() {
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
             include_context_efficiency: None,
         }))
@@ -105,6 +172,7 @@ async fn search_text_scope_echo_and_regex_trap() {
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
             include_context_efficiency: None,
         }))
@@ -151,9 +219,7 @@ async fn search_hybrid_compact_includes_discovery_pivots() {
 
     assert_eq!(
         response.ranking_note.as_deref(),
-        Some(
-            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
-        ),
+        Some("discovery_only; lexical_only (semantic not contributing); confirm with exact search"),
         "semantic:false → lexical_only ranking_note (mode cliff, not readiness dump)"
     );
     assert!(

@@ -6,7 +6,7 @@ use super::*;
 use crate::mcp::types::{
     ListRepositoriesParams, WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceIndexAction,
     WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase,
+    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase, ResultUnit,
 };
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 
@@ -181,6 +181,7 @@ async fn search_text_supports_rg_aligned_options() {
             include_hidden: Some(false),
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: None,
             include_context_efficiency: None,
         })
@@ -193,6 +194,9 @@ async fn search_text_supports_rg_aligned_options() {
     assert_eq!(files_with_matches.matches[0].path, "src/lib.rs");
     assert_eq!(files_with_matches.matches[0].line, 1);
     assert!(files_with_matches.result_handle.is_some());
+    assert_eq!(files_with_matches.completeness.unit, ResultUnit::File);
+    assert_eq!(files_with_matches.completeness.total, Some(1));
+    assert!(files_with_matches.completeness.complete);
 
     let count_only = server
         .search_text_impl(crate::mcp::types::SearchTextParams {
@@ -212,6 +216,7 @@ async fn search_text_supports_rg_aligned_options() {
             include_hidden: Some(false),
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: None,
             include_context_efficiency: None,
         })
@@ -222,6 +227,9 @@ async fn search_text_supports_rg_aligned_options() {
     assert_eq!(count_only.total_matches, 2);
     assert!(count_only.matches.is_empty());
     assert!(count_only.result_handle.is_none());
+    assert_eq!(count_only.completeness.unit, ResultUnit::Occurrence);
+    assert_eq!(count_only.completeness.total, Some(2));
+    assert!(count_only.completeness.complete);
 
     let _ = fs::remove_dir_all(workspace_root);
 }

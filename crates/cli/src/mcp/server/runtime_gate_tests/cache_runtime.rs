@@ -933,6 +933,7 @@ async fn read_match_reads_from_cached_result_handle() {
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: None,
             include_context_efficiency: None,
         })
@@ -1029,6 +1030,7 @@ async fn read_match_result_handle_is_invalidated_after_workspace_index_refresh()
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: None,
             include_context_efficiency: None,
         })
@@ -1126,6 +1128,7 @@ async fn read_match_result_handle_is_invalidated_after_workspace_detach() {
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: None,
             include_context_efficiency: None,
         })

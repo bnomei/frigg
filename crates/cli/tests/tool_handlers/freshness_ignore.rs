@@ -38,6 +38,7 @@ async fn gitignored_tmp_content_absent_from_search_text_but_on_disk() {
             include_hidden: None,
             max_count_per_file: None,
             collapse_by_file: None,
+            continuation: None,
             response_mode: Some(ResponseMode::Compact),
             include_context_efficiency: None,
         }))

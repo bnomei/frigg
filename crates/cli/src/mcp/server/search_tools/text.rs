@@ -4,6 +4,13 @@
 //! response-cache eligibility.
 
 use super::*;
+use crate::mcp::server_cache::ContinuationBinding;
+use crate::mcp::types::{
+    ResultCompleteness, ResultIncompleteReason, ResultTruncationReason, ResultUnit,
+};
+use crate::searcher::{SearchTextExecutionOptions, SearchTextRowMode};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 impl FriggMcpServer {
     pub(crate) async fn search_text_impl(
@@ -71,29 +78,13 @@ impl FriggMcpServer {
                         &params_for_blocking.exclude_glob,
                     )?;
                     let include_hidden = params_for_blocking.include_hidden.unwrap_or(false);
-                    let search_path_regex =
-                        explicit_path_regex.clone().or_else(|| glob_regex.clone());
-                    let needs_post_path_filter = (explicit_path_regex.is_some()
-                        && glob_regex.is_some())
-                        || exclude_glob_regex.is_some();
                     effective_pattern_type = Some(pattern_type.clone());
 
                     let requested_limit = params_for_blocking
                         .limit
                         .unwrap_or(server.config.max_search_results)
                         .min(server.config.max_search_results.max(1));
-                    let limit = if params_for_blocking.context_lines.unwrap_or(0) > 0
-                        || params_for_blocking.max_count_per_file.is_some()
-                        || params_for_blocking.collapse_by_file == Some(true)
-                        || params_for_blocking.files_with_matches == Some(true)
-                        || params_for_blocking.count_only == Some(true)
-                        || needs_post_path_filter
-                    {
-                        server.config.max_search_results.max(requested_limit)
-                    } else {
-                        requested_limit
-                    };
-                    effective_limit = Some(limit);
+                    effective_limit = Some(requested_limit);
 
                     let scoped_execution_context = server.scoped_read_only_tool_execution_context(
                         execution_context_for_blocking.tool_name,
@@ -103,6 +94,62 @@ impl FriggMcpServer {
                     let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
                     scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
+                    let snapshot_fingerprints = cache_freshness
+                        .scopes
+                        .as_ref()
+                        .map(|scopes| {
+                            scopes
+                                .iter()
+                                .map(|scope| {
+                                    format!("{}:{}", scope.repository_id, scope.snapshot_id)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let row_mode = if params_for_blocking.files_with_matches == Some(true)
+                        || params_for_blocking.collapse_by_file == Some(true)
+                    {
+                        SearchTextRowMode::UniqueFile
+                    } else if let Some(max_count_per_file) = params_for_blocking.max_count_per_file
+                    {
+                        SearchTextRowMode::PerFileCapped { max_count_per_file }
+                    } else {
+                        SearchTextRowMode::Occurrence
+                    };
+                    let unit = match row_mode {
+                        SearchTextRowMode::UniqueFile => ResultUnit::File,
+                        SearchTextRowMode::Occurrence | SearchTextRowMode::PerFileCapped { .. } => {
+                            ResultUnit::Occurrence
+                        }
+                    };
+                    let request_digest = Self::search_text_continuation_digest(
+                        &query,
+                        &pattern_type,
+                        &params_for_blocking,
+                        &scoped_repository_ids,
+                        unit,
+                    );
+                    let resume_offset = match params_for_blocking.continuation.as_deref() {
+                        Some(token) => server
+                            .session_continuation_lookup(
+                                token,
+                                "search_text",
+                                &request_digest,
+                                &scoped_repository_ids,
+                                &snapshot_fingerprints,
+                                unit,
+                            )
+                            .map(|binding| binding.next_position)
+                            .map_err(|error| {
+                                Self::invalid_params(
+                                    error.message.clone(),
+                                    Some(json!({
+                                        "continuation": error,
+                                    })),
+                                )
+                            })?,
+                        None => 0,
+                    };
                     let (scoped_config, scoped_runtime_repository_ids, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
 
@@ -110,30 +157,38 @@ impl FriggMcpServer {
                         scoped_config,
                         scoped_runtime_repository_ids,
                     );
+                    let execution_options = SearchTextExecutionOptions {
+                        include_glob: glob_regex,
+                        exclude_glob: exclude_glob_regex,
+                        row_mode,
+                    };
                     let search_output = match pattern_type {
                         SearchPatternType::Literal => searcher
-                            .search_literal_with_filters_diagnostics(
+                            .search_literal_with_execution_options_diagnostics(
                                 SearchTextQuery {
                                     query,
-                                    path_regex: search_path_regex.clone(),
-                                    limit,
+                                    path_regex: explicit_path_regex.clone(),
+                                    limit: usize::MAX,
                                 },
                                 SearchFilters {
                                     include_hidden,
                                     ..SearchFilters::default()
                                 },
+                                execution_options.clone(),
                             ),
-                        SearchPatternType::Regex => searcher.search_regex_with_filters_diagnostics(
-                            SearchTextQuery {
-                                query,
-                                path_regex: search_path_regex,
-                                limit,
-                            },
-                            SearchFilters {
-                                include_hidden,
-                                ..SearchFilters::default()
-                            },
-                        ),
+                        SearchPatternType::Regex => searcher
+                            .search_regex_with_execution_options_diagnostics(
+                                SearchTextQuery {
+                                    query,
+                                    path_regex: explicit_path_regex,
+                                    limit: usize::MAX,
+                                },
+                                SearchFilters {
+                                    include_hidden,
+                                    ..SearchFilters::default()
+                                },
+                                execution_options,
+                            ),
                     }
                     .map_err(Self::map_frigg_error)?;
                     diagnostics_count = search_output.diagnostics.total_count();
@@ -143,26 +198,12 @@ impl FriggMcpServer {
                     read_diagnostics_count = search_output
                         .diagnostics
                         .count_by_kind(SearchDiagnosticKind::Read);
-                    let mut matches = search_output.matches;
-                    if needs_post_path_filter {
-                        matches.retain(|matched| {
-                            Self::search_text_path_filter_allows(
-                                &matched.path,
-                                glob_regex.as_ref(),
-                                exclude_glob_regex.as_ref(),
-                                include_hidden,
-                            )
-                        });
-                    }
-                    let total_matches = if needs_post_path_filter {
-                        matches.len()
-                    } else {
-                        search_output.total_matches
-                    };
+                    let total_matches = search_output.total_matches;
                     let metadata = Self::search_text_metadata(
                         search_output.lexical_backend,
                         search_output.lexical_backend_note.clone(),
                     );
+                    let mut matches = search_output.matches;
                     for found in &mut matches {
                         if let Some(actual_repository_id) =
                             repository_id_map.get(&found.repository_id)
@@ -170,9 +211,82 @@ impl FriggMcpServer {
                             found.repository_id = actual_repository_id.clone();
                         }
                     }
+                    let total_rows = search_output.total_rows;
+                    let page = matches
+                        .into_iter()
+                        .skip(resume_offset)
+                        .take(requested_limit)
+                        .collect::<Vec<_>>();
+                    let rows_omitted = total_rows
+                        .is_some_and(|total| resume_offset.saturating_add(page.len()) < total);
+                    let coverage_is_exact =
+                        search_output.coverage == crate::searcher::SearchExecutionCoverage::Exact;
+                    let mut incomplete_reasons = Vec::new();
+                    if !coverage_is_exact {
+                        incomplete_reasons.push(ResultIncompleteReason::DiagnosticCoverage);
+                        if read_diagnostics_count > 0 {
+                            incomplete_reasons.push(ResultIncompleteReason::UnreadableCandidate);
+                        }
+                        if walk_diagnostics_count > 0 {
+                            incomplete_reasons.push(ResultIncompleteReason::WalkFailure);
+                        }
+                    }
+                    let continuation = (rows_omitted
+                        && coverage_is_exact
+                        && !snapshot_fingerprints.is_empty()
+                        && requested_limit > 0)
+                        .then(|| {
+                            server.store_session_continuation(ContinuationBinding {
+                                tool: "search_text",
+                                request_digest: request_digest.clone(),
+                                repository_ids: scoped_repository_ids.clone(),
+                                snapshot_fingerprints: snapshot_fingerprints.clone(),
+                                unit,
+                                next_position: resume_offset.saturating_add(page.len()),
+                            })
+                        });
+                    let completeness = if params_for_blocking.count_only == Some(true) {
+                        match total_matches {
+                            Some(total) => ResultCompleteness::complete_count_only(
+                                ResultUnit::Occurrence,
+                                total,
+                            ),
+                            None => ResultCompleteness::try_new(
+                                ResultUnit::Occurrence,
+                                0,
+                                None,
+                                false,
+                                false,
+                                vec![],
+                                incomplete_reasons.clone(),
+                                None,
+                            ),
+                        }
+                    } else {
+                        ResultCompleteness::try_new(
+                            unit,
+                            page.len(),
+                            total_rows,
+                            coverage_is_exact && !rows_omitted,
+                            rows_omitted,
+                            rows_omitted
+                                .then_some(ResultTruncationReason::PageLimit)
+                                .into_iter()
+                                .collect(),
+                            incomplete_reasons,
+                            continuation,
+                        )
+                    }
+                    .map_err(|error| {
+                        Self::invalid_params(
+                            format!("invalid search completeness state: {error}"),
+                            None,
+                        )
+                    })?;
                     let mut response = SearchTextResponse {
-                        total_matches,
-                        matches,
+                        total_matches: total_matches.unwrap_or(0),
+                        matches: page,
+                        completeness,
                         result_handle: None,
                         handle_scope: None,
                         handle_expires: None,
@@ -392,6 +506,38 @@ impl FriggMcpServer {
         Ok(())
     }
 
+    fn search_text_continuation_digest(
+        query: &str,
+        pattern_type: &SearchPatternType,
+        params: &SearchTextParams,
+        repository_ids: &[String],
+        unit: ResultUnit,
+    ) -> String {
+        let normalized = json!({
+            "query": query,
+            "pattern_type": pattern_type,
+            "repository_id": params.repository_id,
+            "repository_ids": repository_ids,
+            "path_regex": params.path_regex,
+            "limit": params.limit,
+            "context_lines": params.context_lines,
+            "case_sensitive": params.case_sensitive,
+            "ignore_case": params.ignore_case,
+            "word": params.word,
+            "files_with_matches": params.files_with_matches,
+            "count_only": params.count_only,
+            "glob": params.glob,
+            "exclude_glob": params.exclude_glob,
+            "include_hidden": params.include_hidden,
+            "max_count_per_file": params.max_count_per_file,
+            "collapse_by_file": params.collapse_by_file,
+            "unit": unit,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("search-text-v2:{:016x}", hasher.finish())
+    }
+
     fn normalize_search_text_rg_pattern(
         params: &SearchTextParams,
         query: String,
@@ -483,24 +629,6 @@ impl FriggMcpServer {
                     })),
                 )
             })
-    }
-
-    fn search_text_path_filter_allows(
-        path: &str,
-        glob_regex: Option<&regex::Regex>,
-        exclude_glob_regex: Option<&regex::Regex>,
-        include_hidden: bool,
-    ) -> bool {
-        if !include_hidden && Self::repository_path_is_hidden(path) {
-            return false;
-        }
-        if glob_regex.is_some_and(|regex| !regex.is_match(path)) {
-            return false;
-        }
-        if exclude_glob_regex.is_some_and(|regex| regex.is_match(path)) {
-            return false;
-        }
-        true
     }
 
     pub(super) fn repository_path_is_hidden(path: &str) -> bool {
