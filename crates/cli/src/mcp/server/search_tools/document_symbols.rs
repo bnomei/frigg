@@ -4,6 +4,10 @@
 //! unsupported paths before parsing.
 
 use super::*;
+use crate::mcp::server_cache::ContinuationBinding;
+use crate::mcp::types::{ResultCompleteness, ResultUnit};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 impl FriggMcpServer {
     pub(crate) async fn document_symbols_impl(
@@ -20,6 +24,12 @@ impl FriggMcpServer {
             let mut symbol_count = 0usize;
 
             let result = (|| -> Result<Json<DocumentSymbolsResponse>, ErrorData> {
+                if let Err(error) = crate::mcp::types::ContinuationValidationError::reject_mixed_cursor_forms(
+                    params_for_blocking.resume_from.is_some(),
+                    params_for_blocking.continuation.is_some(),
+                ) {
+                    return Err(Self::invalid_params(error.message.clone(), Some(json!({ "continuation": error }))));
+                }
                 let read_params = ReadFileParams {
                     path: params_for_blocking.path.clone(),
                     repository_id: params_for_blocking.repository_id.clone(),
@@ -78,6 +88,32 @@ impl FriggMcpServer {
                         None,
                     )
                 })?;
+                let top_level_only = params_for_blocking.top_level_only.unwrap_or(true);
+                let request_digest = Self::document_symbols_continuation_digest(
+                    &params_for_blocking,
+                    &repository_id,
+                    top_level_only,
+                );
+                let snapshot_fingerprints = vec![format!(
+                    "{}:{}:{}",
+                    repository_id,
+                    display_path,
+                    blake3::hash(source.as_bytes()).to_hex(),
+                )];
+                let resume_offset = match params_for_blocking.continuation.as_deref() {
+                    Some(token) => server
+                        .session_continuation_lookup(
+                            token,
+                            "document_symbols",
+                            &request_digest,
+                            std::slice::from_ref(&repository_id),
+                            &snapshot_fingerprints,
+                            ResultUnit::DocumentSymbol,
+                        )
+                        .map(|binding| binding.next_position)
+                        .map_err(|error| Self::invalid_params(error.message.clone(), Some(json!({ "continuation": error }))))?,
+                    None => params_for_blocking.resume_from.unwrap_or(0),
+                };
                 let symbols = extract_symbols_from_source(language, &absolute_path, &source)
                     .map_err(Self::map_frigg_error)?;
 
@@ -147,12 +183,23 @@ impl FriggMcpServer {
                         returned: 0,
                         truncated: false,
                         resume_from: None,
+                        completeness: ResultCompleteness::complete(ResultUnit::DocumentSymbol, 0, 0)
+                            .expect("empty document symbol response is complete"),
                         top_level_only: params_for_blocking.top_level_only.unwrap_or(true),
                         result_handle: None,
                         metadata,
                         note,
                     },
                     &params_for_blocking,
+                    resume_offset,
+                    Some(ContinuationBinding {
+                        tool: "document_symbols",
+                        request_digest,
+                        repository_ids: vec![repository_id],
+                        snapshot_fingerprints,
+                        unit: ResultUnit::DocumentSymbol,
+                        next_position: 0,
+                    }),
                 )))
             })();
 
@@ -178,6 +225,23 @@ impl FriggMcpServer {
             )
             .await;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    fn document_symbols_continuation_digest(
+        params: &DocumentSymbolsParams,
+        repository_id: &str,
+        top_level_only: bool,
+    ) -> String {
+        let normalized = json!({
+            "path": params.path,
+            "repository_id": repository_id,
+            "include_follow_up_structural": params.include_follow_up_structural,
+            "top_level_only": top_level_only,
+            "limit": params.limit,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("document-symbols-v2:{:016x}", hasher.finish())
     }
 
     fn source_span_contains_symbol(parent: &SourceSpan, child: &SourceSpan) -> bool {

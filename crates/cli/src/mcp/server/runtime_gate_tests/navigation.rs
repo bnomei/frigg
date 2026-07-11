@@ -438,6 +438,7 @@ async fn search_structural_invalid_query_returns_recovery_guidance() {
                 result_mode: None,
                 primary_capture: None,
                 include_follow_up_structural: None,
+                continuation: None,
             },
         ))
         .await

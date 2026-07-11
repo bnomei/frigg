@@ -183,6 +183,7 @@ async fn run_search_batch_multi_probe(report: &Mutex<harness::BenchReport>, root
                 repository_id: None,
                 response_mode: Some(ResponseMode::Compact),
                 resume_from: None,
+                continuation: None,
             }))
             .await
             .map_err(|e| format!("search_batch failed: {e}"))?
@@ -449,6 +450,7 @@ async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &
                 include_hidden: None,
                 limit: Some(2),
                 resume_from: None,
+                continuation: None,
             }))
             .await
             .map_err(|e| format!("list_files failed: {e}"))?
@@ -476,6 +478,7 @@ async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &
                     include_hidden: None,
                     limit: Some(2),
                     resume_from: Some(resume),
+                    continuation: None,
                 }))
                 .await
                 .map_err(|e| format!("list_files resume failed: {e}"))?
@@ -505,6 +508,7 @@ async fn run_document_symbols_outline(report: &Mutex<harness::BenchReport>, root
                 top_level_only: Some(true),
                 limit: Some(5),
                 resume_from: None,
+                continuation: None,
                 response_mode: Some(ResponseMode::Compact),
                 include_follow_up_structural: None,
             }))

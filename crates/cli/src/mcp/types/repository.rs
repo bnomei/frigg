@@ -67,6 +67,8 @@ pub struct ListFilesParams {
     pub limit: Option<usize>,
     /// Continuation cursor returned as `resume_from` when a file listing is truncated.
     pub resume_from: Option<String>,
+    /// Opaque v2 continuation returned by an earlier page. Cannot be combined with `resume_from`.
+    pub continuation: Option<String>,
 }
 
 /// One repository-relative file row returned by `list_files`.
@@ -85,6 +87,8 @@ pub struct ListFilesResponse {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<String>,
+    /// Canonical cardinality and paging truth for the file rows.
+    pub completeness: super::ResultCompleteness,
 }
 
 /// How workspace attach resolves an input path to a repository root.

@@ -21,6 +21,7 @@ async fn core_list_files_auto_adopts_single_known_repo_and_filters_paths() {
             include_hidden: None,
             limit: Some(10),
             resume_from: None,
+            continuation: None,
         }))
         .await
         .expect("list_files should auto-adopt the only known repository")
@@ -53,6 +54,134 @@ async fn core_list_files_auto_adopts_single_known_repo_and_filters_paths() {
             .expect("auto-adopted repository should become current")
             .repository_id,
         repository_id
+    );
+}
+
+#[tokio::test]
+async fn core_list_files_v2_continuation_rejects_mixed_cursor_forms() {
+    let workspace_root = fresh_fixture_root("tool-handlers-core-list-files-v2");
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root])
+        .expect("fixture root must produce valid config");
+    let server = FriggMcpServer::new(config);
+    let first = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(1),
+            resume_from: None,
+            continuation: None,
+        }))
+        .await
+        .expect("first list_files page should succeed")
+        .0;
+    assert_eq!(first.completeness.total, Some(2));
+    assert!(first.completeness.truncated);
+
+    let second = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(1),
+            resume_from: None,
+            continuation: first.completeness.continuation.clone(),
+        }))
+        .await
+        .expect("v2 list_files page should succeed")
+        .0;
+    assert_eq!(second.files.len(), 1);
+    assert!(second.completeness.complete);
+    assert!(!second.completeness.truncated);
+    assert!(second.completeness.continuation.is_none());
+
+    let error = match server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(1),
+            resume_from: first.resume_from,
+            continuation: first.completeness.continuation,
+        }))
+        .await
+    {
+        Ok(_) => panic!("mixed list_files cursors must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error.message,
+        "Use either legacy resume_from or v2 continuation, not both."
+    );
+}
+
+#[tokio::test]
+async fn core_list_files_v2_continuation_rejects_live_manifest_mutation() {
+    let workspace_root = fresh_fixture_root("tool-handlers-core-list-files-v2-mutation");
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("fixture root must produce valid config");
+    let server = FriggMcpServer::new(config);
+    let first = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(1),
+            resume_from: None,
+            continuation: None,
+        }))
+        .await
+        .expect("first list_files page should succeed")
+        .0;
+    let continuation = first
+        .completeness
+        .continuation
+        .clone()
+        .expect("truncated page must issue a snapshot-bound continuation");
+
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn changed_between_list_files_pages() {}\n",
+    )
+    .expect("fixture mutation should succeed");
+
+    let error = match server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(1),
+            resume_from: None,
+            continuation: Some(continuation),
+        }))
+        .await
+    {
+        Ok(_) => panic!("a changed live manifest must invalidate the continuation"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error_data_field(&error, "continuation")
+            .get("code")
+            .and_then(|value| value.as_str()),
+        Some("STALE_CONTINUATION")
     );
 }
 
@@ -456,6 +585,7 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
             context_lines: Some(1),
             max_matches: None,
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: Some(true),
         }))
@@ -486,6 +616,7 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
                 context_lines: Some(1),
                 max_matches: Some(5),
                 resume_from: None,
+                continuation: None,
                 presentation_mode: None,
                 include_context_efficiency: Some(false),
             }))
@@ -509,6 +640,7 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
                 context_lines: Some(1),
                 max_matches: Some(5),
                 resume_from: None,
+                continuation: None,
                 presentation_mode: None,
                 include_context_efficiency: Some(true),
             }))
@@ -1309,9 +1441,7 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
     );
     assert_eq!(
         response.ranking_note.as_deref(),
-        Some(
-            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
-        )
+        Some("discovery_only; lexical_only (semantic not contributing); confirm with exact search")
     );
     assert!(
         !response.recovery.suggested_next.is_empty(),
@@ -1366,9 +1496,7 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
     );
     assert_eq!(
         explicit_false.ranking_note.as_deref(),
-        Some(
-            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
-        )
+        Some("discovery_only; lexical_only (semantic not contributing); confirm with exact search")
     );
 }
 
@@ -1422,9 +1550,7 @@ async fn core_search_hybrid_compact_hides_semantic_readiness_while_full_keeps_it
     );
     assert_eq!(
         compact.ranking_note.as_deref(),
-        Some(
-            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
-        ),
+        Some("discovery_only; lexical_only (semantic not contributing); confirm with exact search"),
         "compact must still signal lexical-only via ranking_note when semantic is off"
     );
     assert!(
@@ -1750,9 +1876,7 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
     );
     assert_eq!(
         compact.ranking_note.as_deref(),
-        Some(
-            "discovery_only; lexical_only (semantic not contributing); confirm with exact search"
-        )
+        Some("discovery_only; lexical_only (semantic not contributing); confirm with exact search")
     );
     assert_eq!(compact.matches[0].path, "src/lib.rs");
     assert_eq!(
@@ -2173,6 +2297,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
         context_lines: Some(1),
         max_matches: Some(2),
         resume_from: None,
+        continuation: None,
         presentation_mode: None,
         include_context_efficiency: None,
     };
@@ -2189,11 +2314,20 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
             .await
             .expect("explore probe should be deterministic"),
     );
-    assert_eq!(first, second);
+    // Continuations are opaque session allocations, so deterministic result content excludes
+    // their token identity.
+    let mut comparable_first = first.clone();
+    comparable_first.completeness.continuation = None;
+    let mut comparable_second = second;
+    comparable_second.completeness.continuation = None;
+    assert_eq!(comparable_first, comparable_second);
     assert_eq!(first.total_lines, 7);
     assert_eq!(first.total_matches, 3);
     assert_eq!(first.matches.len(), 2);
     assert!(first.truncated);
+    assert_eq!(first.completeness.total, Some(3));
+    assert!(!first.completeness.complete);
+    assert!(first.completeness.truncated);
     assert_eq!(
         first.resume_from.as_ref().map(|cursor| cursor.line),
         Some(6)
@@ -2219,16 +2353,40 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
                 context_lines: Some(1),
                 max_matches: Some(2),
                 resume_from: first.resume_from.clone(),
+                continuation: None,
                 presentation_mode: None,
                 include_context_efficiency: None,
             }))
             .await
             .expect("explore probe resume should succeed"),
     );
-    assert_eq!(resumed.total_matches, 1);
+    assert_eq!(resumed.total_matches, 3);
     assert_eq!(resumed.matches.len(), 1);
     assert!(!resumed.truncated);
     assert_eq!(resumed.matches[0].start_line, 6);
+
+    let v2_resumed: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(ExploreParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                operation: ExploreOperation::Probe,
+                query: Some("let needle_".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: None,
+                context_lines: Some(1),
+                max_matches: Some(2),
+                resume_from: None,
+                continuation: first.completeness.continuation.clone(),
+                presentation_mode: None,
+                include_context_efficiency: None,
+            }))
+            .await
+            .expect("explore v2 continuation should succeed"),
+    );
+    assert_eq!(v2_resumed.total_matches, 3);
+    assert_eq!(v2_resumed.matches.len(), 1);
+    assert!(v2_resumed.completeness.complete);
 
     let anchor = first.matches[1].anchor.clone();
     let zoom: ExploreResponse = structured_tool_result(
@@ -2243,6 +2401,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
                 context_lines: Some(1),
                 max_matches: None,
                 resume_from: None,
+                continuation: None,
                 presentation_mode: Some(ReadPresentationMode::Json),
                 include_context_efficiency: None,
             }))
@@ -2270,6 +2429,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
                 context_lines: Some(1),
                 max_matches: Some(5),
                 resume_from: None,
+                continuation: None,
                 presentation_mode: None,
                 include_context_efficiency: None,
             }))
@@ -2314,6 +2474,7 @@ async fn extended_explore_zoom_defaults_to_text_first_output() {
             context_lines: Some(1),
             max_matches: None,
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -2357,6 +2518,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: None,
             max_matches: None,
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -2377,6 +2539,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: None,
             max_matches: None,
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -2402,6 +2565,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: Some(0),
             max_matches: Some(1),
             resume_from: Some(ExploreCursor { line: 2, column: 1 }),
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -2425,6 +2589,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: None,
             max_matches: Some(1),
             resume_from: None,
+            continuation: None,
             presentation_mode: Some(ReadPresentationMode::Text),
             include_context_efficiency: None,
         }))

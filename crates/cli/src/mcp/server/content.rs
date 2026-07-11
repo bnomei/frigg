@@ -6,9 +6,14 @@
 
 use super::presentation::SessionResultHandleLookup;
 use super::*;
-use crate::mcp::server_cache::ResultHandleSourceRevision;
-use crate::mcp::types::ContextEfficiencyMetadata;
+use crate::mcp::server_cache::{ContinuationBinding, ResultHandleSourceRevision};
+use crate::mcp::types::{
+    ContextEfficiencyMetadata, ExploreAnchor, ExploreCursor, ResultCompleteness,
+    ResultTruncationReason, ResultUnit,
+};
 use serde::Serialize;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 
 #[derive(Clone)]
@@ -761,6 +766,17 @@ impl FriggMcpServer {
                         .map(|value| value.trim().to_owned());
                     let anchor = params_for_blocking.anchor.clone();
                     let resume_from = params_for_blocking.resume_from.clone();
+                    if let Err(error) =
+                        crate::mcp::types::ContinuationValidationError::reject_mixed_cursor_forms(
+                            resume_from.is_some(),
+                            params_for_blocking.continuation.is_some(),
+                        )
+                    {
+                        return Err(Self::invalid_params(
+                            error.message.clone(),
+                            Some(json!({ "continuation": error })),
+                        ));
+                    }
 
                     let (
                         matcher,
@@ -847,6 +863,12 @@ impl FriggMcpServer {
                             if resume_from.is_some() {
                                 return Err(Self::invalid_params(
                                     "resume_from is not allowed for zoom",
+                                    None,
+                                ));
+                            }
+                            if params_for_blocking.continuation.is_some() {
+                                return Err(Self::invalid_params(
+                                    "continuation is not allowed for zoom",
                                     None,
                                 ));
                             }
@@ -974,14 +996,97 @@ impl FriggMcpServer {
                             )
                         })?;
                     let snapshot = server.file_content_snapshot_for_workspace(&workspace, &path)?;
-                    let scan = snapshot.scan_file_scope_lossy(
+                    let snapshot_revision = snapshot.source_revision();
+                    let snapshot_fingerprints = vec![format!(
+                        "{}:{}:{}:{}",
+                        repository_id,
+                        display_path,
+                        snapshot_revision.blake3.to_hex(),
+                        snapshot_revision.byte_len,
+                    )];
+                    let request_digest = Self::explore_continuation_digest(
+                        &params_for_blocking,
+                        &repository_id,
+                        &display_path,
+                        operation,
+                        response_query.as_deref(),
+                        response_pattern_type.as_ref(),
+                        anchor.as_ref(),
+                    );
+                    let continuation_offset = match params_for_blocking.continuation.as_deref() {
+                        Some(token) => server
+                            .session_continuation_lookup(
+                                token,
+                                "explore",
+                                &request_digest,
+                                std::slice::from_ref(&repository_id),
+                                &snapshot_fingerprints,
+                                ResultUnit::Occurrence,
+                            )
+                            .map(|binding| binding.next_position)
+                            .map_err(|error| {
+                                Self::invalid_params(
+                                    error.message.clone(),
+                                    Some(json!({ "continuation": error })),
+                                )
+                            })?,
+                        None => 0,
+                    };
+                    // Count the original request before applying a legacy cursor. The page scan
+                    // deliberately starts at the cursor, but `total_matches` is request-global.
+                    let original_scope = match operation {
+                        ExploreOperation::Probe => ExploreScopeRequest {
+                            start_line: 1,
+                            end_line: None,
+                        },
+                        ExploreOperation::Zoom | ExploreOperation::Refine => scope.clone(),
+                    };
+                    let original_scan = snapshot.scan_file_scope_lossy(
+                        original_scope,
+                        matcher.as_ref(),
+                        usize::MAX,
+                        None,
+                        false,
+                        None,
+                    );
+                    let mut scan = snapshot.scan_file_scope_lossy(
                         scope,
                         matcher.as_ref(),
-                        max_matches,
-                        resume_from.as_ref(),
+                        if params_for_blocking.continuation.is_some() {
+                            usize::MAX
+                        } else {
+                            max_matches
+                        },
+                        if params_for_blocking.continuation.is_some() {
+                            None
+                        } else {
+                            resume_from.as_ref()
+                        },
                         include_scope_content,
                         include_scope_content.then_some(server.config.max_file_bytes),
                     );
+                    let page_start_position = if params_for_blocking.continuation.is_some() {
+                        let all_matches = std::mem::take(&mut scan.matches);
+                        let start = continuation_offset.min(all_matches.len());
+                        let end = start.saturating_add(max_matches).min(all_matches.len());
+                        scan.matches = all_matches[start..end].to_vec();
+                        scan.truncated = end < all_matches.len();
+                        scan.resume_from = all_matches.get(end).map(|matched| ExploreCursor {
+                            line: matched.start_line,
+                            column: matched.start_column,
+                        });
+                        start
+                    } else {
+                        scan.matches
+                            .first()
+                            .and_then(|first| {
+                                original_scan.matches.iter().position(|candidate| {
+                                    candidate.start_line == first.start_line
+                                        && candidate.start_column == first.start_column
+                                })
+                            })
+                            .unwrap_or(0)
+                    };
 
                     if let Some(anchor) = anchor.as_ref()
                         && (scan.total_lines == 0 || anchor.end_line > scan.total_lines)
@@ -1076,8 +1181,18 @@ impl FriggMcpServer {
                     }
 
                     scan_scope = Some(scan.effective_scope.clone());
-                    total_matches = scan.total_matches;
+                    total_matches = original_scan.total_matches;
                     truncated = scan.truncated;
+                    let continuation = scan.truncated.then(|| {
+                        server.store_session_continuation(ContinuationBinding {
+                            tool: "explore",
+                            request_digest,
+                            repository_ids: vec![repository_id.clone()],
+                            snapshot_fingerprints,
+                            unit: ResultUnit::Occurrence,
+                            next_position: page_start_position.saturating_add(scan.matches.len()),
+                        })
+                    });
 
                     let context_efficiency = if need_context_efficiency {
                         let returned_source_bytes_estimate = if let Some(window) = window.as_ref() {
@@ -1128,10 +1243,29 @@ impl FriggMcpServer {
                         total_lines: scan.total_lines,
                         scan_scope: scan.effective_scope,
                         window,
-                        total_matches: scan.total_matches,
+                        total_matches: original_scan.total_matches,
                         matches,
                         truncated: scan.truncated,
                         resume_from: scan.resume_from,
+                        completeness: ResultCompleteness::try_new(
+                            ResultUnit::Occurrence,
+                            scan.matches.len(),
+                            Some(original_scan.total_matches),
+                            !scan.truncated,
+                            scan.truncated,
+                            scan.truncated
+                                .then_some(ResultTruncationReason::PageLimit)
+                                .into_iter()
+                                .collect(),
+                            Vec::new(),
+                            continuation,
+                        )
+                        .map_err(|error| {
+                            Self::internal(
+                                format!("invalid explore completeness state: {error}"),
+                                None,
+                            )
+                        })?,
                         metadata: ExploreMetadata {
                             lossy_utf8: scan.lossy_utf8,
                             effective_context_lines: context_lines,
@@ -1197,6 +1331,30 @@ impl FriggMcpServer {
             )
             .await;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    fn explore_continuation_digest(
+        params: &ExploreParams,
+        repository_id: &str,
+        path: &str,
+        operation: ExploreOperation,
+        query: Option<&str>,
+        pattern_type: Option<&SearchPatternType>,
+        anchor: Option<&ExploreAnchor>,
+    ) -> String {
+        let normalized = json!({
+            "repository_id": repository_id,
+            "path": path,
+            "operation": operation,
+            "query": query,
+            "pattern_type": pattern_type,
+            "anchor": anchor,
+            "context_lines": params.context_lines,
+            "max_matches": params.max_matches,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("explore-v2:{:016x}", hasher.finish())
     }
 
     pub(super) fn read_presentation_mode(

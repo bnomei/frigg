@@ -15,12 +15,12 @@ use frigg::mcp::types::{
     GoToDefinitionParams, GoToDefinitionResponse, ImpactBundleParams, IncomingCallsParams,
     IncomingCallsResponse, InspectSyntaxTreeResponse, ListFilesParams, ListRepositoriesParams,
     NavigationMode, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadMatchParams,
-    ReadPresentationMode, RecoveryFields, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
-    SearchHybridRankReason, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
-    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
-    StructuralResultMode, SyntaxTreeNodeItem, WorkspaceAttachAction, WorkspaceAttachParams,
-    WorkspaceCurrentParams, WorkspaceParams, WorkspacePreciseState, WorkspaceResolveMode,
-    WorkspaceStorageIndexState,
+    ReadPresentationMode, RecoveryFields, ResponseMode, ResultCompleteness, ResultUnit,
+    SearchHybridParams, SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem,
+    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceParams,
+    WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::mcp::{FriggMcpServer, ToolCallDisplayEvent, ToolCallDisplayStatus};
 use frigg::settings::{
@@ -282,6 +282,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             returned: 0,
             truncated: false,
             resume_from: None,
+            completeness: ResultCompleteness::complete(ResultUnit::DocumentSymbol, 0, 0).unwrap(),
             top_level_only: true,
             symbols: Vec::new(),
             result_handle: None,
@@ -309,6 +310,10 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             focus: node,
             ancestors: Vec::new(),
             children: Vec::new(),
+            ancestors_completeness: ResultCompleteness::complete(ResultUnit::SyntaxNode, 0, 0)
+                .unwrap(),
+            children_completeness: ResultCompleteness::complete(ResultUnit::SyntaxNode, 0, 0)
+                .unwrap(),
             follow_up_structural: Vec::new(),
             metadata: None,
             note: None,
@@ -319,6 +324,7 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
         &SearchStructuralResponse {
             matches: Vec::new(),
             result_mode: StructuralResultMode::Matches,
+            completeness: ResultCompleteness::complete(ResultUnit::StructuralMatch, 0, 0).unwrap(),
             metadata: None,
             note: None,
         },

@@ -86,6 +86,7 @@ fn bench_content_cache(c: &mut Criterion) {
                     context_lines: Some(2),
                     max_matches: Some(8),
                     resume_from: None,
+                    continuation: None,
                     presentation_mode: Some(ReadPresentationMode::Json),
                     include_context_efficiency: None,
                 })))

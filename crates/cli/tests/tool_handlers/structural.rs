@@ -17,6 +17,7 @@ async fn search_structural_returns_deterministic_rust_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return matches")
@@ -31,6 +32,7 @@ async fn search_structural_returns_deterministic_rust_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should be deterministic")
@@ -115,6 +117,7 @@ async fn search_structural_returns_deterministic_blade_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return blade matches")
@@ -129,6 +132,7 @@ async fn search_structural_returns_deterministic_blade_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should deterministically return blade matches")
@@ -191,6 +195,7 @@ async fn search_structural_returns_typescript_tsx_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return typescript matches")
@@ -238,6 +243,7 @@ async fn search_structural_returns_python_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return python matches")
@@ -315,6 +321,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return go matches")
@@ -335,6 +342,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return kotlin matches")
@@ -355,6 +363,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return java matches")
@@ -375,6 +384,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return lua matches")
@@ -395,6 +405,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return roc matches")
@@ -415,6 +426,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("search_structural should return nim matches")
@@ -441,6 +453,7 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
     {
@@ -482,6 +495,7 @@ async fn search_structural_rejects_invalid_query_with_typed_error() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
     {
@@ -500,6 +514,35 @@ async fn search_structural_rejects_invalid_query_with_typed_error() {
 }
 
 #[tokio::test]
+async fn search_structural_rejects_zero_limit_before_issuing_a_continuation() {
+    let server = server_for_fixture().await;
+    let error = match server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_item) @fn".to_owned(),
+            language: Some("rust".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\\.rs$".to_owned()),
+            limit: Some(0),
+            result_mode: Some(StructuralResultMode::Matches),
+            primary_capture: None,
+            include_follow_up_structural: None,
+            continuation: None,
+        }))
+        .await
+    {
+        Ok(_) => panic!("zero-limit structural search must fail before allocating a continuation"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert_eq!(
+        error.message,
+        "limit must be greater than zero when provided"
+    );
+}
+
+#[tokio::test]
 async fn search_structural_opt_in_returns_per_match_follow_up_structural() {
     let server = server_for_fixture().await;
     let response = server
@@ -512,6 +555,7 @@ async fn search_structural_opt_in_returns_per_match_follow_up_structural() {
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: Some(true),
+            continuation: None,
         }))
         .await
         .expect("search_structural should return matches with follow-up suggestions")
@@ -550,6 +594,7 @@ async fn search_structural_defaults_to_grouped_match_rows_for_multi_capture_quer
             result_mode: None,
             primary_capture: None,
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("grouped structural search should succeed")
@@ -591,6 +636,7 @@ async fn search_structural_capture_mode_remains_available_for_debugging() {
             result_mode: Some(StructuralResultMode::Captures),
             primary_capture: Some("name".to_owned()),
             include_follow_up_structural: None,
+            continuation: None,
         }))
         .await
         .expect("capture mode structural search should succeed")
@@ -602,4 +648,55 @@ async fn search_structural_capture_mode_remains_available_for_debugging() {
         matched.anchor_selection == StructuralAnchorSelection::CaptureRow
             && matched.captures.len() == 1
     }));
+}
+
+#[tokio::test]
+async fn search_structural_v2_continuation_preserves_exact_total() {
+    let workspace_root = temp_workspace_root("search-structural-v2-continuation");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create structural fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "fn first() {}\nfn second() {}\nfn third() {}\n",
+    )
+    .expect("failed to seed structural fixture");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let first = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_item) @fn".to_owned(),
+            language: Some("rust".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(1),
+            result_mode: Some(StructuralResultMode::Matches),
+            primary_capture: None,
+            include_follow_up_structural: None,
+            continuation: None,
+        }))
+        .await
+        .expect("first structural page should succeed")
+        .0;
+    assert_eq!(first.completeness.total, Some(3));
+    assert!(first.completeness.truncated);
+
+    let second = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_item) @fn".to_owned(),
+            language: Some("rust".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(1),
+            result_mode: Some(StructuralResultMode::Matches),
+            primary_capture: None,
+            include_follow_up_structural: None,
+            continuation: first.completeness.continuation,
+        }))
+        .await
+        .expect("v2 structural continuation should succeed")
+        .0;
+    assert_eq!(second.completeness.total, Some(3));
+    assert_eq!(second.matches.len(), 1);
+    assert_eq!(second.matches[0].line, 2);
+
+    cleanup_workspace_root(&workspace_root);
 }

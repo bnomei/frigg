@@ -123,6 +123,7 @@ async fn repository_scoped_tools_require_explicit_workspace_adoption() {
             include_hidden: None,
             limit: Some(10),
             resume_from: None,
+            continuation: None,
         }))
         .await
     {
@@ -159,6 +160,7 @@ async fn repository_scoped_tools_require_explicit_workspace_adoption() {
             include_hidden: None,
             limit: Some(10),
             resume_from: None,
+            continuation: None,
         }))
         .await
         .expect("list_files should succeed after explicit repo b adoption")

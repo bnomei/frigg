@@ -419,6 +419,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             context_lines: Some(1),
             max_matches: Some(5),
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -495,6 +496,7 @@ async fn security_extended_explore_enforces_workspace_boundary() {
             context_lines: Some(1),
             max_matches: Some(5),
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -538,6 +540,7 @@ async fn security_extended_explore_rejects_abusive_regex_patterns() {
             context_lines: Some(1),
             max_matches: Some(5),
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))

@@ -396,6 +396,8 @@ pub struct DocumentSymbolsParams {
     pub limit: Option<usize>,
     /// Continuation offset returned as `resume_from` when the outline is truncated.
     pub resume_from: Option<usize>,
+    /// Opaque v2 continuation. Cannot be combined with `resume_from`.
+    pub continuation: Option<String>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
 }
@@ -436,6 +438,8 @@ pub struct DocumentSymbolsResponse {
     /// Continuation offset for the next page when `truncated` is true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<usize>,
+    /// Canonical cardinality and paging truth for outline rows.
+    pub completeness: super::ResultCompleteness,
     /// Echo of the effective top_level_only setting.
     pub top_level_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -482,6 +486,10 @@ pub struct InspectSyntaxTreeResponse {
     pub focus: SyntaxTreeNodeItem,
     pub ancestors: Vec<SyntaxTreeNodeItem>,
     pub children: Vec<SyntaxTreeNodeItem>,
+    /// Independent completeness for the bounded ancestor collection.
+    pub ancestors_completeness: super::ResultCompleteness,
+    /// Independent completeness for the bounded child collection.
+    pub children_completeness: super::ResultCompleteness,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -507,7 +515,9 @@ pub struct ImpactBundleParams {
 }
 
 /// Section role for a path tally row in `ImpactBundleSummary.top_paths`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ImpactBundlePathRole {
     /// Selected/primary symbol hit (first search_symbol match used for nav composition).
@@ -722,6 +732,8 @@ pub struct SearchStructuralParams {
     pub primary_capture: Option<String>,
     /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
+    /// Opaque v2 continuation. Structural results are replayed deterministically after lookup.
+    pub continuation: Option<String>,
 }
 
 /// One named capture from a structural query match.
@@ -758,6 +770,8 @@ pub struct StructuralMatch {
 pub struct SearchStructuralResponse {
     pub matches: Vec<StructuralMatch>,
     pub result_mode: StructuralResultMode,
+    /// Canonical cardinality and paging truth for the selected structural row unit.
+    pub completeness: super::ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "super::metadata_object_field_schema")]
     pub metadata: Option<MetadataObject>,
@@ -931,9 +945,11 @@ mod tests {
             recovery: RecoveryFields {
                 error_code: Some("ZERO_HIT".to_owned()),
                 message: Some("no symbol hits".to_owned()),
-                suggested_next: vec![SuggestedNext::tool("search_symbol")
-                    .with_symbol("missing_sym")
-                    .with_reason("retry")],
+                suggested_next: vec![
+                    SuggestedNext::tool("search_symbol")
+                        .with_symbol("missing_sym")
+                        .with_reason("retry"),
+                ],
                 ..RecoveryFields::default()
             },
         };
@@ -957,8 +973,8 @@ mod tests {
 
     #[test]
     fn impact_bundle_summary_counts_and_top_paths() {
-        use crate::domain::model::{ReferenceMatch, ReferenceMatchKind, SymbolMatch};
         use super::{CallHierarchyMatch, ImplementationMatch};
+        use crate::domain::model::{ReferenceMatch, ReferenceMatchKind, SymbolMatch};
 
         let symbols = vec![SymbolMatch {
             match_id: None,
@@ -1068,9 +1084,7 @@ mod tests {
         );
         assert!(
             summary.top_paths.iter().any(|p| {
-                p.path == "src/a.rs"
-                    && p.role == ImpactBundlePathRole::Reference
-                    && p.count == 2
+                p.path == "src/a.rs" && p.role == ImpactBundlePathRole::Reference && p.count == 2
             }),
             "top_paths should tally reference paths: {:?}",
             summary.top_paths

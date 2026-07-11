@@ -188,6 +188,7 @@ async fn read_file_and_explore_read_current_file_content() {
             context_lines: None,
             max_matches: Some(4),
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -284,6 +285,7 @@ async fn explore_empty_file_scan_scope_stays_one_based() {
             context_lines: None,
             max_matches: Some(4),
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -329,6 +331,7 @@ async fn explore_empty_file_resume_from_line_one_succeeds() {
             context_lines: None,
             max_matches: Some(4),
             resume_from: Some(crate::mcp::types::ExploreCursor { line: 1, column: 1 }),
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -375,6 +378,7 @@ async fn explore_empty_file_resume_from_outside_bounds_rejects_line_two() {
             context_lines: None,
             max_matches: Some(4),
             resume_from: Some(crate::mcp::types::ExploreCursor { line: 2, column: 1 }),
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -426,6 +430,7 @@ async fn explore_resume_from_paginates_non_empty_probe() {
             context_lines: None,
             max_matches: Some(1),
             resume_from: None,
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         })
@@ -448,12 +453,13 @@ async fn explore_resume_from_paginates_non_empty_probe() {
             context_lines: None,
             max_matches: Some(1),
             resume_from: Some(resume_cursor),
+            continuation: None,
             presentation_mode: None,
             include_context_efficiency: None,
         })
         .await
         .expect("resumed explore page should succeed");
-    assert_eq!(second_page.total_matches, 1);
+    assert_eq!(second_page.total_matches, 2);
     assert_eq!(second_page.matches.len(), 1);
     assert!(!second_page.truncated);
     assert_eq!(second_page.matches[0].start_line, 3);

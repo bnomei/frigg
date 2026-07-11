@@ -107,6 +107,8 @@ pub struct ExploreParams {
     pub max_matches: Option<usize>,
     /// Continuation cursor for `probe` or `refine`.
     pub resume_from: Option<ExploreCursor>,
+    /// Opaque v2 continuation for `probe` or `refine`. Cannot be combined with `resume_from`.
+    pub continuation: Option<String>,
     /// Read-surface presentation mode.
     pub presentation_mode: Option<ReadPresentationMode>,
     /// Include context-efficiency metadata; requires JSON presentation.
@@ -132,6 +134,8 @@ pub struct ExploreResponse {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<ExploreCursor>,
+    /// Canonical cardinality and paging truth for match rows.
+    pub completeness: super::ResultCompleteness,
     pub metadata: ExploreMetadata,
 }
 

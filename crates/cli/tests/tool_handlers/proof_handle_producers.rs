@@ -375,6 +375,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             top_level_only: Some(false),
             limit: Some(20),
             resume_from: None,
+            continuation: None,
             response_mode: Some(ResponseMode::Full),
         }))
         .await

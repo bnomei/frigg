@@ -7,9 +7,9 @@ use super::*;
 use crate::domain::model::TextMatch;
 use crate::mcp::server_cache::{ContinuationBinding, SessionContinuationCache};
 use crate::mcp::types::{
-    ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, ResultUnit,
-    SearchHybridDiagnosticsSummary, SearchHybridMatch, SearchHybridMetadata,
-    SearchHybridRankReason,
+    ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, ResultCompleteness,
+    ResultTruncationReason, ResultUnit, SearchHybridDiagnosticsSummary, SearchHybridMatch,
+    SearchHybridMetadata, SearchHybridRankReason,
 };
 
 /// Outcome of resolving a session `result_handle` + `match_id` pair for `read_match`.
@@ -187,10 +187,12 @@ impl FriggMcpServer {
         if binding.tool != tool
             || binding.request_digest != request_digest
             || binding.repository_ids != repository_ids
-            || binding.snapshot_fingerprints != snapshot_fingerprints
             || binding.unit != unit
         {
             return Err(ContinuationValidationError::scope_mismatch());
+        }
+        if binding.snapshot_fingerprints != snapshot_fingerprints {
+            return Err(ContinuationValidationError::stale());
         }
         Ok(binding.clone())
     }
@@ -1378,6 +1380,8 @@ impl FriggMcpServer {
         &self,
         mut response: DocumentSymbolsResponse,
         params: &DocumentSymbolsParams,
+        resume_offset: usize,
+        continuation_binding: Option<ContinuationBinding>,
     ) -> DocumentSymbolsResponse {
         const DEFAULT_DOCUMENT_SYMBOLS_LIMIT: usize = 200;
         const MAX_DOCUMENT_SYMBOLS_LIMIT: usize = 1000;
@@ -1392,7 +1396,6 @@ impl FriggMcpServer {
 
         let total_symbols = response.symbols.len();
         response.total_symbols = total_symbols;
-        let resume_offset = params.resume_from.unwrap_or(0);
         let limit = params
             .limit
             .unwrap_or(DEFAULT_DOCUMENT_SYMBOLS_LIMIT)
@@ -1412,6 +1415,28 @@ impl FriggMcpServer {
         response.returned = response.symbols.len();
         response.truncated = truncated;
         response.resume_from = truncated.then_some(resume_offset.saturating_add(response.returned));
+        let continuation = truncated
+            .then(|| {
+                continuation_binding.map(|mut binding| {
+                    binding.next_position = resume_offset.saturating_add(response.returned);
+                    self.store_session_continuation(binding)
+                })
+            })
+            .flatten();
+        response.completeness = ResultCompleteness::try_new(
+            ResultUnit::DocumentSymbol,
+            response.returned,
+            Some(total_symbols),
+            !truncated,
+            truncated,
+            truncated
+                .then_some(ResultTruncationReason::PageLimit)
+                .into_iter()
+                .collect(),
+            Vec::new(),
+            continuation,
+        )
+        .expect("document symbol pagination has internally consistent completeness");
 
         response.result_handle = self
             .assign_result_handle_for_document_symbols("document_symbols", &mut response.symbols);

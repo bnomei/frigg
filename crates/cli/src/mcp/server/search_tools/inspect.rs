@@ -7,7 +7,13 @@ use super::*;
 use crate::indexer::{
     search_structural_grouped_in_source, search_structural_grouped_with_follow_up_in_source,
 };
+use crate::mcp::server_cache::ContinuationBinding;
+use crate::mcp::types::{
+    ResultCompleteness, ResultIncompleteReason, ResultTruncationReason, ResultUnit,
+};
 use crate::mcp::types::{StructuralAnchorSelection, StructuralCaptureItem, StructuralResultMode};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 impl FriggMcpServer {
     const INSPECT_SYNTAX_TREE_DEFAULT_MAX_ANCESTORS: usize = 8;
@@ -233,6 +239,24 @@ impl FriggMcpServer {
                     .raw_focus
                     .as_ref()
                     .is_some_and(|raw_focus| raw_focus.span != inspection.focus.span);
+                // Parse the same focused neighborhood without response caps so ancestor and
+                // child omission remain independently visible on the wire.
+                let exhaustive_inspection = inspect_syntax_tree_in_source(
+                    language,
+                    &absolute_path,
+                    &source,
+                    params_for_blocking.line,
+                    params_for_blocking.column,
+                    usize::MAX,
+                    usize::MAX,
+                )
+                .map_err(Self::map_frigg_error)?;
+                let ancestors_total = exhaustive_inspection.ancestors.len();
+                let children_total = exhaustive_inspection.children.len();
+                let ancestors_returned = inspection.ancestors.len();
+                let children_returned = inspection.children.len();
+                let ancestors_truncated = inspection.ancestors.len() < ancestors_total;
+                let children_truncated = inspection.children.len() < children_total;
                 let metadata = json!({
                     "source": "tree_sitter",
                     "language": inspection.language.as_str(),
@@ -243,6 +267,8 @@ impl FriggMcpServer {
                     },
                     "max_ancestors": max_ancestors,
                     "max_children": max_children,
+                    "ancestors_total": ancestors_total,
+                    "children_total": children_total,
                     "focus_normalized": focus_normalized,
                     "raw_focus_kind": inspection
                         .raw_focus
@@ -265,6 +291,26 @@ impl FriggMcpServer {
                         .into_iter()
                         .map(|node| Self::syntax_tree_node_item(&display_path, node))
                         .collect(),
+                    ancestors_completeness: ResultCompleteness::try_new(
+                        ResultUnit::SyntaxNode,
+                        ancestors_returned,
+                        Some(ancestors_total),
+                        !ancestors_truncated,
+                        ancestors_truncated,
+                        ancestors_truncated.then_some(ResultTruncationReason::AncestorLimit).into_iter().collect(),
+                        Vec::new(),
+                        None,
+                    ).map_err(|error| Self::internal(format!("invalid ancestor completeness state: {error}"), None))?,
+                    children_completeness: ResultCompleteness::try_new(
+                        ResultUnit::SyntaxNode,
+                        children_returned,
+                        Some(children_total),
+                        !children_truncated,
+                        children_truncated,
+                        children_truncated.then_some(ResultTruncationReason::ChildLimit).into_iter().collect(),
+                        Vec::new(),
+                        None,
+                    ).map_err(|error| Self::internal(format!("invalid child completeness state: {error}"), None))?,
                     follow_up_structural,
                     metadata,
                     note,
@@ -367,9 +413,13 @@ impl FriggMcpServer {
             let mut blade_livewire_components = BTreeSet::new();
             let mut blade_wire_directives = BTreeSet::new();
             let mut blade_flux_components = BTreeSet::new();
+            let mut snapshot_fingerprints = Vec::new();
 
             let result = (|| -> Result<Json<SearchStructuralResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
+                if params_for_blocking.limit == Some(0) {
+                    return Err(Self::invalid_params("limit must be greater than zero when provided", None));
+                }
                 if query.is_empty() {
                     return Err(Self::invalid_params("query must not be empty", None));
                 }
@@ -469,6 +519,12 @@ impl FriggMcpServer {
                                 continue;
                             }
                         };
+                        snapshot_fingerprints.push(format!(
+                            "{}:{}:{}",
+                            corpus.repository_id,
+                            display_path,
+                            blake3::hash(source.as_bytes()).to_hex()
+                        ));
 
                         let structural_matches = match if include_follow_up_structural {
                             match result_mode {
@@ -591,13 +647,47 @@ impl FriggMcpServer {
                         .then(left.end_column.cmp(&right.end_column))
                         .then(left.excerpt.cmp(&right.excerpt))
                 });
-                if matches.len() > limit {
-                    matches.truncate(limit);
-                }
+                snapshot_fingerprints.sort();
+                let total_rows = matches.len();
+                let request_digest = Self::search_structural_continuation_digest(
+                    &query,
+                    &params_for_blocking,
+                    &scoped_repository_ids,
+                    result_mode,
+                );
+                let resume_offset = match params_for_blocking.continuation.as_deref() {
+                    Some(token) => server
+                        .session_continuation_lookup(
+                            token,
+                            "search_structural",
+                            &request_digest,
+                            &scoped_repository_ids,
+                            &snapshot_fingerprints,
+                            ResultUnit::StructuralMatch,
+                        )
+                        .map(|binding| binding.next_position)
+                        .map_err(|error| Self::invalid_params(error.message.clone(), Some(json!({ "continuation": error }))))?,
+                    None => 0,
+                };
+                let matches = matches
+                    .into_iter()
+                    .skip(resume_offset)
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                let rows_omitted = resume_offset.saturating_add(matches.len()) < total_rows;
+                let continuation = (rows_omitted && diagnostics_count == 0 && !snapshot_fingerprints.is_empty())
+                    .then(|| server.store_session_continuation(ContinuationBinding {
+                        tool: "search_structural",
+                        request_digest,
+                        repository_ids: scoped_repository_ids.clone(),
+                        snapshot_fingerprints: snapshot_fingerprints.clone(),
+                        unit: ResultUnit::StructuralMatch,
+                        next_position: resume_offset.saturating_add(matches.len()),
+                    }));
                 let effective_grouped_rows_total = if result_mode == StructuralResultMode::Matches {
                     grouped_rows_total
                 } else {
-                    matches.len()
+                    total_rows
                 };
                 let noisy_result_hints = Self::structural_noisy_result_hints(
                     result_mode,
@@ -645,9 +735,20 @@ impl FriggMcpServer {
                     })
                 };
                 let (metadata, note) = Self::metadata_note_pair(metadata);
+                let returned = matches.len();
                 Ok(Json(SearchStructuralResponse {
                     matches,
                     result_mode,
+                    completeness: ResultCompleteness::try_new(
+                        ResultUnit::StructuralMatch,
+                        returned,
+                        (diagnostics_count == 0).then_some(total_rows),
+                        diagnostics_count == 0 && !rows_omitted,
+                        rows_omitted,
+                        rows_omitted.then_some(ResultTruncationReason::PageLimit).into_iter().collect(),
+                        if diagnostics_count > 0 { vec![ResultIncompleteReason::DiagnosticCoverage] } else { Vec::new() },
+                        continuation,
+                    ).map_err(|error| Self::internal(format!("invalid structural completeness state: {error}"), None))?,
                     metadata,
                     note,
                 }))
@@ -698,5 +799,27 @@ impl FriggMcpServer {
             )
             .await;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    fn search_structural_continuation_digest(
+        query: &str,
+        params: &SearchStructuralParams,
+        repository_ids: &[String],
+        result_mode: StructuralResultMode,
+    ) -> String {
+        let normalized = json!({
+            "query": query,
+            "language": params.language,
+            "repository_id": params.repository_id,
+            "repository_ids": repository_ids,
+            "path_regex": params.path_regex,
+            "limit": params.limit,
+            "result_mode": result_mode,
+            "primary_capture": params.primary_capture,
+            "include_follow_up_structural": params.include_follow_up_structural,
+        });
+        let mut hasher = DefaultHasher::new();
+        normalized.to_string().hash(&mut hasher);
+        format!("search-structural-v2:{:016x}", hasher.finish())
     }
 }

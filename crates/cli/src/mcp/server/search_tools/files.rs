@@ -4,7 +4,11 @@
 //! discovery.
 
 use super::*;
-use crate::mcp::types::ListFilesEntry;
+use crate::mcp::server_cache::ContinuationBinding;
+use crate::mcp::types::{
+    ContinuationValidationError, ListFilesEntry, ResultCompleteness, ResultTruncationReason,
+    ResultUnit,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -27,6 +31,15 @@ impl FriggMcpServer {
                 let mut effective_limit: Option<usize> = None;
                 let mut diagnostics_count = 0usize;
                 let result = (|| -> Result<Json<ListFilesResponse>, ErrorData> {
+                    if let Err(error) = ContinuationValidationError::reject_mixed_cursor_forms(
+                        params_for_blocking.resume_from.is_some(),
+                        params_for_blocking.continuation.is_some(),
+                    ) {
+                        return Err(Self::invalid_params(
+                            error.message.clone(),
+                            Some(json!({ "continuation": error })),
+                        ));
+                    }
                     if params_for_blocking.limit == Some(0) {
                         return Err(Self::invalid_params(
                             "limit must be greater than zero when provided",
@@ -90,21 +103,46 @@ impl FriggMcpServer {
                     )?;
                     let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
                     scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
-                    let cursor_scope =
-                        Self::list_files_cursor_scope(&params_for_blocking, &scoped_repository_ids);
-                    let resume_offset = match params_for_blocking.resume_from.as_deref() {
-                        Some(raw) => Self::parse_list_files_resume_cursor(raw, cursor_scope)?,
-                        None => 0,
-                    };
-
-                    let mut files = Vec::new();
+                    // `list_files` builds from a live manifest, so its continuation identity
+                    // must use that same live-manifest source on both issuance and replay.
+                    let mut snapshot_fingerprints = Vec::with_capacity(scoped_workspaces.len());
+                    let mut manifest_outputs = Vec::with_capacity(scoped_workspaces.len());
                     for workspace in &scoped_workspaces {
                         let output = ManifestBuilder::default()
                             .build_metadata_with_diagnostics(&workspace.root)
                             .map_err(Self::map_frigg_error)?;
+                        snapshot_fingerprints.push(format!(
+                            "{}:live:{}",
+                            workspace.repository_id,
+                            Self::root_signature(&output.entries)
+                        ));
                         diagnostics_count =
                             diagnostics_count.saturating_add(output.diagnostics.len());
+                        manifest_outputs.push((workspace, output));
+                    }
+                    let cursor_scope =
+                        Self::list_files_cursor_scope(&params_for_blocking, &scoped_repository_ids);
+                    let request_digest = format!("list-files-v2:{cursor_scope:016x}");
+                    let resume_offset = match params_for_blocking.continuation.as_deref() {
+                        Some(token) => server
+                            .session_continuation_lookup(
+                                token,
+                                "list_files",
+                                &request_digest,
+                                &scoped_repository_ids,
+                                &snapshot_fingerprints,
+                                ResultUnit::File,
+                            )
+                            .map(|binding| binding.next_position)
+                            .map_err(|error| Self::invalid_params(error.message.clone(), Some(json!({ "continuation": error }))))?,
+                        None => match params_for_blocking.resume_from.as_deref() {
+                            Some(raw) => Self::parse_list_files_resume_cursor(raw, cursor_scope)?,
+                            None => 0,
+                        },
+                    };
 
+                    let mut files = Vec::new();
+                    for (workspace, output) in manifest_outputs {
                         for entry in output.entries {
                             let path = Self::relative_display_path(&workspace.root, &entry.path);
                             if !include_hidden && Self::repository_path_is_hidden(&path) {
@@ -158,12 +196,33 @@ impl FriggMcpServer {
                             resume_offset.saturating_add(page.len()),
                         )
                     });
+                    let continuation = truncated.then(|| {
+                        server.store_session_continuation(ContinuationBinding {
+                            tool: "list_files",
+                            request_digest: request_digest.clone(),
+                            repository_ids: scoped_repository_ids.clone(),
+                            snapshot_fingerprints: snapshot_fingerprints.clone(),
+                            unit: ResultUnit::File,
+                            next_position: resume_offset.saturating_add(page.len()),
+                        })
+                    });
+                    let completeness = ResultCompleteness::try_new(
+                        ResultUnit::File,
+                        page.len(),
+                        Some(total_files),
+                        !truncated,
+                        truncated,
+                        truncated.then_some(ResultTruncationReason::PageLimit).into_iter().collect(),
+                        Vec::new(),
+                        continuation,
+                    ).map_err(|error| Self::internal(format!("invalid list_files completeness state: {error}"), None))?;
 
                     Ok(Json(ListFilesResponse {
                         total_files,
                         files: page,
                         truncated,
                         resume_from: next_resume_from,
+                        completeness,
                     }))
                 })();
 

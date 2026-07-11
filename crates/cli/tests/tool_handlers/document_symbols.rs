@@ -637,6 +637,7 @@ async fn document_symbols_pagination_is_honest_about_truncation() {
             repository_id: Some("repo-001".to_owned()),
             limit: Some(2),
             resume_from: None,
+            continuation: None,
             top_level_only: Some(true),
             ..Default::default()
         }))
@@ -651,13 +652,32 @@ async fn document_symbols_pagination_is_honest_about_truncation() {
     assert_eq!(first.symbols.len(), 2);
     assert_eq!(first.symbols[0].symbol, "item_0");
     assert_eq!(first.symbols[1].symbol, "item_1");
+    assert_eq!(first.completeness.total, Some(6));
+    assert!(first.completeness.truncated);
+
+    let v2_second = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(2),
+            resume_from: None,
+            continuation: first.completeness.continuation.clone(),
+            top_level_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("v2 continuation page should succeed")
+        .0;
+    assert_eq!(v2_second.symbols[0].symbol, "item_2");
+    assert_eq!(v2_second.symbols[1].symbol, "item_3");
 
     let second = server
         .document_symbols(Parameters(DocumentSymbolsParams {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             limit: Some(2),
-            resume_from: first.resume_from,
+            resume_from: first.resume_from.clone(),
+            continuation: None,
             top_level_only: Some(true),
             ..Default::default()
         }))
@@ -678,6 +698,7 @@ async fn document_symbols_pagination_is_honest_about_truncation() {
             repository_id: Some("repo-001".to_owned()),
             limit: Some(2),
             resume_from: second.resume_from,
+            continuation: None,
             top_level_only: Some(true),
             ..Default::default()
         }))

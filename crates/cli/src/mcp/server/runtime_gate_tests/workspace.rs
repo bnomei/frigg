@@ -4,9 +4,9 @@
 
 use super::*;
 use crate::mcp::types::{
-    ListRepositoriesParams, WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceIndexAction,
-    WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase, ResultUnit,
+    ListRepositoriesParams, ResultUnit, WorkspaceAttachAction, WorkspaceAttachIndexMode,
+    WorkspaceIndexAction, WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
+    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase,
 };
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 
@@ -42,6 +42,7 @@ async fn list_files_auto_adopts_single_known_repository_without_repository_id() 
             include_hidden: None,
             limit: Some(10),
             resume_from: None,
+            continuation: None,
         }))
         .await
         .expect("list_files should auto-adopt the only known repository")
@@ -97,6 +98,7 @@ async fn list_files_supports_rg_aligned_filters_and_resume_from() {
             include_hidden: Some(false),
             limit: Some(1),
             resume_from: None,
+            continuation: None,
         }))
         .await
         .expect("list_files should support rg-shaped filters")
@@ -124,6 +126,7 @@ async fn list_files_supports_rg_aligned_filters_and_resume_from() {
             include_hidden: Some(false),
             limit: Some(10),
             resume_from: first_page.resume_from,
+            continuation: None,
         }))
         .await
         .expect("list_files should resume from returned cursor")
