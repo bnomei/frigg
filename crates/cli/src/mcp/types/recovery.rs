@@ -6,9 +6,29 @@
 
 use super::{
     FindReferencesParams, GoToDefinitionParams, IncomingCallsParams, ListFilesParams, NextAction,
-    NextActionId, NextActionRole, NextActionTarget, ReadFileParams, SearchPatternType,
-    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceParams,
+    NextActionId, NextActionOrigin, NextActionRole, NextActionTarget, ReadFileParams,
+    SearchPatternType, SearchSymbolParams, SearchSymbolPathClass, SearchTextParams,
+    WorkspaceParams,
 };
+
+/// Canonical producer builder. Compatibility suggestions are generated only by the response
+/// owner through `RecoveryFields::set_next_actions`.
+pub(crate) fn canonical_next_action(
+    id: impl Into<String>,
+    role: NextActionRole,
+    order: u16,
+    target: NextActionTarget,
+    reason: impl Into<String>,
+) -> NextAction {
+    NextAction {
+        id: NextActionId(id.into()),
+        role,
+        order,
+        dependencies: Vec::new(),
+        target,
+        reason: reason.into(),
+    }
+}
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -1034,6 +1054,29 @@ impl RecoveryFields {
         .with_next_actions(legacy_actions(suggested_next))
     }
 
+    /// Merge already-canonical child recovery actions for an all-zero batch. The response owns
+    /// new local ids and stages, so child ids/dependencies cannot leak across probe summaries.
+    pub fn batch_all_zero_actions(
+        strongest_reason: Option<ZeroHitReason>,
+        actions: impl IntoIterator<Item = NextAction>,
+    ) -> Self {
+        let mut recovery = Self::batch_all_zero(strongest_reason, Vec::new());
+        let rebuilt = actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut action)| {
+                action.id = NextActionId(format!("batch-zero:{index}"));
+                action.order = index as u16;
+                action.dependencies.clear();
+                action
+            })
+            .collect::<Vec<_>>();
+        if !rebuilt.is_empty() {
+            recovery.set_next_actions(rebuilt);
+        }
+        recovery
+    }
+
     /// After a symbol hit, impact tools are the natural next step.
     pub fn impact_after_symbol(symbol: &str) -> Self {
         let symbol = symbol.trim();
@@ -1251,13 +1294,7 @@ impl RecoveryFields {
 
     /// Empty `go_to_definition({})` without a symbol or location anchor.
     pub fn empty_go_to_definition() -> Self {
-        let suggested_next = vec![
-            legacy_suggestion("search_symbol")
-                .with_path_class("runtime")
-                .with_reason("resolve a symbol name before go_to_definition"),
-            legacy_suggestion("go_to_definition").with_reason("retry with symbol=... or path+line"),
-        ];
-        Self {
+        let mut recovery = Self {
             error_code: Some("EMPTY_GO_TO_DEFINITION".to_owned()),
             message: Some(
                 "go_to_definition requires a symbol, or a path+line location with optional column."
@@ -1276,8 +1313,23 @@ impl RecoveryFields {
             scope: None,
             index: None,
             ..Self::default()
-        }
-        .with_next_actions(legacy_actions(suggested_next))
+        };
+        // A symbol/location is unknown, so do not fabricate a query-bearing retry. `workspace`
+        // has no required target fields and lets callers inspect the active repositories before
+        // supplying an exact definition anchor.
+        recovery.set_next_actions([canonical_next_action(
+            "definition-workspace",
+            NextActionRole::Diagnose,
+            0,
+            NextActionTarget::Workspace(WorkspaceParams {
+                path: None,
+                repository_id: None,
+                set_default: None,
+                resolve_mode: None,
+            }),
+            "inspect the active workspace before supplying an exact symbol or source location",
+        )]);
+        recovery
     }
 
     /// Multiple same-rank definition candidates require a tighter anchor.
@@ -1357,11 +1409,6 @@ impl RecoveryFields {
     pub fn stale_handle(result_handle: Option<&str>, match_id: Option<&str>) -> Self {
         let handle = result_handle.unwrap_or("<missing>");
         let match_id = match_id.unwrap_or("<missing>");
-        let suggested_next = vec![
-            legacy_suggestion("search_text").with_reason("refresh handles via a new search call"),
-            legacy_suggestion("read_file")
-                .with_reason("path-based read when the path is still known"),
-        ];
         Self {
             error_code: Some("STALE_HANDLE".to_owned()),
             message: Some(format!(
@@ -1381,7 +1428,27 @@ impl RecoveryFields {
             index: None,
             ..Self::default()
         }
-        .with_next_actions(legacy_actions(suggested_next))
+    }
+
+    /// Stale `read_match` recovery can replay only an exact typed producer origin. When no
+    /// origin was supplied, retain descriptive guidance and deliberately emit no executable
+    /// search action because query/path arguments would be guesses.
+    pub fn stale_read_match(
+        result_handle: Option<&str>,
+        match_id: Option<&str>,
+        origin: Option<&NextActionOrigin>,
+    ) -> Self {
+        let mut recovery = Self::stale_handle(result_handle, match_id);
+        if let Some(origin) = origin {
+            recovery.set_next_actions([canonical_next_action(
+                "retry-origin",
+                NextActionRole::Retry,
+                0,
+                origin.0.as_next_action_target(),
+                "re-run the exact producer request to obtain a fresh result_handle and match_id",
+            )]);
+        }
+        recovery
     }
 
     /// A result handle remains valid, but its bound source revision can no longer be proved.
@@ -1428,14 +1495,34 @@ impl RecoveryFields {
         }
     }
 
+    /// A stale proof anchor has the same replay rule as a stale handle: only an exact typed
+    /// producer origin may become executable. Originless proof recovery remains descriptive.
+    pub fn stale_proof_anchor_with_origin(
+        origin_tool: &str,
+        result_handle: &str,
+        match_id: &str,
+        repository_id: &str,
+        path: &str,
+        origin: Option<&NextActionOrigin>,
+    ) -> Self {
+        let mut recovery =
+            Self::stale_proof_anchor(origin_tool, result_handle, match_id, repository_id, path);
+        if let Some(origin) = origin {
+            recovery.set_next_actions([canonical_next_action(
+                "retry-origin",
+                NextActionRole::Retry,
+                0,
+                origin.0.as_next_action_target(),
+                "re-run the exact producer request to refresh its proof handle",
+            )]);
+        }
+        recovery
+    }
+
     /// match_id from a different result_handle / foreign handle pairing.
     pub fn mixed_handle(result_handle: Option<&str>, match_id: Option<&str>) -> Self {
         let handle = result_handle.unwrap_or("<missing>");
         let match_id = match_id.unwrap_or("<missing>");
-        let suggested_next = vec![
-            legacy_suggestion("search_text")
-                .with_reason("re-run search and use the paired handle + match_id"),
-        ];
         Self {
             error_code: Some("MIXED_HANDLE".to_owned()),
             message: Some(format!(
@@ -1451,7 +1538,26 @@ impl RecoveryFields {
             index: None,
             ..Self::default()
         }
-        .with_next_actions(legacy_actions(suggested_next))
+    }
+
+    /// Mixed-handle `read_match` recovery follows the same non-guessing origin rule as stale
+    /// handles. The rejected handle/match pair is never copied into the retry action.
+    pub fn mixed_read_match(
+        result_handle: Option<&str>,
+        match_id: Option<&str>,
+        origin: Option<&NextActionOrigin>,
+    ) -> Self {
+        let mut recovery = Self::mixed_handle(result_handle, match_id);
+        if let Some(origin) = origin {
+            recovery.set_next_actions([canonical_next_action(
+                "retry-origin",
+                NextActionRole::Retry,
+                0,
+                origin.0.as_next_action_target(),
+                "re-run the exact producer request; do not reuse the mixed handle pair",
+            )]);
+        }
+        recovery
     }
 }
 

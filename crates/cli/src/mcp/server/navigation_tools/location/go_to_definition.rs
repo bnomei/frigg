@@ -3,7 +3,9 @@
 //! Shared resolution and response assembly for definition and declaration location tools.
 
 use super::*;
-use crate::mcp::types::{ResultUnit, SuggestedNext};
+use crate::mcp::types::{
+    DocumentSymbolsParams, NextActionRole, NextActionTarget, ResultUnit, canonical_next_action,
+};
 
 fn error_code_tag(error: &ErrorData) -> Option<&str> {
     error
@@ -1457,17 +1459,26 @@ impl FriggMcpServer {
                         response.recovery.related_tools =
                             vec!["search_symbol".to_owned(), "go_to_definition".to_owned()];
                     }
-                    if response.recovery.suggested_next.is_empty() {
-                        response.recovery.suggested_next = vec![
-                            SuggestedNext::tool("search_symbol")
-                                .with_path_class("runtime")
-                                .with_reason(
-                                    "resolve a unique symbol name, then go_to_definition(symbol=…)",
-                                ),
-                            SuggestedNext::tool("go_to_definition").with_reason(
-                                "retry with symbol=<name> (and column when known) instead of path+line alone",
-                            ),
-                        ];
+                    // This branch knows an exact file but not a symbol. Keep the warning and
+                    // offer only the complete document-symbol target; never invent a symbol
+                    // retry from the ambiguous path+line anchor.
+                    if let Some(path) = params.path.as_ref().filter(|path| !path.trim().is_empty()) {
+                        response.recovery.set_next_actions([canonical_next_action(
+                            "definition-document-symbols",
+                            NextActionRole::ResolveTarget,
+                            0,
+                            NextActionTarget::DocumentSymbols(DocumentSymbolsParams {
+                                path: path.clone(),
+                                repository_id: params.repository_id.clone(),
+                                include_follow_up_structural: None,
+                                top_level_only: None,
+                                limit: None,
+                                resume_from: None,
+                                continuation: None,
+                                response_mode: params.response_mode,
+                            }),
+                            "inspect document symbols to choose a concrete symbol before retrying definition lookup",
+                        )]);
                     }
                 }
             }

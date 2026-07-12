@@ -842,6 +842,29 @@ pub struct SearchBatchProbeSummary {
 }
 
 impl SearchBatchProbeSummary {
+    /// Build a child summary with compatibility rows owned exclusively by canonical actions.
+    pub fn canonical(
+        id: String,
+        kind: SearchBatchProbeKind,
+        hits: usize,
+        completeness: ResultCompleteness,
+        zero_hit_reason: Option<ZeroHitReason>,
+        correction_hint: Option<String>,
+        scope: Option<ZeroHitScope>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            hits,
+            completeness,
+            zero_hit_reason,
+            correction_hint,
+            next_actions: Vec::new(),
+            suggested_next: Vec::new(),
+            scope,
+        }
+    }
+
     /// Normalizes canonical actions and regenerates the deprecated compatibility projection.
     pub fn set_next_actions(&mut self, actions: impl IntoIterator<Item = NextAction>) {
         self.next_actions = super::normalize_next_actions(actions);

@@ -5,8 +5,10 @@
 use super::*;
 use crate::mcp::types::{
     FindImplementationsParams, FindReferencesParams, ImpactBundleParams, ImpactBundleResponse,
-    IncomingCallsParams, ResultCompleteness, ResultIncompleteReason, ResultUnit,
-    SearchSymbolParams, SearchSymbolPathClass, SuggestedNext,
+    IncomingCallsParams, NextActionOrigin, NextActionRole, NextActionTarget, ReadFileParams,
+    ReadMatchParams, ReplayOriginTarget, ResultCompleteness, ResultIncompleteReason, ResultUnit,
+    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceParams,
+    canonical_next_action,
 };
 
 fn unavailable_section(unit: ResultUnit) -> ResultCompleteness {
@@ -32,27 +34,32 @@ impl FriggMcpServer {
             self.read_only_tool_execution_context("impact_bundle", params.repository_id.clone());
         let symbol = params.symbol.trim().to_owned();
         if symbol.is_empty() {
-            let recovery = RecoveryFields {
-                error_code: Some("MISSING_SYMBOL".to_owned()),
-                message: Some("impact_bundle requires a non-empty symbol.".to_owned()),
-                correction_hint: Some(
-                    "Pass symbol=<name> (runtime path_class is the default).".to_owned(),
-                ),
-                related_tools: vec![
-                    "search_symbol".to_owned(),
-                    "find_references".to_owned(),
-                    "incoming_calls".to_owned(),
-                ],
-                next_actions: Vec::new(),
-                suggested_next: vec![
-                    SuggestedNext::tool("search_symbol")
-                        .with_path_class("runtime")
-                        .with_reason("resolve a symbol name before impact_bundle"),
-                ],
-                zero_hit_reason: Some(ZeroHitReason::QueryMiss),
-                scope: None,
-                index: None,
-            };
+            let mut recovery = RecoveryFields::default();
+            recovery.error_code = Some("MISSING_SYMBOL".to_owned());
+            recovery.message = Some("impact_bundle requires a non-empty symbol.".to_owned());
+            recovery.correction_hint =
+                Some("Pass symbol=<name> (runtime path_class is the default).".to_owned());
+            recovery.related_tools = vec![
+                "search_symbol".to_owned(),
+                "find_references".to_owned(),
+                "incoming_calls".to_owned(),
+            ];
+            recovery.zero_hit_reason = Some(ZeroHitReason::QueryMiss);
+            // No exact symbol is known, so use only the argument-free workspace inspection
+            // target rather than fabricating a query-bearing symbol retry.
+            recovery.set_next_actions([canonical_next_action(
+                "impact-workspace",
+                NextActionRole::Diagnose,
+                0,
+                NextActionTarget::Workspace(WorkspaceParams {
+                    path: None,
+                    repository_id: params.repository_id.clone(),
+                    set_default: None,
+                    resolve_mode: None,
+                }),
+                "inspect the active workspace before supplying an exact impact symbol",
+            )]);
+            self.validate_recovery_actions(&mut recovery);
             return Ok(Json(
                 ImpactBundleResponse {
                     symbol: String::new(),
@@ -124,17 +131,37 @@ impl FriggMcpServer {
                     reason_override: None,
                 });
             }
-            if recovery.suggested_next.is_empty() {
-                recovery.suggested_next = vec![
-                    SuggestedNext::tool("search_symbol")
-                        .with_symbol(symbol.clone())
-                        .with_path_class(path_class_label.clone())
-                        .with_reason("retry symbol lookup with broader path_class if needed"),
-                    SuggestedNext::tool("search_text")
-                        .with_query(symbol.clone())
-                        .with_reason("textual fallback when symbol index misses"),
-                ];
+            if recovery.next_actions.is_empty() {
+                recovery.set_next_actions([
+                    canonical_next_action(
+                        "impact-symbol-retry",
+                        NextActionRole::Retry,
+                        0,
+                        NextActionTarget::SearchSymbol(SearchSymbolParams {
+                            query: symbol.clone(),
+                            repository_id: params.repository_id.clone(),
+                            path_class: Some(path_class),
+                            path_regex: None,
+                            limit: None,
+                            continuation: None,
+                            response_mode: params.response_mode,
+                        }),
+                        "retry exact symbol lookup with the requested impact scope",
+                    ),
+                    canonical_next_action(
+                        "impact-text-fallback",
+                        NextActionRole::VerifyExact,
+                        1,
+                        NextActionTarget::SearchText(SearchTextParams {
+                            query: symbol.clone(),
+                            repository_id: params.repository_id.clone(),
+                            ..SearchTextParams::default()
+                        }),
+                        "textual fallback when the symbol index has no matching target",
+                    ),
+                ]);
             }
+            self.validate_recovery_actions(&mut recovery);
             let provenance_result = self
                 .record_provenance_blocking(
                     "impact_bundle",
@@ -278,29 +305,113 @@ impl FriggMcpServer {
             (Vec::new(), None, None, None)
         };
 
-        let mut suggested_next = vec![
-            SuggestedNext::tool("search_text")
-                .with_query(symbol.clone())
-                .with_path_regex("^tests/")
-                .with_reason("optional tests textual pass for impact"),
-            SuggestedNext::tool("read_match").with_reason(
-                "proof-read strongest reference/caller clusters via handles from this bundle",
-            ),
-            SuggestedNext::tool("read_file")
-                .with_reason("body proof for outgoing callees or ambiguous clusters"),
-        ];
+        let mut actions = vec![canonical_next_action(
+            "impact-tests",
+            NextActionRole::VerifyExact,
+            0,
+            NextActionTarget::SearchText(SearchTextParams {
+                query: symbol.clone(),
+                repository_id: params.repository_id.clone(),
+                path_regex: Some("^tests/".to_owned()),
+                ..SearchTextParams::default()
+            }),
+            "optional exact tests pass for the selected impact symbol",
+        )];
         if !include_implementations {
-            suggested_next.insert(
+            actions.insert(
                 0,
-                SuggestedNext::tool("find_implementations")
-                    .with_symbol(symbol.clone())
-                    .with_reason("include trait/interface implementations when relevant"),
+                canonical_next_action(
+                    "impact-implementations",
+                    NextActionRole::ResolveTarget,
+                    0,
+                    NextActionTarget::FindImplementations(FindImplementationsParams {
+                        symbol: Some(symbol.clone()),
+                        repository_id: selected_repository_id.clone(),
+                        path: selected_path.clone(),
+                        line: selected_line,
+                        column: selected_column,
+                        include_follow_up_structural: None,
+                        limit: None,
+                        continuation: None,
+                        response_mode: params.response_mode,
+                    }),
+                    "include implementations for the exact selected impact target",
+                ),
             );
         }
-        let recovery = RecoveryFields {
-            suggested_next,
-            ..RecoveryFields::default()
-        };
+        let proof = references_response
+            .matches
+            .first()
+            .and_then(|matched| {
+                references_response
+                    .result_handle
+                    .as_ref()
+                    .zip(matched.match_id.as_ref())
+                    .map(|(result_handle, match_id)| {
+                        (
+                            result_handle.clone(),
+                            match_id.clone(),
+                            matched.path.clone(),
+                            matched.repository_id.clone(),
+                            matched.line,
+                        )
+                    })
+            })
+            .or_else(|| {
+                incoming_response.matches.first().and_then(|matched| {
+                    incoming_response
+                        .result_handle
+                        .as_ref()
+                        .zip(matched.match_id.as_ref())
+                        .map(|(result_handle, match_id)| {
+                            (
+                                result_handle.clone(),
+                                match_id.clone(),
+                                matched.path.clone(),
+                                matched.repository_id.clone(),
+                                matched.line,
+                            )
+                        })
+                })
+            });
+        if let Some((result_handle, match_id, path, repository_id, line)) = proof {
+            actions.push(canonical_next_action(
+                "impact-proof",
+                NextActionRole::ProofRead,
+                2,
+                NextActionTarget::ReadMatch(ReadMatchParams {
+                    result_handle,
+                    match_id,
+                    before: None,
+                    after: None,
+                    presentation_mode: None,
+                    include_context_efficiency: None,
+                    origin: Some(NextActionOrigin(ReplayOriginTarget::ImpactBundle(
+                        params.clone(),
+                    ))),
+                }),
+                "proof-read a concrete reference or incoming-call row from this bundle",
+            ));
+            actions.push(canonical_next_action(
+                "impact-file",
+                NextActionRole::Inspect,
+                3,
+                NextActionTarget::ReadFile(ReadFileParams {
+                    path,
+                    repository_id: Some(repository_id),
+                    max_bytes: None,
+                    start_line: Some(line),
+                    end_line: None,
+                    line_count: None,
+                    presentation_mode: None,
+                    include_context_efficiency: None,
+                }),
+                "read the concrete source row selected for impact proof",
+            ));
+        }
+        let mut recovery = RecoveryFields::default();
+        recovery.set_next_actions(actions);
+        self.validate_recovery_actions(&mut recovery);
 
         let mut sections = vec![
             &symbols_response.completeness,

@@ -405,6 +405,7 @@ impl FriggMcpServer {
                         response,
                         params_for_blocking.response_mode,
                         Some(params_for_blocking.query.as_str()),
+                        Some(&params_for_blocking),
                     )))
                 })();
                 let fallback_reason =

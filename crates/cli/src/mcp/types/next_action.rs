@@ -125,6 +125,33 @@ impl NextActionTarget {
     }
 }
 
+impl ReplayOriginTarget {
+    /// Promote a non-recursive stale-read origin into the exact producer retry action.
+    /// The conversion is intentionally one way: `read_match` is not an origin variant, so a
+    /// stale proof can never manufacture a nested read/replay chain.
+    pub fn as_next_action_target(&self) -> NextActionTarget {
+        match self {
+            Self::Explore(params) => NextActionTarget::Explore(params.clone()),
+            Self::SearchText(params) => NextActionTarget::SearchText(params.clone()),
+            Self::SearchHybrid(params) => NextActionTarget::SearchHybrid(params.clone()),
+            Self::SearchSymbol(params) => NextActionTarget::SearchSymbol(params.clone()),
+            Self::SearchBatch(params) => NextActionTarget::SearchBatch(params.clone()),
+            Self::FindReferences(params) => NextActionTarget::FindReferences(params.clone()),
+            Self::GoToDefinition(params) => NextActionTarget::GoToDefinition(params.clone()),
+            Self::FindDeclarations(params) => NextActionTarget::FindDeclarations(params.clone()),
+            Self::FindImplementations(params) => {
+                NextActionTarget::FindImplementations(params.clone())
+            }
+            Self::IncomingCalls(params) => NextActionTarget::IncomingCalls(params.clone()),
+            Self::OutgoingCalls(params) => NextActionTarget::OutgoingCalls(params.clone()),
+            Self::DocumentSymbols(params) => NextActionTarget::DocumentSymbols(params.clone()),
+            Self::InspectSyntaxTree(params) => NextActionTarget::InspectSyntaxTree(params.clone()),
+            Self::SearchStructural(params) => NextActionTarget::SearchStructural(params.clone()),
+            Self::ImpactBundle(params) => NextActionTarget::ImpactBundle(params.clone()),
+        }
+    }
+}
+
 /// Exact non-recursive producer target for stale-handle replay. `read_match` is deliberately
 /// absent, preventing nested origin chains.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

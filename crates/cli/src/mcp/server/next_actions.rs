@@ -269,16 +269,23 @@ mod tests {
             crate::settings::FriggConfig::default(),
             false,
         );
-        let mut recovery = RecoveryFields {
-            next_actions: vec![action("valid", text_target("needle"))],
-            suggested_next: vec![crate::mcp::types::SuggestedNext::tool("workspace")],
-            ..RecoveryFields::default()
-        };
+        let mut recovery = RecoveryFields::default();
+        recovery.next_actions = vec![action("valid", text_target("needle"))];
+        let RecoveryFields { suggested_next, .. } = &mut recovery;
+        suggested_next.push(crate::mcp::types::SuggestedNext {
+            tool: "workspace".to_owned(),
+            ..crate::mcp::types::SuggestedNext::default()
+        });
 
         server.validate_recovery_actions(&mut recovery);
-        assert_eq!(recovery.next_actions.len(), 1);
-        assert_eq!(recovery.suggested_next.len(), 1);
-        assert_eq!(recovery.suggested_next[0].tool, "search_text");
+        let RecoveryFields {
+            next_actions,
+            suggested_next,
+            ..
+        } = &recovery;
+        assert_eq!(next_actions.len(), 1);
+        assert_eq!(suggested_next.len(), 1);
+        assert_eq!(suggested_next[0].tool, "search_text");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use super::presentation::SessionResultHandleLookup;
 use super::*;
 use crate::mcp::server_cache::{ContinuationBinding, ResultHandleSourceRevision};
 use crate::mcp::types::{
-    ContextEfficiencyMetadata, ExploreAnchor, ExploreCursor, ResultCompleteness,
+    ContextEfficiencyMetadata, ExploreAnchor, ExploreCursor, NextActionOrigin, ResultCompleteness,
     ResultTruncationReason, ResultUnit,
 };
 use serde::Serialize;
@@ -30,6 +30,7 @@ pub(super) struct ReadFileProvenanceContext {
 pub(super) struct ReadMatchProofExpectation {
     revision: ResultHandleSourceRevision,
     origin_tool: &'static str,
+    origin: Option<NextActionOrigin>,
     result_handle: String,
     match_id: String,
     repository_id: String,
@@ -408,7 +409,7 @@ impl FriggMcpServer {
                 let result = match (proof_expectation_for_blocking.as_ref(), result) {
                     (Some(expectation), Err(_)) => {
                         crate::mcp::routing_stats::record_handle_failure();
-                        Err(Self::stale_proof_anchor_error(expectation))
+                        Err(server.stale_proof_anchor_error(expectation))
                     }
                     (_, result) => result,
                 };
@@ -466,29 +467,41 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
-    fn stale_proof_anchor_error(expectation: &ReadMatchProofExpectation) -> ErrorData {
-        let recovery = RecoveryFields::stale_proof_anchor(
+    fn stale_proof_anchor_error(&self, expectation: &ReadMatchProofExpectation) -> ErrorData {
+        let mut recovery = RecoveryFields::stale_proof_anchor_with_origin(
             expectation.origin_tool,
             &expectation.result_handle,
             &expectation.match_id,
             &expectation.repository_id,
             &expectation.path,
+            expectation.origin.as_ref(),
         );
+        self.validate_recovery_actions(&mut recovery);
         let message = recovery
             .message
             .clone()
             .unwrap_or_else(|| "source proof anchor is stale".to_owned());
+        let RecoveryFields {
+            error_code,
+            correction_hint,
+            related_tools,
+            next_actions,
+            suggested_next,
+            ..
+        } = recovery;
         Self::resource_not_found(
             message,
             Some(json!({
-                "error_code": recovery.error_code,
+                "error_code": error_code,
                 "repository_id": expectation.repository_id,
                 "path": expectation.path,
                 "origin_tool": expectation.origin_tool,
                 "result_handle": expectation.result_handle,
                 "match_id": expectation.match_id,
-                "correction_hint": recovery.correction_hint,
-                "related_tools": recovery.related_tools,
+                "correction_hint": correction_hint,
+                "related_tools": related_tools,
+                "next_actions": next_actions,
+                "suggested_next": suggested_next,
             })),
         )
     }
@@ -596,24 +609,35 @@ impl FriggMcpServer {
         {
             SessionResultHandleLookup::Found(anchor) => anchor,
             SessionResultHandleLookup::StaleHandle => {
-                let recovery = RecoveryFields::stale_handle(
+                let mut recovery = RecoveryFields::stale_read_match(
                     Some(params.result_handle.as_str()),
                     Some(params.match_id.as_str()),
+                    params.origin.as_ref(),
                 );
+                self.validate_recovery_actions(&mut recovery);
                 crate::mcp::routing_stats::record_handle_failure();
                 let message = recovery
                     .message
                     .clone()
                     .unwrap_or_else(|| "result_handle not found".to_owned());
+                let RecoveryFields {
+                    error_code,
+                    correction_hint,
+                    related_tools,
+                    next_actions,
+                    suggested_next,
+                    ..
+                } = recovery;
                 let result: Result<ReadMatchResponse, ErrorData> = Err(Self::resource_not_found(
                     message,
                     Some(json!({
-                        "error_code": recovery.error_code.clone().unwrap_or_else(|| "STALE_HANDLE".to_owned()),
+                        "error_code": error_code.unwrap_or_else(|| "STALE_HANDLE".to_owned()),
                         "result_handle": params.result_handle,
                         "match_id": params.match_id,
-                        "correction_hint": recovery.correction_hint,
-                        "related_tools": recovery.related_tools,
-                        "suggested_next": recovery.suggested_next,
+                        "correction_hint": correction_hint,
+                        "related_tools": related_tools,
+                        "next_actions": next_actions,
+                        "suggested_next": suggested_next,
                     })),
                 ));
                 return self.finalize_with_provenance_timed(
@@ -628,10 +652,12 @@ impl FriggMcpServer {
                 foreign_handle_has_match,
                 foreign_handle,
             } => {
-                let recovery = RecoveryFields::mixed_handle(
+                let mut recovery = RecoveryFields::mixed_read_match(
                     Some(params.result_handle.as_str()),
                     Some(params.match_id.as_str()),
+                    params.origin.as_ref(),
                 );
+                self.validate_recovery_actions(&mut recovery);
                 crate::mcp::routing_stats::record_handle_failure();
                 let message = if foreign_handle_has_match {
                     format!(
@@ -649,16 +675,25 @@ impl FriggMcpServer {
                         .clone()
                         .unwrap_or_else(|| "match_id does not belong to result_handle".to_owned())
                 };
+                let RecoveryFields {
+                    error_code,
+                    correction_hint,
+                    related_tools,
+                    next_actions,
+                    suggested_next,
+                    ..
+                } = recovery;
                 let result: Result<ReadMatchResponse, ErrorData> = Err(Self::resource_not_found(
                     message,
                     Some(json!({
-                        "error_code": recovery.error_code.clone().unwrap_or_else(|| "MIXED_HANDLE".to_owned()),
+                        "error_code": error_code.unwrap_or_else(|| "MIXED_HANDLE".to_owned()),
                         "result_handle": params.result_handle,
                         "match_id": params.match_id,
                         "foreign_handle": foreign_handle,
-                        "correction_hint": recovery.correction_hint,
-                        "related_tools": recovery.related_tools,
-                        "suggested_next": recovery.suggested_next,
+                        "correction_hint": correction_hint,
+                        "related_tools": related_tools,
+                        "next_actions": next_actions,
+                        "suggested_next": suggested_next,
                     })),
                 ));
                 return self.finalize_with_provenance_timed(
@@ -691,6 +726,7 @@ impl FriggMcpServer {
                 Some(ReadMatchProofExpectation {
                     revision: anchor.revision.clone(),
                     origin_tool: origin_tool.unwrap_or("read_match"),
+                    origin: params.origin.clone(),
                     result_handle: params.result_handle.clone(),
                     match_id: params.match_id.clone(),
                     repository_id: anchor.repository_id.clone(),

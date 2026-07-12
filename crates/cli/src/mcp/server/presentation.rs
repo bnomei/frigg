@@ -7,9 +7,11 @@ use super::*;
 use crate::domain::model::TextMatch;
 use crate::mcp::server_cache::{ContinuationBinding, SessionContinuationCache};
 use crate::mcp::types::{
-    ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, ResultCompleteness,
-    ResultIncompleteReason, ResultTruncationReason, ResultUnit, SearchHybridDiagnosticsSummary,
-    SearchHybridMatch, SearchHybridMetadata, SearchHybridRankReason,
+    ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, NextActionDependency,
+    NextActionDependencyMode, NextActionId, NextActionOrigin, NextActionRole, NextActionTarget,
+    ReadMatchParams, ReplayOriginTarget, ResultCompleteness, ResultIncompleteReason,
+    ResultTruncationReason, ResultUnit, SearchHybridDiagnosticsSummary, SearchHybridMatch,
+    SearchHybridMetadata, SearchHybridParams, SearchHybridRankReason, canonical_next_action,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1053,6 +1055,7 @@ impl FriggMcpServer {
             if !Self::should_return_full_response(params.response_mode) {
                 response.metadata = None;
             }
+            self.validate_recovery_actions(&mut response.recovery);
             return Ok(response);
         }
 
@@ -1119,6 +1122,7 @@ impl FriggMcpServer {
         if !Self::should_return_full_response(params.response_mode) {
             response.metadata = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         Ok(response)
     }
 
@@ -1146,6 +1150,7 @@ impl FriggMcpServer {
         mut response: SearchHybridResponse,
         response_mode: Option<ResponseMode>,
         query: Option<&str>,
+        params: Option<&SearchHybridParams>,
     ) -> SearchHybridResponse {
         response.result_handle =
             self.assign_result_handle_for_hybrid_matches("search_hybrid", &mut response.matches);
@@ -1220,13 +1225,58 @@ impl FriggMcpServer {
             } else {
                 Self::attach_recovery_index_if_missing(&mut response.recovery, index);
             }
-        } else if !response.matches.is_empty() && response.recovery.suggested_next.is_empty() {
+        } else if !response.matches.is_empty() && response.recovery.next_actions.is_empty() {
             let pivot_sources = Self::hybrid_pivot_match_sources(&response.matches);
             response.recovery = RecoveryFields::hybrid_discovery_exact_pivot(
                 query.unwrap_or(""),
                 response.best_pivot_path.as_deref(),
                 &pivot_sources,
             );
+            if let (Some(params), Some(result_handle), Some(match_id)) = (
+                params,
+                response.result_handle.as_ref(),
+                response
+                    .matches
+                    .first()
+                    .and_then(|matched| matched.match_id.as_ref()),
+            ) {
+                let mut actions = std::mem::take(&mut response.recovery.next_actions);
+                for (order, action) in actions.iter_mut().enumerate() {
+                    action.id = NextActionId(format!("hybrid-verify:{order}"));
+                    action.order = order as u16;
+                    action.dependencies.clear();
+                }
+                let dependencies = actions
+                    .iter()
+                    .map(|action| action.id.clone())
+                    .collect::<Vec<_>>();
+                let proof_order = actions.len() as u16;
+                let mut proof = canonical_next_action(
+                    "hybrid-proof",
+                    NextActionRole::ProofRead,
+                    proof_order,
+                    NextActionTarget::ReadMatch(ReadMatchParams {
+                        result_handle: result_handle.clone(),
+                        match_id: match_id.clone(),
+                        before: None,
+                        after: None,
+                        presentation_mode: None,
+                        include_context_efficiency: None,
+                        origin: Some(NextActionOrigin(ReplayOriginTarget::SearchHybrid(
+                            params.clone(),
+                        ))),
+                    }),
+                    "proof-read the ranked hybrid pivot after an exact verification action",
+                );
+                if !dependencies.is_empty() {
+                    proof.dependencies = vec![NextActionDependency {
+                        mode: NextActionDependencyMode::Any,
+                        action_ids: dependencies,
+                    }];
+                }
+                actions.push(proof);
+                response.recovery.set_next_actions(actions);
+            }
             crate::mcp::routing_stats::record_recovery_issued();
         }
         if !Self::should_return_full_response(response_mode) {
@@ -1265,6 +1315,7 @@ impl FriggMcpServer {
                 })
             });
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1351,6 +1402,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1411,6 +1463,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1444,6 +1497,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1473,6 +1527,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1502,6 +1557,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1531,6 +1587,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -1561,6 +1618,7 @@ impl FriggMcpServer {
             response.metadata = None;
             response.note = None;
         }
+        self.validate_recovery_actions(&mut response.recovery);
         response
     }
 
@@ -2193,6 +2251,7 @@ mod tests {
             },
             Some(ResponseMode::Compact),
             Some("where is catalog"),
+            None,
         );
         assert_eq!(
             with_lexical_only.ranking_note.as_deref(),
@@ -2259,6 +2318,7 @@ mod tests {
             },
             Some(ResponseMode::Compact),
             Some("where is catalog"),
+            None,
         );
         assert_eq!(
             multi_channel.ranking_note.as_deref(),
@@ -2339,6 +2399,7 @@ mod tests {
             },
             Some(ResponseMode::Compact),
             Some("where is catalog"),
+            None,
         );
         assert_eq!(
             with_graph.ranking_note.as_deref(),
@@ -2426,6 +2487,7 @@ mod tests {
             },
             Some(ResponseMode::Compact),
             Some("where is catalog"),
+            None,
         );
         assert_eq!(
             lexical_only_and_graph.ranking_note.as_deref(),
@@ -2464,6 +2526,7 @@ mod tests {
             },
             None,
             Some("where is catalog"),
+            None,
         );
         assert!(!hybrid.recovery.is_empty());
         assert_eq!(

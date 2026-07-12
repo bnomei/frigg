@@ -9,7 +9,8 @@ use crate::indexer::{
 };
 use crate::mcp::server_cache::ContinuationBinding;
 use crate::mcp::types::{
-    ResultCompleteness, ResultIncompleteReason, ResultTruncationReason, ResultUnit,
+    DocumentSymbolsParams, NextActionRole, NextActionTarget, ResultCompleteness,
+    ResultIncompleteReason, ResultTruncationReason, ResultUnit, canonical_next_action,
 };
 use crate::mcp::types::{StructuralAnchorSelection, StructuralCaptureItem, StructuralResultMode};
 use std::collections::hash_map::DefaultHasher;
@@ -124,20 +125,49 @@ impl FriggMcpServer {
                     ));
                 }
                 if params_for_blocking.line.is_none() != params_for_blocking.column.is_none() {
-                    let recovery =
+                    let mut recovery =
                         RecoveryFields::missing_line_column_pair("inspect_syntax_tree");
+                    if !params_for_blocking.path.trim().is_empty() {
+                        recovery.set_next_actions([canonical_next_action(
+                            "inspect-document-symbols",
+                            NextActionRole::ResolveTarget,
+                            0,
+                            NextActionTarget::DocumentSymbols(DocumentSymbolsParams {
+                                path: params_for_blocking.path.clone(),
+                                repository_id: params_for_blocking.repository_id.clone(),
+                                include_follow_up_structural: None,
+                                top_level_only: None,
+                                limit: None,
+                                resume_from: None,
+                                continuation: None,
+                                response_mode: None,
+                            }),
+                            "obtain a concrete line and column anchor for syntax inspection",
+                        )]);
+                    } else {
+                        recovery.set_next_actions([]);
+                    }
+                    server.validate_recovery_actions(&mut recovery);
+                    let RecoveryFields {
+                        error_code,
+                        message,
+                        correction_hint,
+                        related_tools,
+                        next_actions,
+                        suggested_next,
+                        ..
+                    } = recovery;
                     return Err(Self::invalid_params(
-                        recovery
-                            .message
-                            .clone()
+                        message
                             .unwrap_or_else(|| "line and column must be provided together".to_owned()),
                         Some(json!({
-                            "error_code": recovery.error_code,
+                            "error_code": error_code,
                             "line": params_for_blocking.line,
                             "column": params_for_blocking.column,
-                            "correction_hint": recovery.correction_hint,
-                            "related_tools": recovery.related_tools,
-                            "suggested_next": recovery.suggested_next,
+                            "correction_hint": correction_hint,
+                            "related_tools": related_tools,
+                            "next_actions": next_actions,
+                            "suggested_next": suggested_next,
                         })),
                     ));
                 }

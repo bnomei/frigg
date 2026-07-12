@@ -9,11 +9,12 @@
 use super::*;
 use crate::mcp::server_cache::ContinuationBinding;
 use crate::mcp::types::{
-    ContinuationValidationError, LatencyClass, RecoveryFields, ResultCompleteness,
+    ContinuationValidationError, LatencyClass, NextActionOrigin, NextActionRole, NextActionTarget,
+    ReadFileParams, ReadMatchParams, RecoveryFields, ReplayOriginTarget, ResultCompleteness,
     ResultIncompleteReason, ResultTruncationReason, ResultUnit, SearchBatchMatch,
     SearchBatchMergeMode, SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind,
     SearchBatchProbeSummary, SearchBatchResponse, SearchHybridParams, SearchSymbolParams,
-    SearchSymbolPathClass, SearchTextParams, SuggestedNext, ZeroHitReason, ZeroHitScope,
+    SearchSymbolPathClass, SearchTextParams, ZeroHitReason, ZeroHitScope, canonical_next_action,
 };
 use crate::path_class::repository_path_class;
 use std::collections::hash_map::DefaultHasher;
@@ -239,24 +240,56 @@ impl FriggMcpServer {
             .all(|summary| summary.hits == 0);
         if all_zero {
             let strongest_reason = strongest_batch_zero_reason(&response.probe_summary);
-            let batch_next = response
+            let batch_actions = response
                 .probe_summary
                 .iter()
-                .flat_map(|summary| summary.suggested_next.iter().cloned())
+                .flat_map(|summary| summary.next_actions.iter().cloned())
                 .take(6)
                 .collect::<Vec<_>>();
-            response.recovery = RecoveryFields::batch_all_zero(strongest_reason, batch_next);
+            response.recovery =
+                RecoveryFields::batch_all_zero_actions(strongest_reason, batch_actions);
         } else if let Some(top) = response.matches.first() {
-            response.recovery.suggested_next = vec![
-                SuggestedNext::tool("read_match")
-                    .with_result_handle(response.result_handle.clone().unwrap_or_default())
-                    .with_reason("proof-read top batch hit")
-                    .with_path(top.path.clone()),
-                SuggestedNext::tool("read_file")
-                    .with_path(top.path.clone())
-                    .with_reason("bounded proof read of strongest merged hit"),
-            ];
+            let mut actions = Vec::new();
+            if let (Some(result_handle), Some(match_id)) =
+                (response.result_handle.as_ref(), top.match_id.as_ref())
+            {
+                actions.push(canonical_next_action(
+                    "batch-proof",
+                    NextActionRole::ProofRead,
+                    0,
+                    NextActionTarget::ReadMatch(ReadMatchParams {
+                        result_handle: result_handle.clone(),
+                        match_id: match_id.clone(),
+                        before: None,
+                        after: None,
+                        presentation_mode: None,
+                        include_context_efficiency: None,
+                        origin: Some(NextActionOrigin(ReplayOriginTarget::SearchBatch(
+                            params.clone(),
+                        ))),
+                    }),
+                    "proof-read the strongest merged batch hit",
+                ));
+            }
+            actions.push(canonical_next_action(
+                "batch-file",
+                NextActionRole::Inspect,
+                1,
+                NextActionTarget::ReadFile(ReadFileParams {
+                    path: top.path.clone(),
+                    repository_id: Some(top.repository_id.clone()),
+                    max_bytes: None,
+                    start_line: None,
+                    end_line: None,
+                    line_count: None,
+                    presentation_mode: None,
+                    include_context_efficiency: None,
+                }),
+                "bounded proof read of the strongest merged hit",
+            ));
+            response.recovery.set_next_actions(actions);
         }
+        self.validate_recovery_actions(&mut response.recovery);
 
         Ok(Json(response))
     }
@@ -449,17 +482,16 @@ impl FriggMcpServer {
                         symbol: None,
                     })
                     .collect::<Vec<_>>();
-                let summary = SearchBatchProbeSummary {
-                    id: probe.id.clone(),
-                    kind: SearchBatchProbeKind::Text,
+                let mut summary = SearchBatchProbeSummary::canonical(
+                    probe.id.clone(),
+                    SearchBatchProbeKind::Text,
                     hits,
-                    completeness: body.completeness,
-                    zero_hit_reason: body.recovery.zero_hit_reason,
-                    correction_hint: body.recovery.correction_hint,
-                    next_actions: body.recovery.next_actions,
-                    suggested_next: body.recovery.suggested_next,
-                    scope: body.recovery.scope.or_else(|| probe_scope(probe)),
-                };
+                    body.completeness,
+                    body.recovery.zero_hit_reason,
+                    body.recovery.correction_hint,
+                    body.recovery.scope.or_else(|| probe_scope(probe)),
+                );
+                summary.set_next_actions(body.recovery.next_actions);
                 Ok((summary, rows))
             }
             SearchBatchProbeKind::Symbol => {
@@ -497,23 +529,22 @@ impl FriggMcpServer {
                         symbol: Some(matched.symbol),
                     })
                     .collect::<Vec<_>>();
-                let summary = SearchBatchProbeSummary {
-                    id: probe.id.clone(),
-                    kind: SearchBatchProbeKind::Symbol,
+                let mut summary = SearchBatchProbeSummary::canonical(
+                    probe.id.clone(),
+                    SearchBatchProbeKind::Symbol,
                     hits,
-                    completeness: body.completeness,
-                    zero_hit_reason: body.recovery.zero_hit_reason,
-                    correction_hint: body.recovery.correction_hint,
-                    next_actions: body.recovery.next_actions,
-                    suggested_next: body.recovery.suggested_next,
-                    scope: body.recovery.scope.or_else(|| probe_scope(probe)),
-                };
+                    body.completeness,
+                    body.recovery.zero_hit_reason,
+                    body.recovery.correction_hint,
+                    body.recovery.scope.or_else(|| probe_scope(probe)),
+                );
+                summary.set_next_actions(body.recovery.next_actions);
                 Ok((summary, rows))
             }
             SearchBatchProbeKind::Hybrid => {
                 let hybrid_params = SearchHybridParams {
                     query: probe.query.clone(),
-                    repository_id,
+                    repository_id: repository_id.clone(),
                     language: None,
                     limit: per_limit,
                     weights: None,
@@ -547,35 +578,55 @@ impl FriggMcpServer {
                         symbol: None,
                     })
                     .collect::<Vec<_>>();
-                let mut summary = SearchBatchProbeSummary {
-                    id: probe.id.clone(),
-                    kind: SearchBatchProbeKind::Hybrid,
+                let mut summary = SearchBatchProbeSummary::canonical(
+                    probe.id.clone(),
+                    SearchBatchProbeKind::Hybrid,
                     hits,
-                    completeness: body.completeness,
-                    zero_hit_reason: body
-                        .recovery
+                    body.completeness,
+                    body.recovery
                         .zero_hit_reason
                         .or_else(|| (hits == 0).then_some(ZeroHitReason::IndexedSearchComplete)),
-                    correction_hint: body.recovery.correction_hint.or_else(|| {
+                    body.recovery.correction_hint.or_else(|| {
                         (hits == 0).then(|| {
                             "Hybrid is discovery-only; pivot to search_text/search_symbol."
                                 .to_owned()
                         })
                     }),
-                    next_actions: body.recovery.next_actions,
-                    suggested_next: body.recovery.suggested_next,
-                    scope: body.recovery.scope.or_else(|| probe_scope(probe)),
-                };
-                if hits == 0 && summary.suggested_next.is_empty() {
-                    summary.suggested_next = vec![
-                        SuggestedNext::tool("search_symbol")
-                            .with_query(probe.query.clone())
-                            .with_path_class("runtime")
-                            .with_reason("exact symbol pivot after hybrid probe zero"),
-                        SuggestedNext::tool("search_text")
-                            .with_query(probe.query.clone())
-                            .with_reason("exact text pivot after hybrid probe zero"),
-                    ];
+                    body.recovery.scope.or_else(|| probe_scope(probe)),
+                );
+                summary.set_next_actions(body.recovery.next_actions);
+                if hits == 0 && summary.next_actions.is_empty() {
+                    summary.set_next_actions([
+                        canonical_next_action(
+                            "batch-hybrid-symbol",
+                            NextActionRole::VerifyExact,
+                            0,
+                            NextActionTarget::SearchSymbol(SearchSymbolParams {
+                                query: probe.query.clone(),
+                                repository_id: repository_id.clone(),
+                                path_class: Some(SearchSymbolPathClass::Runtime),
+                                path_regex: probe.path_regex.clone(),
+                                limit: None,
+                                continuation: None,
+                                response_mode,
+                            }),
+                            "exact symbol pivot after hybrid probe zero",
+                        ),
+                        canonical_next_action(
+                            "batch-hybrid-text",
+                            NextActionRole::VerifyExact,
+                            1,
+                            NextActionTarget::SearchText(SearchTextParams {
+                                query: probe.query.clone(),
+                                repository_id: repository_id.clone(),
+                                path_regex: probe.path_regex.clone(),
+                                glob: probe.glob.clone(),
+                                pattern_type: probe.pattern_type.clone(),
+                                ..SearchTextParams::default()
+                            }),
+                            "exact text pivot after hybrid probe zero",
+                        ),
+                    ]);
                 }
                 Ok((summary, rows))
             }
@@ -674,30 +725,26 @@ mod tests {
     #[test]
     fn strongest_batch_zero_reason_prefers_actionable_codes() {
         let summaries = vec![
-            SearchBatchProbeSummary {
-                id: "a".to_owned(),
-                kind: SearchBatchProbeKind::Text,
-                hits: 0,
-                completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+            SearchBatchProbeSummary::canonical(
+                "a".to_owned(),
+                SearchBatchProbeKind::Text,
+                0,
+                ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
                     .expect("empty text probe is complete"),
-                zero_hit_reason: Some(ZeroHitReason::QueryMiss),
-                correction_hint: None,
-                next_actions: Vec::new(),
-                suggested_next: Vec::new(),
-                scope: None,
-            },
-            SearchBatchProbeSummary {
-                id: "b".to_owned(),
-                kind: SearchBatchProbeKind::Text,
-                hits: 0,
-                completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                Some(ZeroHitReason::QueryMiss),
+                None,
+                None,
+            ),
+            SearchBatchProbeSummary::canonical(
+                "b".to_owned(),
+                SearchBatchProbeKind::Text,
+                0,
+                ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
                     .expect("empty text probe is complete"),
-                zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
-                correction_hint: None,
-                next_actions: Vec::new(),
-                suggested_next: Vec::new(),
-                scope: None,
-            },
+                Some(ZeroHitReason::ScopeExcludedAllCandidates),
+                None,
+                None,
+            ),
         ];
         assert_eq!(
             strongest_batch_zero_reason(&summaries),
