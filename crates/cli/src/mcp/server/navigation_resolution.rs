@@ -11,6 +11,24 @@ use std::io::{BufRead, BufReader};
 use std::path::Component;
 
 impl FriggMcpServer {
+    /// Resolve either an issued target reference or legacy direct navigation inputs.
+    /// Target references always take precedence and never fall back to name ranking.
+    pub(in crate::mcp::server) fn resolve_navigation_request(
+        &self,
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        target: Option<&TargetRef>,
+        symbol: Option<&str>,
+        path: Option<&str>,
+        line: Option<usize>,
+        column: Option<usize>,
+        repository_id_hint: Option<&str>,
+    ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        if let Some(target) = target {
+            return self.resolve_target_ref(corpora, target);
+        }
+        Self::resolve_navigation_target(corpora, symbol, path, line, column, repository_id_hint)
+    }
+
     /// Resolve an issued target without falling back to name ranking.  This is the single
     /// target path used by navigation consumers: result handles are checked for session scope
     /// before the cache is consulted, while stable symbols are looked up directly in the adopted

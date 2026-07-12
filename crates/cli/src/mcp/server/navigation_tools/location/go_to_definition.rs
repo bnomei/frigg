@@ -742,8 +742,9 @@ impl FriggMcpServer {
                                 .map(|corpus| corpus.repository_id.clone())
                                 .collect::<Vec<_>>();
 
-                            let resolved_target = Self::resolve_navigation_target(
+                            let resolved_target = server.resolve_navigation_request(
                                 &corpora,
+                                params_for_blocking.target.as_ref(),
                                 params_for_blocking.symbol.as_deref(),
                                 params_for_blocking.path.as_deref(),
                                 params_for_blocking.line,
@@ -1030,8 +1031,9 @@ impl FriggMcpServer {
                             .map(|corpus| corpus.repository_id.clone())
                             .collect::<Vec<_>>();
 
-                        match Self::resolve_navigation_target(
+                        match server.resolve_navigation_request(
                             &corpora,
+                            params_for_blocking.target.as_ref(),
                             params_for_blocking.symbol.as_deref(),
                             params_for_blocking.path.as_deref(),
                             params_for_blocking.line,
@@ -1602,8 +1604,9 @@ impl FriggMcpServer {
                         .map(|corpus| corpus.repository_id.clone())
                         .collect::<Vec<_>>();
 
-                    let resolved_target = Self::resolve_navigation_target(
+                    let resolved_target = server.resolve_navigation_request(
                         &corpora,
+                        params_for_blocking.target.as_ref(),
                         params_for_blocking.symbol.as_deref(),
                         params_for_blocking.path.as_deref(),
                         params_for_blocking.line,

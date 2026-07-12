@@ -483,8 +483,9 @@ impl FriggMcpServer {
                     || params_for_blocking.line.is_some()
                     || params_for_blocking.column.is_some();
                 let resolved_target = if resolve_by_location {
-                    Self::resolve_navigation_target(
+                    server.resolve_navigation_request(
                         &corpora,
+                        params_for_blocking.target.as_ref(),
                         None,
                         params_for_blocking.path.as_deref(),
                         params_for_blocking.line,
@@ -492,8 +493,9 @@ impl FriggMcpServer {
                         params_for_blocking.repository_id.as_deref(),
                     )?
                 } else {
-                    match Self::resolve_navigation_target(
+                    match server.resolve_navigation_request(
                         &corpora,
+                        params_for_blocking.target.as_ref(),
                         params_for_blocking.symbol.as_deref(),
                         None,
                         None,
