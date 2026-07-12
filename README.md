@@ -232,7 +232,8 @@ The normal MCP loop is:
 8. Use `search_batch` when you have several search hypotheses and want concurrent probes merged in one call.
 9. Use `read_match` when a search or navigation result returned `result_handle` plus `match_id`.
 10. Use `read_file` when you already know the canonical repository-relative path.
-11. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries. Prefer `impact_bundle` when one symbol needs combined impact.
+11. For navigation or impact, copy a row's `target_ref` unchanged into `target`; this preserves the exact selected result. Direct symbol/location inputs remain available for ad-hoc and compatibility calls.
+12. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries. Prefer `impact_bundle` when one target needs combined impact.
 
 Shell replacement map:
 
@@ -333,6 +334,74 @@ role, order, and dependencies to choose a legal sequence, subject to host author
 and full responses carry identical executable action data. Stale or mixed proof handles require
 rerunning the typed origin producer and selecting a fresh `match_id`; never reuse the old match.
 `suggested_next` is a deprecated lossy projection kept for at least two minor releases.
+
+### Follow a result with `target_ref`
+
+For navigation, the preferred flow is **search → copy a row's `target_ref` → call navigation or
+impact**. A target is an opaque identity, so send it unchanged rather than reconstructing a name
+or coordinate. For example, a search or navigation row can include this result-match target:
+
+```json
+{
+  "target_ref": {
+    "kind": "result_match",
+    "result_handle": "rh_01",
+    "match_id": "m_01",
+    "target_scope": "018f3f9c4a1b7e28a9c2d4e6f8012345"
+  }
+}
+```
+
+Use it unchanged with any navigation consumer:
+
+```json
+{
+  "target": {
+    "kind": "result_match",
+    "result_handle": "rh_01",
+    "match_id": "m_01",
+    "target_scope": "018f3f9c4a1b7e28a9c2d4e6f8012345"
+  }
+}
+```
+
+This works for `go_to_definition`, `find_references`, `find_declarations`,
+`find_implementations`, `incoming_calls`, `outgoing_calls`, and `impact_bundle`. The optional
+top-level `repository_id` is only an assertion: it may match the target's repository, but a
+different value returns `TARGET_REPOSITORY_MISMATCH`. Do not combine `target` with `symbol`,
+`path`, `line`, or `column`; that returns `CONFLICTING_TARGET_INPUT`. Without `target`, those
+direct inputs keep their existing ad-hoc/compatibility behavior and ambiguity handling.
+
+`result_match` is scoped to the session that issued it and its observed source anchor. Its
+`target_scope` is an opaque correlation value, **not an authentication credential**. A target
+from another session returns `TARGET_SCOPE_MISMATCH`; stale handles or proof anchors must be
+reissued by rerunning the producer and selecting a fresh row. Frigg does not retain historical
+source for target navigation.
+
+Every handle-bound row, including a symbol row, emits the `result_match` target above. Frigg also
+accepts this repository/corpus-scoped stable target when a caller already has a stable symbol
+identity:
+
+```json
+{
+  "target": {
+    "kind": "stable_symbol",
+    "repository_id": "repo_01",
+    "stable_symbol_id": "sym_01",
+    "snapshot_token": "snapshot_01"
+  }
+}
+```
+
+This target stays in its embedded repository even when multiple repositories expose the same
+symbol. It resolves only against that repository's current symbol corpus. If the corpus changed,
+refresh the symbol search and use its new target (`STALE_TARGET_SNAPSHOT`); an absent repository
+or symbol returns `REPOSITORY_NOT_FOUND` or `TARGET_NOT_FOUND`.
+
+`impact_bundle` accepts exactly one of legacy non-empty `symbol` or `target`. With a supplied
+target, Frigg resolves it once and passes that selected identity to the child impact computations;
+it does not rerank names or choose a first match. Legacy `symbol` requests remain valid, but
+same-rank candidates surface normal disambiguation instead of silently picking one.
 
 ### Build an evidence trail
 

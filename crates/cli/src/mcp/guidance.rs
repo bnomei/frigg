@@ -578,6 +578,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "next_actions[].tool plus exact next_actions[].arguments is authoritative for follow-ups; execute the named existing MCP tool yourself, respecting role/order/dependencies and host authorization. Compact and full carry identical action data. suggested_next is deprecated and lossy; stale or mixed proof handles require rerunning the typed origin producer and choosing a fresh match_id. No generic executor or automatic chaining endpoint exists.",
+            "For navigation and impact, prefer search -> copy a row's target_ref unchanged -> pass it as target to the navigation tool or impact_bundle. result_match {result_handle, match_id, target_scope} is session/source scoped; target_scope is opaque correlation, not authentication. stable_symbol {repository_id, stable_symbol_id, snapshot_token} is repository/corpus scoped and never crosses repositories. On TARGET_SCOPE_MISMATCH, STALE_TARGET_SNAPSHOT, stale handle/proof, or TARGET_NOT_FOUND, rerun the producer and use a fresh target; Frigg does not navigate historical source. Direct symbol/location fields remain compatibility input, but cannot be mixed with target; a matching repository_id is only an assertion.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
             core_guidance
         ]
@@ -598,33 +599,34 @@ fn shell_vs_frigg_markdown(active_profile: ToolSurfaceProfile) -> String {
     };
     format!(
         "# Shell vs Frigg\n\n\
-Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads.\n\n\
-- repository-aware file listing through `list_files` instead of `rg --files`, `find`, or `fd`\n\
-- symbol, definition, reference, implementation, or call navigation\n\
-- exact literal, safe-regex, grouped-alternation, or `rg`-shaped code searches with repository scoping and result handles\n\
-- bounded source reads through `read_file`, `read_match`, or `explore(operation=zoom)`\n\
-- mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
-- evidence-backed answers or replayable source references\n\
-- attached multi-repo context instead of one current shell directory\n\n\
-Use shell tools only as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results.\n\n\
-Use shell `rg` for explicit live-disk verification, ripgrep-specific flags outside `search_text`, or generated/unindexed files.\n\n\
-Shell replacement map:\n\
-- `rg --files` -> `list_files`\n\
-- `rg -n \"text\"` -> `search_text`\n\
-- `rg -n \"foo|bar\"` -> `search_text` with regex mode\n\
-- `rg -n \"text\" path/` -> `search_text` with `path_regex`\n\
-- identifier/API/type/class/function lookup -> `search_symbol`\n\
-- parallel multi-grep / multi-hypothesis probes -> `search_batch` (2..=8 independent concurrent probes, then merge/dedupe; not one shared multi-query walk)\n\
-- usages / callers / blast radius for a known symbol -> prefer `impact_bundle(symbol)` before sequential navigation tools\n\
-- `cat path` -> `read_file`\n\
-- `sed -n '10,80p' path` -> `read_file` with `start_line`, `end_line`, or `line_count`\n\
-- follow definitions/references/calls -> navigation tools (or `impact_bundle` when the symbol is already known)\n\n\
-Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and file-containment probes (`files_with_matches`). For `search_text`, pass the search term as `query`, not `pattern`. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers. Use `search_batch` when you would fire several Frigg probes in one turn (text/symbol/hybrid); each probe is a full independent search, then results merge. Prefer `impact_bundle` for impact/refactor questions with a known symbol before chaining `find_references` / `incoming_calls` / `find_implementations` by hand.\n\n\
-`read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)`.\n\n\
-Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
-Semantic retrieval remains an optional accelerator, not the grounding layer.\n\n\
-{explore_guidance}\n\
-{playbook_guidance}\n"
+    Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads.\n\n\
+    - repository-aware file listing through `list_files` instead of `rg --files`, `find`, or `fd`\n\
+    - symbol, definition, reference, implementation, or call navigation\n\
+    - exact literal, safe-regex, grouped-alternation, or `rg`-shaped code searches with repository scoping and result handles\n\
+    - bounded source reads through `read_file`, `read_match`, or `explore(operation=zoom)`\n\
+    - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
+    - evidence-backed answers or replayable source references\n\
+    - attached multi-repo context instead of one current shell directory\n\n\
+    Use shell tools only as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results.\n\n\
+    Use shell `rg` for explicit live-disk verification, ripgrep-specific flags outside `search_text`, or generated/unindexed files.\n\n\
+    Shell replacement map:\n\
+    - `rg --files` -> `list_files`\n\
+    - `rg -n \"text\"` -> `search_text`\n\
+    - `rg -n \"foo|bar\"` -> `search_text` with regex mode\n\
+    - `rg -n \"text\" path/` -> `search_text` with `path_regex`\n\
+    - identifier/API/type/class/function lookup -> `search_symbol`\n\
+    - parallel multi-grep / multi-hypothesis probes -> `search_batch` (2..=8 independent concurrent probes, then merge/dedupe; not one shared multi-query walk)\n\
+    - usages / callers / blast radius for a known symbol -> prefer `impact_bundle(symbol)` before sequential navigation tools\n\
+    - `cat path` -> `read_file`\n\
+    - `sed -n '10,80p' path` -> `read_file` with `start_line`, `end_line`, or `line_count`\n\
+    - follow definitions/references/calls -> navigation tools (or `impact_bundle` when the symbol is already known)\n\n\
+    Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and file-containment probes (`files_with_matches`). For `search_text`, pass the search term as `query`, not `pattern`. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers. Use `search_batch` when you would fire several Frigg probes in one turn (text/symbol/hybrid); each probe is a full independent search, then results merge. Prefer `impact_bundle` for impact/refactor questions with a known symbol before chaining `find_references` / `incoming_calls` / `find_implementations` by hand.\n\n\
+    `read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)`.\n\n\
+    Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
+    For exact navigation, use search -> copy a row's `target_ref` unchanged -> pass it as `target` to navigation or `impact_bundle`. A result-match target has `kind=result_match`, `result_handle`, `match_id`, and `target_scope`, and is session/source scoped; `target_scope` is opaque correlation, not authentication. A stable-symbol target has `kind=stable_symbol`, `repository_id`, `stable_symbol_id`, and `snapshot_token`, and is repository/corpus scoped. Do not combine `target` with direct symbol/location fields (`CONFLICTING_TARGET_INPUT`); a matching top-level `repository_id` is an assertion, and a mismatch returns `TARGET_REPOSITORY_MISMATCH`. On `TARGET_SCOPE_MISMATCH`, `STALE_TARGET_SNAPSHOT`, stale handle/proof, or `TARGET_NOT_FOUND`, rerun the producer and copy a fresh target; Frigg does not navigate historical source. `impact_bundle` accepts exactly one of `target` or legacy non-empty `symbol`; target mode resolves once for all child work, while legacy same-rank symbol results surface disambiguation.\n\n\
+    Semantic retrieval remains an optional accelerator, not the grounding layer.\n\n\
+    {explore_guidance}\n\
+    {playbook_guidance}\n"
     )
 }
 
@@ -742,7 +744,8 @@ pub(crate) fn read_guidance_prompt(
 6. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
 7. `read_file` and `read_match` default to text-first output; request `presentation_mode=json` only when the caller truly needs the structured compatibility payload. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `probe` and `refine` stay structured.\n\
 8. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
-9. Use `explore` only after discovery and only when the active profile includes it.\n\n",
+9. Use `explore` only after discovery and only when the active profile includes it.\n\
+10. For navigation/impact, prefer search -> copied `target_ref` -> `target`; result-match targets are session/source scoped and stable-symbol targets are repository/corpus scoped. Target scope is not authentication. Recover `TARGET_SCOPE_MISMATCH`, `STALE_TARGET_SNAPSHOT`, stale proof/handles, or `TARGET_NOT_FOUND` by rerunning the producer for a fresh target. Direct inputs remain compatible but cannot be mixed with `target`; `impact_bundle` accepts target or legacy symbol and resolves supplied targets once.\n\n",
     );
     text.push_str(profile_note);
 

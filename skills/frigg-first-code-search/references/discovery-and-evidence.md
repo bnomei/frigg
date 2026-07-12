@@ -39,6 +39,40 @@ When you would fire 3–6 shell greps in one turn:
 
 After multi-probe discovery, proof still goes through `read_match` / `read_file` (or navigation), never hybrid rank-1 alone.
 
+## Target-first navigation
+
+When a search row has `target_ref`, copy that opaque value unchanged into a navigation tool's
+`target` field. Do not rebuild a target from a name or coordinates. Result-match targets are
+session/source scoped:
+
+```json
+{
+  "kind": "result_match",
+  "result_handle": "rh_01",
+  "match_id": "m_01",
+  "target_scope": "018f3f9c4a1b7e28a9c2d4e6f8012345"
+}
+```
+
+`target_scope` is an opaque correlation value, not an authentication credential. On
+`TARGET_SCOPE_MISMATCH`, `STALE_HANDLE`, or `STALE_PROOF_ANCHOR`, rerun the producer and copy a
+fresh target; targets do not navigate historical source. Every handle-bound row, including a
+symbol row, emits `result_match`. Frigg also accepts the repository/corpus-scoped variant when a
+caller already has a stable symbol identity:
+
+```json
+{
+  "kind": "stable_symbol",
+  "repository_id": "repo_01",
+  "stable_symbol_id": "sym_01",
+  "snapshot_token": "snapshot_01"
+}
+```
+
+It never crosses into a same-named symbol in another repository. `STALE_TARGET_SNAPSHOT` means
+refresh the symbol search in that repository and use its new target; `REPOSITORY_NOT_FOUND` or
+`TARGET_NOT_FOUND` requires choosing a current repository/result.
+
 ## `search_hybrid`
 
 Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step or the cleanest direct-string lookup. Use `search_text` for known literal, safe-regex, or `rg`-shaped text scans, and use `search_symbol` for known identifiers.

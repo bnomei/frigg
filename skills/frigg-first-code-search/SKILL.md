@@ -89,7 +89,7 @@ Known function/type/API name -> search_symbol
 Vague "where is X?" -> search_hybrid, then exact search
 Several guesses -> search_batch or parallel search_text
 Need proof -> read_match, then read_file
-Need impact -> impact_bundle(symbol) or find_references / incoming_calls / implementations
+Need impact -> copy a row's target_ref into impact_bundle(target) or navigation; impact_bundle(symbol) remains a legacy/ad-hoc route
 Wrong repo, stale index, surprising zero -> workspace
 Git/build/generated/unindexed/Frigg missing -> shell fallback
 ```
@@ -761,7 +761,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 2. Pick scenario from the table — do not default to grep.
 3. Search tier: **symbol** (known name) → **text** (known string) → **hybrid** (vague only) → **batch/parallel** (several guesses).
 4. Compact responses first; `response_mode=full` only for ranking diagnostics. Compact and full responses carry identical executable `next_actions` data; `suggested_next` is only a deprecated lossy compatibility projection.
-5. Navigate with the **`symbol`** parameter.
+5. Navigate with a copied row **`target_ref`** in `target` when one is present; use direct `symbol` or location input only for ad-hoc/compatibility calls.
 6. Proof: `read_match` → `read_file`.
 7. Cite: json/citation `read_file` or host Read when required.
 8. Structure/explore only as tier-3 after anchors exist.

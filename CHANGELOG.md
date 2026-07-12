@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Stable result targets: search and navigation rows now add optional `target_ref`; navigation
+  parameters add optional `target`; and `impact_bundle` accepts exactly one of `target` or legacy
+  non-empty `symbol`. Result-match targets are session/source scoped, stable-symbol targets are
+  repository/corpus scoped, and target-mode impact resolves the supplied target once without
+  reranking it. Existing direct symbol/location clients remain compatible.
+
 - Typed executable follow-ups: `next_actions` is authoritative and names existing MCP tools with
   exact `arguments`; hosts choose role/order/dependencies and retain authorization. Compact and
   full modes carry identical actions. Stale/mixed proof retries use typed origins and fresh match

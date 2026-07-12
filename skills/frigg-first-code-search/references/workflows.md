@@ -24,14 +24,15 @@ Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is at
 ## Refactor Impact
 
 1. `search_symbol` for the API to change (`path_class=runtime`)
-2. `find_references` for call sites (`include_definition=false` when listing usages)
-3. `find_implementations` when the change hits an interface or trait boundary
-4. `incoming_calls` for caller graph; treat `outgoing_calls` as provisional until body proof
-5. `read_match` / `read_file` on each cluster before editing
-6. Optional `search_text` with `path_regex='^tests/'` for an explicit test pass
-7. Prefer `impact_bundle` when available; individual tools remain source of truth
-8. Never shell `rg` for throwaway indexed-source checks — use scoped `search_text`
-9. Do not expect other scenario “bundle” tools — composition beyond impact is skill-side
+2. Copy the selected row's `target_ref` unchanged into `target`; do not reconstruct its symbol or location
+3. `find_references(target=...)` for call sites (`include_definition=false` when listing usages)
+4. `find_implementations(target=...)` when the change hits an interface or trait boundary
+5. `incoming_calls(target=...)` for caller graph; treat `outgoing_calls` as provisional until body proof
+6. `read_match` / `read_file` on each cluster before editing
+7. Optional `search_text` with `path_regex='^tests/'` for an explicit test pass
+8. Prefer `impact_bundle(target=...)` when available; individual tools remain source of truth
+9. Never shell `rg` for throwaway indexed-source checks — use scoped `search_text`
+10. Do not expect other scenario “bundle” tools — composition beyond impact is skill-side
 
 ## Technical Review
 

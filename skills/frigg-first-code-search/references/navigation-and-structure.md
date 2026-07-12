@@ -236,3 +236,23 @@ implementations. Its section envelopes are `symbols_completeness`,
 It never upgrades a child that is truncated or incomplete. Read each included section before
 claiming the overall investigation is exhaustive. `implementations_included=false` is an
 explicit policy omission, not hidden truncation.
+
+For an exact prior result, send its `target_ref` as `target` instead of reducing it to a symbol
+name. `impact_bundle` accepts exactly one of non-empty legacy `symbol` or `target`:
+
+```json
+{
+  "target": {
+    "kind": "result_match",
+    "result_handle": "rh_01",
+    "match_id": "m_01",
+    "target_scope": "018f3f9c4a1b7e28a9c2d4e6f8012345"
+  }
+}
+```
+
+The supplied target resolves once and is given directly to each child computation; Frigg does not
+rerank a symbol name or silently choose a first match. Legacy `impact_bundle(symbol=...)` remains
+valid, but same-rank results return normal disambiguation. Do not combine `target` with `symbol`,
+`path`, `line`, or `column` (`CONFLICTING_TARGET_INPUT`). A matching top-level `repository_id` is
+an allowed assertion; a different one returns `TARGET_REPOSITORY_MISMATCH`.
