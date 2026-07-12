@@ -577,6 +577,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
             "Use shell tools as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
+            "next_actions[].tool plus exact next_actions[].arguments is authoritative for follow-ups; execute the named existing MCP tool yourself, respecting role/order/dependencies and host authorization. Compact and full carry identical action data. suggested_next is deprecated and lossy; stale or mixed proof handles require rerunning the typed origin producer and choosing a fresh match_id. No generic executor or automatic chaining endpoint exists.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
             core_guidance
         ]

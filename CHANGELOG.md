@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Typed executable follow-ups: `next_actions` is authoritative and names existing MCP tools with
+  exact `arguments`; hosts choose role/order/dependencies and retain authorization. Compact and
+  full modes carry identical actions. Stale/mixed proof retries use typed origins and fresh match
+  ids. `suggested_next` remains a deprecated lossy projection for at least two minor releases.
+
 - Exact-search completeness rollout: bounded MCP collections now expose typed `completeness`
   (`unit`, page-local `returned`, exact-or-absent `total`, complete/truncated state, typed
   reasons, and canonical v2 `continuation`); valid legacy `resume_from` remains accepted during

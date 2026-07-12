@@ -325,6 +325,15 @@ Example prompts:
 
 For agent-facing usage guidance, use [skills/frigg-first-code-search](skills/frigg-first-code-search/). For runtime diagnosis, use the [Frigg Operator Runbook](docs/operator-runbook.md).
 
+### Executable follow-ups
+
+Follow-up actions are authoritative in `next_actions`. Execute the named existing MCP tool with
+the exact `arguments` object; Frigg has no generic executor or automatic chaining endpoint. Use
+role, order, and dependencies to choose a legal sequence, subject to host authorization. Compact
+and full responses carry identical executable action data. Stale or mixed proof handles require
+rerunning the typed origin producer and selecting a fresh `match_id`; never reuse the old match.
+`suggested_next` is a deprecated lossy projection kept for at least two minor releases.
+
 ### Build an evidence trail
 
 Frigg returns handles, recovery hints, and citation-ready source windows so an agent can move from discovery to proof without reconstructing file coordinates by hand:

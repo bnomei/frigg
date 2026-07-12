@@ -2,6 +2,11 @@
 
 Use the lightest tool that preserves the right semantics. Shell tools remain correct for git, build/test output, generated/unindexed paths, explicit live-disk checks, and Frigg-unavailable cases. Frigg is the default for indexed source discovery, search, navigation, and proof. Canonical scenario routing lives in the skill top screen (`SKILL.md`); this file expands narrative loops only.
 
+When a response includes `next_actions`, execute the named existing tool with its exact
+`arguments`, respecting role/order/dependencies and host authorization. Do not invent a generic
+executor or automatic chaining. On stale or mixed proof handles, rerun the typed origin producer
+and choose a fresh match id. `suggested_next` is a deprecated lossy projection.
+
 Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is attached — use scoped `search_text` instead.
 
 ## Bug Trace

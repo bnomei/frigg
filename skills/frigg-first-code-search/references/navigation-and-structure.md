@@ -59,7 +59,7 @@ Each reference hit carries `match_kind`, so distinguish:
 - `declaration`
 - `reference`
 
-When opted in, each match may also carry `follow_up_structural` suggestions for replayable structural narrowing.
+When opted in, each match may also carry `follow_up_structural` suggestions for replayable structural narrowing. Canonical `next_actions[].tool` and exact `next_actions[].arguments` remain authoritative across compact and full modes.
 
 Use `include_definition=false` when you want caller or usage sites without the defining row mixed in.
 

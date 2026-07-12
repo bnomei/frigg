@@ -240,7 +240,7 @@ Each card: **Trigger / Habit / Frigg path / Fallback / Proof / Done / Product su
 | **Fallback** | Shell only if Frigg unregistered or path unindexed |
 | **Proof** | `read_match` on best merged hit |
 | **Done** | Multi-hypothesis answer cites Frigg proof; no parallel shell on indexed source |
-| **Product support** | 2–8 probes, each a full search; `probe_summary` per probe; path:line dedupe; handles / `suggested_next`. **Not** a single shared multi-query walk or early-exit fusion. |
+| **Product support** | 2–8 probes, each a full search; `probe_summary` per probe; path:line dedupe; handles / authoritative `next_actions` (with deprecated lossy `suggested_next` compatibility projection). **Not** a single shared multi-query walk or early-exit fusion. |
 
 ```text
 PREFERRED: search_batch([
@@ -272,11 +272,11 @@ search_symbol: catalog_entries    path_class=runtime
 | --- | --- |
 | **Trigger** | “Where is X?” — no symbol, exact string, or path |
 | **Habit** | Semantic search, guessed `rg` keywords, open top files |
-| **Frigg path** | `search_hybrid(question)` → `suggested_next[]` or noun pivot → `search_symbol` / `search_text` → proof read |
+| **Frigg path** | `search_hybrid(question)` → authoritative `next_actions[]` or noun pivot → `search_symbol` / `search_text` → proof read |
 | **Fallback** | Skip hybrid if a likely symbol/string is already known. Never shell-grep as the precision layer after hybrid |
 | **Proof** | Exact search, then `read_match` / `read_file` |
 | **Done** | Never answer from hybrid rank-1 alone; exact Frigg evidence present |
-| **Product support** | Compact pivots, `ranking_note`, `best_pivot_path`, `suggested_next`; semantic is **opt-in** (product default off) — optional accelerator only |
+| **Product support** | Compact pivots, `ranking_note`, `best_pivot_path`, and typed `next_actions`; semantic is **opt-in** (product default off) — optional accelerator only |
 
 ```text
 1. search_hybrid("<user question>")
@@ -285,7 +285,7 @@ search_symbol: catalog_entries    path_class=runtime
    - "discovery_only; lexical_only (semantic not contributing); …" → product default / semantic off /
      empty semantic channel — hybrid is still valid (lexical+graph); pivot sooner to exact tools
 3. Do NOT answer from rank #1 alone
-4. If suggested_next[] → run those; else extract nouns → search_symbol → scoped search_text
+4. If `next_actions[]` is present, execute each named existing tool with exact `arguments`, following role/order/dependencies; otherwise extract nouns → search_symbol → scoped search_text
 5. read_match / read_file for proof
 ```
 
@@ -302,7 +302,7 @@ GOOD: lexical_only ranking_note → still Frigg exact tools; semantic is opt-in 
 
 **Google Gemini (`provider=google`, preset `cloud-google`):** **credential peer** — use when `GEMINI_API_KEY` is already present. Not an unmeasured “best cloud for code” default over OpenAI. OpenAI-only sessions need not configure Google.
 
-Prefer `suggested_next` identifiers after hybrid (short symbol/text queries); do not paste the original natural-language question into `search_symbol`.
+Prefer `next_actions[].tool` and exact `next_actions[].arguments` after hybrid; do not paste the original natural-language question into `search_symbol`. `suggested_next` is deprecated and lossy for at least two minor releases. Stale or mixed proof handles require rerunning the typed origin producer and choosing a fresh `match_id`; never reuse the old match. Frigg has no generic executor or automatic chaining endpoint.
 
 ### Exact text search
 
@@ -374,9 +374,9 @@ GOOD: treat NavigationMode heuristic as valid Frigg; precise is an upgrade when 
 ```text
 PREFERRED: impact_bundle(symbol, path_class=runtime)
   → read summary first (counts / modes / top_paths) for plan
-  → then proof via handles/lists; suggested_next (single recovery channel) for tests pass + read_match
+  → then proof via handles/lists; authoritative `next_actions` for tests pass + `read_match` (legacy `suggested_next` is compatibility-only)
   // full response_mode only forwards diagnostics to child nav/search — not a second next-step list
-  // default bundle omits outgoing_calls (provisional) and does not embed tests (use suggested_next)
+  // default bundle omits outgoing_calls (provisional) and does not embed tests (use canonical next_actions)
 
 OR sequential:
 search_symbol(anchor, path_class=runtime)
@@ -760,7 +760,7 @@ For cross-repo search, use search_text / search_symbol / search_hybrid.
 1. Omit `repository_id` in single-repo work unless multi-repo or wrong default.
 2. Pick scenario from the table — do not default to grep.
 3. Search tier: **symbol** (known name) → **text** (known string) → **hybrid** (vague only) → **batch/parallel** (several guesses).
-4. Compact responses first; `response_mode=full` only for ranking diagnostics (impact_bundle: one `suggested_next` via recovery flatten — full is not more next-steps).
+4. Compact responses first; `response_mode=full` only for ranking diagnostics. Compact and full responses carry identical executable `next_actions` data; `suggested_next` is only a deprecated lossy compatibility projection.
 5. Navigate with the **`symbol`** parameter.
 6. Proof: `read_match` → `read_file`.
 7. Cite: json/citation `read_file` or host Read when required.

@@ -135,6 +135,11 @@ fn futura_routing_scorecard_skill_intent_map_and_shell_card() {
         skill.contains("BAD: hybrid -> grep") || skill.contains("hybrid -> grep"),
         "skill BAD list must contain hybrid -> grep anti-pattern"
     );
+    assert!(
+        skill.contains("next_actions"),
+        "skill must teach canonical next_actions"
+    );
+    assert!(!skill.contains("run_next_action") && !skill.contains("execute_action"));
 }
 
 /// EXP-policy-consistency B: skill first-route surfaces only public MCP tools.

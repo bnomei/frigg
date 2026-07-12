@@ -46,7 +46,7 @@ Use `search_hybrid` for broad discovery when you do not yet have a stable symbol
 Anti-patterns:
 
 - `BAD: search_hybrid → answer from rank-1` (or hybrid → shell grep as "precision")
-- `GOOD: search_hybrid → suggested_next / search_symbol / search_text → read_match`
+- `GOOD: search_hybrid → next_actions (exact tool + arguments) / search_symbol / search_text → read_match`
 
 Important inputs:
 - `query`
