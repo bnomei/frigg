@@ -133,6 +133,7 @@ impl FriggMcpServer {
                             NextActionRole::ResolveTarget,
                             0,
                             NextActionTarget::DocumentSymbols(DocumentSymbolsParams {
+                                target: None,
                                 path: params_for_blocking.path.clone(),
                                 repository_id: params_for_blocking.repository_id.clone(),
                                 include_follow_up_structural: None,

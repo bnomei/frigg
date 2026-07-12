@@ -346,6 +346,7 @@ fn parse_ripgrep_event_line(line: &str, matches: &mut Vec<TextMatch>) -> Result<
             as usize;
         matches.push(TextMatch {
             match_id: None,
+            target_ref: None,
             repository_id: String::new(),
             path: normalize_ripgrep_path(&path),
             line: line_number,

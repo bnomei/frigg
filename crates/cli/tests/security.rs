@@ -383,6 +383,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     let find_references_result = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("greeting".to_owned()),
+            target: None,
             repository_id: Some(repository_id.clone()),
             path: None,
             line: None,
@@ -729,6 +730,7 @@ async fn security_go_to_definition_rejects_relative_path_traversal_outside_works
     let result = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: None,
+            target: None,
             repository_id: Some(repository_id),
             path: Some("../outside.rs".to_owned()),
             line: Some(1),
@@ -782,6 +784,7 @@ async fn security_go_to_definition_rejects_absolute_path_outside_workspace() {
 
     let result = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some(repository_id),
             path: Some(outside_path.display().to_string()),

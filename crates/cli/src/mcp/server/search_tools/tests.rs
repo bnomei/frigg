@@ -23,6 +23,7 @@ fn match_fixture(
 ) -> SearchHybridMatch {
     SearchHybridMatch {
         match_id: None,
+        target_ref: None,
         repository_id: "repo-001".to_string(),
         path: path.to_string(),
         line: 1,
@@ -213,6 +214,7 @@ fn search_text_context_efficiency_metadata_uses_manifest_and_excerpts_without_st
     let matches = vec![
         TextMatch {
             match_id: None,
+            target_ref: None,
             repository_id: "repo-001".to_owned(),
             path: "src/lib.rs".to_owned(),
             line: 1,
@@ -223,6 +225,7 @@ fn search_text_context_efficiency_metadata_uses_manifest_and_excerpts_without_st
         },
         TextMatch {
             match_id: None,
+            target_ref: None,
             repository_id: "repo-001".to_owned(),
             path: "src/lib.rs".to_owned(),
             line: 2,
@@ -287,6 +290,7 @@ fn context_efficiency_metadata_uses_runtime_repository_id_for_manifest_lookup() 
     };
     let text_matches = vec![TextMatch {
         match_id: None,
+        target_ref: None,
         repository_id: "public-repo-001".to_owned(),
         path: "src/lib.rs".to_owned(),
         line: 1,
@@ -363,6 +367,7 @@ fn search_text_context_efficiency_matches_absolute_manifest_paths() {
     };
     let matches = vec![TextMatch {
         match_id: None,
+        target_ref: None,
         repository_id: "repo-001".to_owned(),
         path: "src/lib.rs".to_owned(),
         line: 1,
@@ -416,6 +421,7 @@ fn search_text_context_efficiency_falls_back_to_returned_bytes_for_unindexed_pat
     };
     let matches = vec![TextMatch {
         match_id: None,
+        target_ref: None,
         repository_id: "repo-001".to_owned(),
         path: "generated/live_only.rs".to_owned(),
         line: 1,
@@ -549,6 +555,7 @@ fn context_efficiency_env_only_metric_failure_degrades_to_no_metadata() {
     };
     let matches = vec![TextMatch {
         match_id: None,
+        target_ref: None,
         repository_id: "repo-001".to_owned(),
         path: "src/lib.rs".to_owned(),
         line: 1,

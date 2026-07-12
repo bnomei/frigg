@@ -24,6 +24,7 @@ async fn find_references_total_matches_preserves_pre_page_active_mode_cardinalit
     let zero_limit = match server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("User".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -45,6 +46,7 @@ async fn find_references_total_matches_preserves_pre_page_active_mode_cardinalit
 
     let unlimited = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -67,6 +69,7 @@ async fn find_references_total_matches_preserves_pre_page_active_mode_cardinalit
 
     let limited = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -99,6 +102,7 @@ async fn find_references_total_matches_preserves_pre_page_active_mode_cardinalit
 
     let resumed = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -135,6 +139,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -258,6 +263,7 @@ async fn find_references_includes_definition_when_requested_by_default() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -309,6 +315,7 @@ async fn find_references_opt_in_returns_follow_up_structural() {
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("greeting".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -383,6 +390,7 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -458,6 +466,7 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -556,6 +565,7 @@ async fn find_references_falls_back_to_direct_precise_symbol_when_corpus_symbol_
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("Settings".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -666,6 +676,7 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("features.registration_enabled".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -811,6 +822,7 @@ it('keeps course submissions open state deterministic', function (): void {\n\
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("submissionsOpen".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -887,6 +899,7 @@ async fn precision_precedence_find_references_falls_back_to_heuristic_when_preci
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -959,6 +972,7 @@ async fn find_references_reports_failed_scip_artifact_details_in_note_metadata()
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1023,6 +1037,7 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("invalid_params".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1176,6 +1191,7 @@ async fn find_references_precise_results_round_trip_through_stable_symbol_id() {
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some(runtime_symbol_id.clone()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1285,6 +1301,7 @@ async fn find_references_matches_precise_typescript_symbols_without_display_name
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("requireServerUser".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1368,6 +1385,7 @@ async fn find_references_retains_precise_matches_when_other_scip_artifact_exceed
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1436,6 +1454,7 @@ async fn find_references_falls_back_when_partial_precise_absence_is_non_authorit
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1492,6 +1511,7 @@ async fn find_references_rejects_oversized_source_file_with_typed_timeout() {
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8).await;
     let error = match server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1547,6 +1567,7 @@ async fn find_references_prefers_location_resolution_when_symbol_and_location_ar
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("alpha".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("src/lib.php".to_owned()),
             line: Some(3),
@@ -1593,6 +1614,7 @@ async fn find_references_resolves_location_only_requests() {
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: None,
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("src/lib.php".to_owned()),
             line: Some(3),
@@ -1629,6 +1651,7 @@ async fn find_references_rejects_requests_without_symbol_or_location() {
     let server = server_for_fixture().await;
     let error = match server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,

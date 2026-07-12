@@ -44,6 +44,7 @@ impl FriggMcpServer {
             Self::symbol_context_for_stable_id(target_corpus, &target_symbol.stable_id);
         ReferenceMatch {
             match_id: None,
+            target_ref: None,
             stable_symbol_id: Some(target_symbol.stable_id.clone()),
             repository_id: target_corpus.repository_id.clone(),
             symbol: args.display_symbol,
@@ -560,6 +561,7 @@ impl FriggMcpServer {
                                     .take(limit)
                                     .map(|reference| ReferenceMatch {
                                         match_id: None,
+                                        target_ref: None,
                                         stable_symbol_id: None,
                                         repository_id: direct_precise_target.repository_id.clone(),
                                         symbol: display_symbol.clone(),
@@ -878,6 +880,7 @@ impl FriggMcpServer {
                                         );
                                         Some(ReferenceMatch {
                                             match_id: None,
+                                            target_ref: None,
                                             stable_symbol_id: Some(target.symbol.stable_id.clone()),
                                             repository_id: reference.repository_id,
                                             symbol: reference.symbol_name,

@@ -662,6 +662,23 @@ impl FriggMcpServer {
         format!("{scope}:m{}", index + 1)
     }
 
+    /// Opaque per-session correlation scope used by additive result targets.
+    pub(super) fn result_target_scope(&self) -> String {
+        self.session_state.display_session_id()
+    }
+
+    pub(super) fn result_target(
+        &self,
+        result_handle: String,
+        match_id: String,
+    ) -> Option<crate::mcp::types::TargetRef> {
+        crate::mcp::types::TargetRef::result_match(
+            result_handle,
+            match_id,
+            self.result_target_scope(),
+        )
+    }
+
     fn attach_handle_metadata(
         result_handle: &Option<String>,
         tool_name: &str,
@@ -737,7 +754,7 @@ impl FriggMcpServer {
         tool_name: &'static str,
         matches: &mut [T],
         source: impl Fn(&T) -> (String, String, usize, Option<usize>),
-        assign_match_id: impl Fn(&mut T, Option<String>),
+        assign_match_id: impl Fn(&mut T, Option<String>, Option<crate::mcp::types::TargetRef>),
     ) -> Option<String> {
         let snapshots = self.bind_result_handle_source_snapshots(matches.iter().map(|found| {
             let (repository_id, path, _, _) = source(found);
@@ -745,10 +762,12 @@ impl FriggMcpServer {
         }));
         let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
+        let mut assigned = Vec::with_capacity(matches.len());
         for (index, found) in matches.iter_mut().enumerate() {
             let (repository_id, path, line, column) = source(found);
             let Some(snapshot) = snapshots.get(&(repository_id, path)).cloned() else {
-                assign_match_id(found, None);
+                assign_match_id(found, None, None);
+                assigned.push(None);
                 continue;
             };
             let match_id = Self::scoped_match_id(scope, index);
@@ -758,11 +777,22 @@ impl FriggMcpServer {
                     source: snapshot,
                     line,
                     column,
+                    stable_symbol_id: None,
                 },
             );
-            assign_match_id(found, Some(match_id));
+            assigned.push(Some(match_id.clone()));
+            assign_match_id(found, Some(match_id), None);
         }
-        self.store_session_result_handle(tool_name, stored)
+        let handle = self.store_session_result_handle(tool_name, stored);
+        for (found, match_id) in matches.iter_mut().zip(assigned) {
+            let target = handle
+                .clone()
+                .and_then(|handle| self.result_target(handle, match_id.clone()?));
+            if target.is_some() {
+                assign_match_id(found, match_id, target);
+            }
+        }
+        handle
     }
 
     fn assign_result_handle_for_text_matches(
@@ -781,7 +811,10 @@ impl FriggMcpServer {
                     Some(found.column),
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -801,7 +834,10 @@ impl FriggMcpServer {
                     found.column,
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -821,7 +857,10 @@ impl FriggMcpServer {
                     found.column,
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -841,7 +880,10 @@ impl FriggMcpServer {
                     Some(found.column),
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -861,7 +903,10 @@ impl FriggMcpServer {
                     Some(found.column),
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -881,7 +926,10 @@ impl FriggMcpServer {
                     Some(found.column),
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -901,7 +949,10 @@ impl FriggMcpServer {
                     Some(found.column),
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -921,7 +972,10 @@ impl FriggMcpServer {
                     Some(found.column),
                 )
             },
-            |found, match_id| found.match_id = match_id,
+            |found, match_id, target| {
+                found.match_id = match_id;
+                found.target_ref = target;
+            },
         )
     }
 
@@ -960,6 +1014,7 @@ impl FriggMcpServer {
                             source: snapshot,
                             line: symbol.line,
                             column: Some(symbol.column),
+                            stable_symbol_id: symbol.stable_symbol_id.clone(),
                         },
                     );
                     symbol.match_id = Some(match_id);
@@ -1858,6 +1913,7 @@ mod tests {
                     total_matches: 1,
                     matches: vec![TextMatch {
                         match_id: None,
+                        target_ref: None,
                         repository_id: workspace.repository_id.clone(),
                         path: "src/leak.rs".to_owned(),
                         line: 1,
@@ -1919,6 +1975,7 @@ mod tests {
     fn sample_text_match(repository_id: &str, path: &str) -> TextMatch {
         TextMatch {
             match_id: None,
+            target_ref: None,
             repository_id: repository_id.to_owned(),
             path: path.to_owned(),
             line: 1,
@@ -2330,6 +2387,7 @@ mod tests {
             SearchHybridResponse {
                 matches: vec![SearchHybridMatch {
                     match_id: None,
+                    target_ref: None,
                     repository_id: "repo".to_owned(),
                     path: "src/a.rs".to_owned(),
                     line: 1,
@@ -2418,6 +2476,7 @@ mod tests {
             SearchHybridResponse {
                 matches: vec![SearchHybridMatch {
                     match_id: None,
+                    target_ref: None,
                     repository_id: "repo".to_owned(),
                     path: "src/a.rs".to_owned(),
                     line: 1,

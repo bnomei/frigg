@@ -239,6 +239,7 @@ impl FriggMcpServer {
 
         let references_response = self
             .find_references_impl(FindReferencesParams {
+                target: None,
                 symbol: None,
                 repository_id: selected_repository_id.clone(),
                 path: selected_path.clone(),
@@ -255,6 +256,7 @@ impl FriggMcpServer {
 
         let incoming_response = self
             .incoming_calls_impl(IncomingCallsParams {
+                target: None,
                 symbol: None,
                 repository_id: selected_repository_id.clone(),
                 path: selected_path.clone(),
@@ -283,6 +285,7 @@ impl FriggMcpServer {
         ) = if include_implementations {
             let impl_response = self
                 .find_implementations_impl(FindImplementationsParams {
+                    target: None,
                     symbol: None,
                     repository_id: selected_repository_id.clone(),
                     path: selected_path.clone(),
@@ -325,6 +328,7 @@ impl FriggMcpServer {
                     NextActionRole::ResolveTarget,
                     0,
                     NextActionTarget::FindImplementations(FindImplementationsParams {
+                        target: None,
                         symbol: Some(symbol.clone()),
                         repository_id: selected_repository_id.clone(),
                         path: selected_path.clone(),

@@ -560,6 +560,7 @@ impl FriggMcpServer {
                     .filter(|adjacent| Self::is_heuristic_call_relation(adjacent.relation))
                     .map(|adjacent| CallHierarchyMatch {
                         match_id: None,
+                        target_ref: None,
                         source_stable_symbol_id: None,
                         target_stable_symbol_id: Some(target.symbol.stable_id.clone()),
                         source_symbol: adjacent.symbol.display_name,
@@ -987,6 +988,7 @@ impl FriggMcpServer {
                     })
                     .map(|adjacent| CallHierarchyMatch {
                         match_id: None,
+                        target_ref: None,
                         source_stable_symbol_id: Some(target.symbol.stable_id.clone()),
                         target_stable_symbol_id: None,
                         source_symbol: target.symbol.name.clone(),

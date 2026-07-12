@@ -323,6 +323,8 @@ pub struct SearchHybridParams {
 pub struct SearchHybridMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<super::TargetRef>,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
@@ -799,6 +801,8 @@ pub struct SearchBatchParams {
 pub struct SearchBatchMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<super::TargetRef>,
     /// Contributing probe ids (deduped multi-probe hits list all).
     pub probe_ids: Vec<String>,
     /// Primary probe kind that produced this row (first contributor).

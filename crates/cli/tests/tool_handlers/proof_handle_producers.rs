@@ -245,6 +245,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let references = server
         .find_references(Parameters(FindReferencesParams {
+            target: None,
             symbol: Some("target".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -267,6 +268,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let definition = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: Some("target".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -288,6 +290,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let declarations = server
         .find_declarations(Parameters(FindDeclarationsParams {
+            target: None,
             symbol: Some("target".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -312,6 +315,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let implementations = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Worker".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -336,6 +340,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let incoming = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("target".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -357,6 +362,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let outgoing = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("caller".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -378,6 +384,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let symbols = server
         .document_symbols(Parameters(DocumentSymbolsParams {
+            target: None,
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
@@ -412,6 +419,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
 
     let impact = server
         .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
             symbol: "Worker".to_owned(),
             path_class: None,
             repository_id: Some("repo-001".to_owned()),

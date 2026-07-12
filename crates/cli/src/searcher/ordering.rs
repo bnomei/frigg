@@ -156,6 +156,7 @@ mod tests {
     fn text_match(repository_id: &str, path: &str, line: usize, column: usize) -> TextMatch {
         TextMatch {
             match_id: None,
+            target_ref: None,
             repository_id: repository_id.to_owned(),
             path: path.to_owned(),
             line,

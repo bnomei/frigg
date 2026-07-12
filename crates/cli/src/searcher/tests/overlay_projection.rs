@@ -1260,6 +1260,7 @@ fn path_witness_hits_preserve_score_hints_and_overlay_provenance() {
     let hits = build_hybrid_path_witness_hits_with_intent(
         &[TextMatch {
             match_id: None,
+            target_ref: None,
             repository_id: "repo-001".to_owned(),
             path: "Cargo.toml".to_owned(),
             line: 1,

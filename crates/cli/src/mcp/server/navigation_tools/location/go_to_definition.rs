@@ -81,6 +81,7 @@ impl FriggMcpServer {
             Self::symbol_context_for_stable_id(target_corpus, &target_symbol.stable_id);
         NavigationLocation {
             match_id: None,
+            target_ref: None,
             stable_symbol_id: Some(target_symbol.stable_id.clone()),
             symbol: args.display_symbol,
             repository_id: target_corpus.repository_id.clone(),
@@ -142,6 +143,7 @@ impl FriggMcpServer {
                         crate::indexer::line_column_for_offset(&source, route_literal.start());
                     corpus_matches.push(NavigationLocation {
                         match_id: None,
+                        target_ref: None,
                         stable_symbol_id: None,
                         symbol: route_name.to_owned(),
                         repository_id: corpus.repository_id.clone(),
@@ -1468,6 +1470,7 @@ impl FriggMcpServer {
                             NextActionRole::ResolveTarget,
                             0,
                             NextActionTarget::DocumentSymbols(DocumentSymbolsParams {
+                                target: None,
                                 path: path.clone(),
                                 repository_id: params.repository_id.clone(),
                                 include_follow_up_structural: None,

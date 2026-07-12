@@ -403,6 +403,7 @@ fn text_match(
 ) -> TextMatch {
     TextMatch {
         match_id: None,
+        target_ref: None,
         repository_id: repository_id.to_owned(),
         path: path.to_owned(),
         line,

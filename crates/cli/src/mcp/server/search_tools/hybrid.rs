@@ -1150,6 +1150,7 @@ impl FriggMcpServer {
             Self::hybrid_graph_mode_from_sources(&evidence.graph_sources).map(str::to_owned);
         SearchHybridMatch {
             match_id: None,
+            target_ref: None,
             repository_id: evidence.document.repository_id,
             path: path.clone(),
             line: evidence.anchor.start_line,
@@ -1352,6 +1353,7 @@ mod tests {
     ) -> SearchHybridMatch {
         SearchHybridMatch {
             match_id: None,
+            target_ref: None,
             repository_id: "repo-001".to_owned(),
             path: path.to_owned(),
             line,

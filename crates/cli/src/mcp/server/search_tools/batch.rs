@@ -470,6 +470,7 @@ impl FriggMcpServer {
                     .into_iter()
                     .map(|matched| SearchBatchMatch {
                         match_id: None,
+                        target_ref: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Text,
                         repository_id: matched.repository_id,
@@ -515,6 +516,7 @@ impl FriggMcpServer {
                     .into_iter()
                     .map(|matched| SearchBatchMatch {
                         match_id: None,
+                        target_ref: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Symbol,
                         repository_id: matched.repository_id,
@@ -563,6 +565,7 @@ impl FriggMcpServer {
                     .into_iter()
                     .map(|matched| SearchBatchMatch {
                         match_id: None,
+                        target_ref: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Hybrid,
                         repository_id: matched.repository_id,

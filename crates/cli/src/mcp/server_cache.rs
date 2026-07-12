@@ -382,6 +382,8 @@ pub(crate) struct ResultHandleMatchAnchor {
     pub(crate) source: Arc<ResultHandleSourceSnapshot>,
     pub(crate) line: usize,
     pub(crate) column: Option<usize>,
+    /// Optional stable indexed identity captured atomically with the source anchor.
+    pub(crate) stable_symbol_id: Option<String>,
 }
 
 impl Deref for ResultHandleMatchAnchor {

@@ -331,6 +331,7 @@ where
 
             let candidate = TextMatch {
                 match_id: None,
+                target_ref: None,
                 repository_id: repository_id.to_owned(),
                 path: rel_path.to_owned(),
                 line: line_number,

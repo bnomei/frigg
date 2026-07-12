@@ -223,6 +223,8 @@ mod recovery;
 mod repository;
 #[path = "types/search.rs"]
 mod search;
+#[path = "types/target.rs"]
+mod target;
 #[path = "types/workspace.rs"]
 mod workspace;
 
@@ -234,4 +236,5 @@ pub use playbook::*;
 pub use recovery::*;
 pub use repository::*;
 pub use search::*;
+pub use target::*;
 pub use workspace::*;

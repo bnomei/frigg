@@ -1075,6 +1075,7 @@ fn assert_compact_handle(
 fn reference_match(repository_id: &str) -> ReferenceMatch {
     ReferenceMatch {
         match_id: None,
+        target_ref: None,
         stable_symbol_id: None,
         repository_id: repository_id.to_owned(),
         symbol: "target".to_owned(),
@@ -1093,6 +1094,7 @@ fn reference_match(repository_id: &str) -> ReferenceMatch {
 fn navigation_location(repository_id: &str, line: usize, column: usize) -> NavigationLocation {
     NavigationLocation {
         match_id: None,
+        target_ref: None,
         stable_symbol_id: None,
         symbol: "target".to_owned(),
         repository_id: repository_id.to_owned(),
@@ -1110,6 +1112,7 @@ fn navigation_location(repository_id: &str, line: usize, column: usize) -> Navig
 fn implementation_match(repository_id: &str) -> ImplementationMatch {
     ImplementationMatch {
         match_id: None,
+        target_ref: None,
         stable_symbol_id: None,
         symbol: "target".to_owned(),
         kind: Some("function".to_owned()),
@@ -1134,6 +1137,7 @@ fn call_match(
 ) -> CallHierarchyMatch {
     CallHierarchyMatch {
         match_id: None,
+        target_ref: None,
         source_stable_symbol_id: None,
         target_stable_symbol_id: None,
         source_symbol: "caller".to_owned(),

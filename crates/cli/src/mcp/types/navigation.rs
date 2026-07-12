@@ -1,6 +1,6 @@
 //! Navigation MCP wire types: references, definitions, declarations, implementations, and call hierarchy.
 
-use super::{MetadataObject, ResponseMode, ResultCompleteness};
+use super::{MetadataObject, ResponseMode, ResultCompleteness, TargetRef};
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Parameters for `find_references`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesParams {
+    pub target: Option<TargetRef>,
     /// Symbol query.
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -91,6 +92,7 @@ pub struct FindReferencesResponse {
 /// Parameters for `go_to_definition` (default agent route for definition/body anchors).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionParams {
+    pub target: Option<TargetRef>,
     /// Recommended: symbol name to resolve. Prefer this over path+line alone on dense lines.
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -111,6 +113,8 @@ pub struct GoToDefinitionParams {
 pub struct NavigationLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<TargetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_symbol_id: Option<String>,
     pub symbol: String,
@@ -164,6 +168,7 @@ pub struct GoToDefinitionResponse {
 /// Parameters for `find_declarations` (secondary to go_to_definition; use when decl vs def matters).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsParams {
+    pub target: Option<TargetRef>,
     /// Preferred when the name is known (same as go_to_definition).
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -203,6 +208,7 @@ pub struct FindDeclarationsResponse {
 /// Parameters for `find_implementations`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsParams {
+    pub target: Option<TargetRef>,
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
     pub path: Option<String>,
@@ -222,6 +228,8 @@ pub struct FindImplementationsParams {
 pub struct ImplementationMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<TargetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_symbol_id: Option<String>,
     pub symbol: String,
@@ -265,6 +273,7 @@ pub struct FindImplementationsResponse {
 /// Parameters for `incoming_calls`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsParams {
+    pub target: Option<TargetRef>,
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
     pub path: Option<String>,
@@ -282,6 +291,7 @@ pub struct IncomingCallsParams {
 /// Parameters for `outgoing_calls`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsParams {
+    pub target: Option<TargetRef>,
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
     pub path: Option<String>,
@@ -301,6 +311,8 @@ pub struct OutgoingCallsParams {
 pub struct CallHierarchyMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<TargetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_stable_symbol_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -410,6 +422,7 @@ pub struct NavigationAvailability {
 /// Parameters for `document_symbols`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsParams {
+    pub target: Option<TargetRef>,
     pub path: String,
     pub repository_id: Option<String>,
     /// Include structural follow-up suggestions.
@@ -526,6 +539,7 @@ pub struct InspectSyntaxTreeResponse {
 /// Parameters for optional `impact_bundle` convenience composition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ImpactBundleParams {
+    pub target: Option<TargetRef>,
     /// Symbol name to resolve impact for (required).
     pub symbol: String,
     /// Path class for the initial symbol lookup. Defaults to `runtime`.
@@ -1155,6 +1169,7 @@ mod tests {
 
         let symbols = vec![SymbolMatch {
             match_id: None,
+            target_ref: None,
             stable_symbol_id: None,
             repository_id: "r1".to_owned(),
             symbol: "target".to_owned(),
@@ -1170,6 +1185,7 @@ mod tests {
         let references = vec![
             ReferenceMatch {
                 match_id: None,
+                target_ref: None,
                 stable_symbol_id: None,
                 repository_id: "r1".to_owned(),
                 symbol: "target".to_owned(),
@@ -1185,6 +1201,7 @@ mod tests {
             },
             ReferenceMatch {
                 match_id: None,
+                target_ref: None,
                 stable_symbol_id: None,
                 repository_id: "r1".to_owned(),
                 symbol: "target".to_owned(),
@@ -1200,6 +1217,7 @@ mod tests {
             },
             ReferenceMatch {
                 match_id: None,
+                target_ref: None,
                 stable_symbol_id: None,
                 repository_id: "r1".to_owned(),
                 symbol: "target".to_owned(),
@@ -1216,6 +1234,7 @@ mod tests {
         ];
         let incoming = vec![CallHierarchyMatch {
             match_id: None,
+            target_ref: None,
             source_stable_symbol_id: None,
             target_stable_symbol_id: None,
             source_symbol: "caller".to_owned(),
@@ -1289,6 +1308,7 @@ mod tests {
         let many_refs: Vec<ReferenceMatch> = (0..10)
             .map(|i| ReferenceMatch {
                 match_id: None,
+                target_ref: None,
                 stable_symbol_id: None,
                 repository_id: "r1".to_owned(),
                 symbol: "target".to_owned(),

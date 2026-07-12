@@ -107,6 +107,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("User".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -186,6 +187,7 @@ async fn navigation_go_to_definition_defaults_to_compact_but_keeps_mode_and_hand
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -270,6 +272,7 @@ async fn navigation_go_to_definition_falls_back_to_direct_precise_symbol_when_co
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("Settings".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -345,6 +348,7 @@ async fn navigation_go_to_definition_uses_php_helper_literal_for_direct_precise_
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: None,
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("resources/views/welcome.blade.php".to_owned()),
             line: Some(1),
@@ -422,6 +426,7 @@ async fn navigation_go_to_definition_uses_route_helper_literal_for_direct_precis
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("resources/views/welcome.blade.php".to_owned()),
@@ -509,6 +514,7 @@ async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_f
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("resources/views/partials/sidebar/primary-nav.blade.php".to_owned()),
@@ -667,6 +673,7 @@ async fn navigation_go_to_definition_prefers_route_helper_precise_match_when_cur
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("resources/views/partials/sidebar/primary-nav.blade.php".to_owned()),
@@ -729,6 +736,7 @@ async fn navigation_go_to_definition_prefers_route_source_fallback_for_blade_att
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("resources/views/partials/sidebar/primary-nav.blade.php".to_owned()),
@@ -786,6 +794,7 @@ async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_af
     let first = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("alpha".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -807,6 +816,7 @@ async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_af
     let second = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("beta_beta".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -835,6 +845,7 @@ async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_af
 
     let stale = match server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: Some("alpha".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -870,6 +881,7 @@ async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("src/lib.php".to_owned()),
@@ -916,6 +928,7 @@ async fn navigation_go_to_definition_rust_use_path_prefers_imported_symbol_over_
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("src/app.rs".to_owned()),
@@ -964,6 +977,7 @@ async fn navigation_go_to_definition_rust_reexport_alias_resolves_underlying_sym
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("src/lib.rs".to_owned()),
@@ -1023,6 +1037,7 @@ async fn navigation_go_to_definition_rust_method_call_prefers_impl_method_over_f
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: None,
             repository_id: Some("repo-001".to_owned()),
             path: Some("src/lib.rs".to_owned()),
@@ -1074,6 +1089,7 @@ async fn navigation_go_to_definition_requires_disambiguation_for_same_rank_symbo
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("try_execute".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1203,6 +1219,7 @@ async fn navigation_go_to_definition_precise_results_round_trip_through_stable_s
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some(runtime_symbol_id.clone()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1297,6 +1314,7 @@ async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_bud
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1381,6 +1399,7 @@ async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_targ
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
+            target: None,
             symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1422,6 +1441,7 @@ async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_da
     let repository_id = public_repository_id(&server).await;
     let response = server
         .find_declarations(Parameters(FindDeclarationsParams {
+            target: None,
             symbol: Some("greeting".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1465,6 +1485,7 @@ async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_a
     let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .find_declarations(Parameters(FindDeclarationsParams {
+            target: None,
             symbol: Some("alpha".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1486,6 +1507,7 @@ async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_a
 
     let second = server
         .find_declarations(Parameters(FindDeclarationsParams {
+            target: None,
             symbol: Some("beta_beta".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1515,6 +1537,7 @@ async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_a
 
     let stale = match server
         .find_declarations(Parameters(FindDeclarationsParams {
+            target: None,
             symbol: Some("alpha".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1552,6 +1575,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
     let go_to_definition = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("greeting".to_owned()),
+            target: None,
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1575,6 +1599,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
 
     let declarations = server
         .find_declarations(Parameters(FindDeclarationsParams {
+            target: None,
             symbol: Some("greeting".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1618,6 +1643,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
 
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1741,6 +1767,7 @@ class NullAnalyticsRecorder implements AnalyticsRecorder\n\
 
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("AnalyticsRecorder".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1790,6 +1817,7 @@ async fn navigation_find_implementations_classifies_blanket_rust_impls_without_p
 
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("DeterministicDrawExt".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1874,6 +1902,7 @@ async fn navigation_find_implementations_degrades_when_scip_artifact_exceeds_bud
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -1985,6 +2014,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
 
     let implementations = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2012,6 +2042,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
 
     let incoming = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2034,6 +2065,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
 
     let outgoing = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("consumer".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2159,6 +2191,7 @@ async fn navigation_find_implementations_prefers_relationship_bearing_precise_ca
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2266,6 +2299,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
 
     let implementations = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2284,6 +2318,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
 
     let incoming = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2302,6 +2337,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
 
     let outgoing = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("consumer".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2367,6 +2403,7 @@ async fn navigation_find_implementations_uses_precise_occurrences_when_relations
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2461,6 +2498,7 @@ async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_a
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("Service".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2551,6 +2589,7 @@ async fn navigation_incoming_calls_marks_callable_precise_occurrences_as_calls()
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("callee".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2638,6 +2677,7 @@ async fn navigation_incoming_calls_matches_precise_typescript_symbols_without_di
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("requireServerUser".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2740,6 +2780,7 @@ async fn navigation_incoming_calls_marks_unspecified_typescript_occurrences_as_c
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
+            target: None,
             symbol: Some("requireServerUser".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2846,6 +2887,7 @@ async fn navigation_outgoing_calls_uses_precise_occurrences_when_relationships_a
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("caller".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -2959,6 +3001,7 @@ async fn navigation_outgoing_calls_matches_typescript_callees_with_unspecified_k
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("handler".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -3050,6 +3093,7 @@ async fn navigation_outgoing_calls_ignores_precise_callable_references_without_c
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("caller".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -3092,6 +3136,7 @@ async fn navigation_outgoing_calls_heuristic_fallback_keeps_empty_set_instead_of
     let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: None,
             symbol: Some("caller".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
@@ -3154,6 +3199,7 @@ async fn navigation_go_to_definition_empty_params_reject_zero_limit() {
     let error = match server
         .go_to_definition(Parameters(GoToDefinitionParams {
             limit: Some(0),
+            target: None,
             ..GoToDefinitionParams::default()
         }))
         .await
@@ -3179,6 +3225,7 @@ async fn navigation_go_to_definition_path_line_without_symbol_sets_location_warn
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             path: Some("src/lib.rs".to_owned()),
+            target: None,
             line: Some(2),
             symbol: None,
             column: None,
@@ -3233,6 +3280,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
 
     let response = server
         .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
             symbol: "target".to_owned(),
             path_class: None,
             repository_id: Some("repo-001".to_owned()),
@@ -3415,6 +3463,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         serde_json::to_value(proof.origin.clone()).expect("impact origin serializes"),
         serde_json::to_value(Some(NextActionOrigin(ReplayOriginTarget::ImpactBundle(
             ImpactBundleParams {
+                target: None,
                 symbol: "target".to_owned(),
                 path_class: None,
                 repository_id: Some("repo-001".to_owned()),
@@ -3489,6 +3538,7 @@ async fn impact_bundle_anchors_followups_to_selected_symbol_location() {
 
     let response = server
         .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
             symbol: "target".to_owned(),
             path_class: Some(SearchSymbolPathClass::Runtime),
             repository_id: Some("repo-001".to_owned()),
@@ -3527,6 +3577,7 @@ async fn impact_bundle_missing_symbol_returns_recovery() {
     let server = server_for_fixture().await;
     let response = server
         .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
             symbol: String::new(),
             ..Default::default()
         }))
@@ -3547,6 +3598,7 @@ async fn impact_bundle_unknown_symbol_returns_recovery() {
     let server = server_for_fixture().await;
     let response = server
         .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
             symbol: "DefinitelyMissingSymbolZzz".to_owned(),
             path_class: None,
             repository_id: Some("repo-001".to_owned()),

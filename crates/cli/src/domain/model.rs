@@ -38,6 +38,8 @@ pub struct SnapshotId(pub String);
 pub struct TextMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<crate::mcp::types::TargetRef>,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
@@ -103,6 +105,8 @@ pub struct SymbolMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<crate::mcp::types::TargetRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_symbol_id: Option<String>,
     pub repository_id: String,
     pub symbol: String,
@@ -138,6 +142,8 @@ pub enum ReferenceMatchKind {
 pub struct ReferenceMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<crate::mcp::types::TargetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_symbol_id: Option<String>,
     pub repository_id: String,

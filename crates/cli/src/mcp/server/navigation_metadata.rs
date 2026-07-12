@@ -224,6 +224,7 @@ impl FriggMcpServer {
         });
         SymbolMatch {
             match_id: None,
+            target_ref: None,
             stable_symbol_id: Some(candidate.symbol.stable_id.clone()),
             repository_id: candidate.repository_id.clone(),
             symbol: candidate.symbol.name.clone(),
@@ -531,6 +532,7 @@ impl FriggMcpServer {
                 );
                 ImplementationMatch {
                     match_id: None,
+                    target_ref: None,
                     stable_symbol_id: Some(candidate.source_symbol.stable_id.clone()),
                     symbol: candidate.symbol,
                     kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
@@ -579,6 +581,7 @@ impl FriggMcpServer {
                 Self::symbol_context_for_stable_id(target_corpus, &source_symbol.stable_id);
             matches.push(ImplementationMatch {
                 match_id: None,
+                target_ref: None,
                 stable_symbol_id: Some(source_symbol.stable_id.clone()),
                 symbol: source_symbol.name.clone(),
                 kind: Self::display_symbol_kind(source_symbol.kind.as_str()),
