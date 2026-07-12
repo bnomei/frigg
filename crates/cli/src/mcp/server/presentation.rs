@@ -20,6 +20,9 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone)]
 pub(in crate::mcp::server) enum SessionResultHandleLookup {
     Found(crate::mcp::server_cache::ResultHandleMatchAnchor),
+    /// Target scope belongs to a different MCP session; this is checked before cache lookup.
+    #[allow(dead_code)]
+    TargetScopeMismatch,
     /// `result_handle` is missing (expired, never issued, or invalidated).
     StaleHandle,
     /// Handle exists but `match_id` does not belong to it (often mixed across calls).
@@ -411,6 +414,7 @@ impl FriggMcpServer {
         match self.session_result_handle_lookup(result_handle, match_id) {
             SessionResultHandleLookup::Found(anchor) => Some(anchor),
             SessionResultHandleLookup::StaleHandle
+            | SessionResultHandleLookup::TargetScopeMismatch
             | SessionResultHandleLookup::MixedHandle { .. } => None,
         }
     }
@@ -445,6 +449,27 @@ impl FriggMcpServer {
             foreign_handle_has_match: foreign_handle.is_some(),
             foreign_handle,
         }
+    }
+
+    /// Resolve a public result target, rejecting foreign session scopes before consulting the
+    /// handle cache. The legacy lookup remains available for `read_match` compatibility.
+    #[allow(dead_code)]
+    pub(super) fn session_result_target_lookup(
+        &self,
+        target: &crate::mcp::types::TargetRef,
+    ) -> SessionResultHandleLookup {
+        let crate::mcp::types::TargetRef::ResultMatch {
+            result_handle,
+            match_id,
+            target_scope,
+        } = target
+        else {
+            return SessionResultHandleLookup::TargetScopeMismatch;
+        };
+        if target_scope != &self.session_state.display_session_id() {
+            return SessionResultHandleLookup::TargetScopeMismatch;
+        }
+        self.session_result_handle_lookup(result_handle, match_id)
     }
 
     pub(super) fn invalidate_session_result_handles_for_repository_ids<'a>(

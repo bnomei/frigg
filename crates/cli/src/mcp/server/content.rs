@@ -648,6 +648,12 @@ impl FriggMcpServer {
                     None,
                 );
             }
+            SessionResultHandleLookup::TargetScopeMismatch => {
+                return Err(Self::invalid_params(
+                    "result target belongs to a different session",
+                    Some(serde_json::json!({"error_code": "TARGET_SCOPE_MISMATCH"})),
+                ));
+            }
             SessionResultHandleLookup::MixedHandle {
                 foreign_handle_has_match,
                 foreign_handle,

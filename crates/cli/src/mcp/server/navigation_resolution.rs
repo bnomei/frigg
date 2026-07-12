@@ -4,11 +4,173 @@
 //! multiple candidates compete.
 
 use super::*;
+use crate::mcp::server::presentation::SessionResultHandleLookup;
+use crate::mcp::types::TargetRef;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Component;
 
 impl FriggMcpServer {
+    /// Resolve an issued target without falling back to name ranking.  This is the single
+    /// target path used by navigation consumers: result handles are checked for session scope
+    /// before the cache is consulted, while stable symbols are looked up directly in the adopted
+    /// corpus snapshot.
+    pub(in crate::mcp::server) fn resolve_target_ref(
+        &self,
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        target: &TargetRef,
+    ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        match target {
+            TargetRef::ResultMatch {
+                result_handle,
+                match_id,
+                target_scope,
+            } => {
+                if target_scope != &self.session_state.display_session_id() {
+                    return Err(Self::invalid_params(
+                        "result target belongs to a different session",
+                        Some(
+                            serde_json::json!({"error_code":"TARGET_SCOPE_MISMATCH","correction_hint":"Use a target issued by this session."}),
+                        ),
+                    ));
+                }
+                let anchor = match self.session_result_handle_lookup(result_handle, match_id) {
+                    SessionResultHandleLookup::Found(anchor) => anchor,
+                    SessionResultHandleLookup::StaleHandle => {
+                        return Err(Self::resource_not_found(
+                            "result target is stale",
+                            Some(
+                                serde_json::json!({"error_code":"STALE_HANDLE","correction_hint":"Issue a fresh search or navigation request."}),
+                            ),
+                        ));
+                    }
+                    SessionResultHandleLookup::MixedHandle { .. } => {
+                        return Err(Self::resource_not_found(
+                            "result target does not belong to this handle",
+                            Some(
+                                serde_json::json!({"error_code":"MIXED_HANDLE","correction_hint":"Use the target with its original result handle."}),
+                            ),
+                        ));
+                    }
+                    SessionResultHandleLookup::TargetScopeMismatch => unreachable!(),
+                };
+                let corpus = corpora
+                    .iter()
+                    .find(|c| c.repository_id == anchor.repository_id)
+                    .ok_or_else(|| {
+                        Self::resource_not_found(
+                            "target repository is not available",
+                            Some(serde_json::json!({"error_code":"REPOSITORY_NOT_FOUND"})),
+                        )
+                    })?;
+                let index = anchor
+                    .stable_symbol_id
+                    .as_deref()
+                    .and_then(|id| corpus.symbol_index_by_stable_id.get(id).copied())
+                    .or_else(|| {
+                        Self::unique_coordinate_symbol_index(
+                            corpus,
+                            &anchor.path,
+                            anchor.line,
+                            anchor.column,
+                        )
+                    });
+                let index = index.ok_or_else(|| Self::invalid_params("target anchor cannot be resolved exactly", Some(serde_json::json!({"error_code":"TARGET_ANCHOR_INSUFFICIENT","correction_hint":"Issue a fresh result with a stable target."}))))?;
+                let mut candidates = Vec::new();
+                Self::push_symbol_candidate(&mut candidates, corpus, index, 0);
+                Ok(ResolvedNavigationTarget {
+                    symbol_query: corpus.symbols[index].name.clone(),
+                    selection: NavigationTargetSelection::Resolved(ResolvedSymbolTarget {
+                        candidate: candidates.remove(0),
+                        corpus: Arc::clone(corpus),
+                        candidate_count: 1,
+                        selected_rank_candidate_count: 1,
+                    }),
+                    resolution_source: "result_match",
+                })
+            }
+            TargetRef::StableSymbol {
+                repository_id,
+                stable_symbol_id,
+                snapshot_token,
+            } => {
+                let corpus = corpora
+                    .iter()
+                    .find(|c| &c.repository_id == repository_id)
+                    .ok_or_else(|| {
+                        Self::resource_not_found(
+                            "target repository is not available",
+                            Some(serde_json::json!({"error_code":"REPOSITORY_NOT_FOUND"})),
+                        )
+                    })?;
+                if &corpus.root_signature != snapshot_token {
+                    return Err(Self::resource_not_found(
+                        "target snapshot is stale",
+                        Some(
+                            serde_json::json!({"error_code":"STALE_TARGET_SNAPSHOT","correction_hint":"Issue a fresh symbol result."}),
+                        ),
+                    ));
+                }
+                let index = corpus.symbol_index_by_stable_id.get(stable_symbol_id).copied()
+                    .ok_or_else(|| Self::resource_not_found("target symbol was not found", Some(serde_json::json!({"error_code":"TARGET_NOT_FOUND","correction_hint":"Issue a fresh symbol result."}))))?;
+                let mut candidates = Vec::new();
+                Self::push_symbol_candidate(&mut candidates, corpus, index, 0);
+                Ok(ResolvedNavigationTarget {
+                    symbol_query: corpus.symbols[index].name.clone(),
+                    selection: NavigationTargetSelection::Resolved(ResolvedSymbolTarget {
+                        candidate: candidates.remove(0),
+                        corpus: Arc::clone(corpus),
+                        candidate_count: 1,
+                        selected_rank_candidate_count: 1,
+                    }),
+                    resolution_source: "stable_symbol",
+                })
+            }
+        }
+    }
+
+    fn unique_coordinate_symbol_index(
+        corpus: &RepositorySymbolCorpus,
+        path: &str,
+        line: usize,
+        column: Option<usize>,
+    ) -> Option<usize> {
+        let key = Self::normalize_relative_input_path(path);
+        let indexes = corpus.symbols_by_relative_path.get(&key)?;
+        let mut containing: Vec<usize> = indexes
+            .iter()
+            .copied()
+            .filter(|i| {
+                let s = &corpus.symbols[*i];
+                let start_ok = (s.span.start_line < line)
+                    || (s.span.start_line == line
+                        && column.is_some_and(|c| s.span.start_column <= c));
+                let end_ok = s.span.end_line > line
+                    || (s.span.end_line == line && column.is_none_or(|c| c <= s.span.end_column));
+                start_ok && end_ok
+            })
+            .collect();
+        containing.sort_by_key(|i| {
+            let s = &corpus.symbols[*i];
+            (
+                s.span.end_line.saturating_sub(s.span.start_line),
+                s.span.end_column.saturating_sub(s.span.start_column),
+            )
+        });
+        (containing.len() == 1
+            || containing
+                .get(0)
+                .zip(containing.get(1))
+                .is_some_and(|(a, b)| {
+                    let x = &corpus.symbols[*a];
+                    let y = &corpus.symbols[*b];
+                    x.span.start_line != y.span.start_line
+                        || x.span.start_column != y.span.start_column
+                        || x.span.end_line != y.span.end_line
+                        || x.span.end_column != y.span.end_column
+                }))
+        .then(|| containing[0])
+    }
     fn php_helper_prefixes() -> &'static [(&'static str, NavigationPhpHelperKind)] {
         &[
             ("__(", NavigationPhpHelperKind::Translation),
