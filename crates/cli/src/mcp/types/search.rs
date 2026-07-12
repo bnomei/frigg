@@ -715,7 +715,9 @@ impl SearchSymbolPathClass {
 }
 
 /// Probe kind for multi-hypothesis `search_batch`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchBatchProbeKind {
     Text,
@@ -733,13 +735,56 @@ impl SearchBatchProbeKind {
     }
 }
 
-/// Merge strategy for `search_batch` results.
+/// Legacy input accepted during the two-minor-release `search_batch` compatibility window.
+///
+/// This is deliberately not part of the public request schema: batch merge is fixed to RRF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchBatchMergeMode {
-    /// Prefer probes with more/stronger hits; symbol > text > hybrid tie-break.
+    /// Historical spelling normalized to reciprocal-rank fusion.
     #[default]
     RankByProbeHitStrength,
+}
+
+/// Search substrate reported for one contributing batch probe.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchBatchProbeTrust {
+    LexicalText,
+    IndexedSymbol,
+    RankedHybrid,
+}
+
+/// One distinct probe's retained evidence for a merged batch coordinate.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+pub struct SearchBatchEvidence {
+    pub probe_id: String,
+    pub kind: SearchBatchProbeKind,
+    pub rank_one_based: usize,
+    pub trust: SearchBatchProbeTrust,
+}
+
+/// Derived strength used only after consensus and reciprocal-rank fusion tie.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchBatchMatchStrength {
+    RankedHybrid,
+    IndexedSymbol,
+    ExactLiteral,
+}
+
+impl SearchBatchMatchStrength {
+    pub const fn from_kind(kind: SearchBatchProbeKind) -> Self {
+        match kind {
+            SearchBatchProbeKind::Text => Self::ExactLiteral,
+            SearchBatchProbeKind::Symbol => Self::IndexedSymbol,
+            SearchBatchProbeKind::Hybrid => Self::RankedHybrid,
+        }
+    }
 }
 
 /// One typed probe inside a `search_batch` request.
@@ -774,9 +819,10 @@ pub struct SearchBatchParams {
     /// 2..=8 typed probes. Each entry runs as its own text/symbol/hybrid search;
     /// results are merged after all complete (not one shared multi-query walk).
     pub probes: Vec<SearchBatchProbe>,
-    /// Post-merge ranking only (default `rank_by_probe_hit_strength`). Does not change
-    /// how probes run: probes stay independent concurrent searches.
+    /// Deprecated compatibility input. Only `rank_by_probe_hit_strength` is accepted and is
+    /// normalized to the fixed reciprocal-rank-fusion merge; it is hidden from the public schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub merge: Option<SearchBatchMergeMode>,
     /// Max merged match rows to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -805,10 +851,18 @@ pub struct SearchBatchMatch {
     pub target_ref: Option<super::TargetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_symbol_id: Option<String>,
-    /// Contributing probe ids (deduped multi-probe hits list all).
+    /// Compatibility projection of `evidence` probe ids.
     pub probe_ids: Vec<String>,
-    /// Primary probe kind that produced this row (first contributor).
+    /// Representative contributor kind (the earliest request-order contributor).
     pub kind: SearchBatchProbeKind,
+    /// One deterministic evidence record for every contributing probe.
+    pub evidence: Vec<SearchBatchEvidence>,
+    /// Number of distinct probes contributing retained evidence.
+    pub consensus_count: usize,
+    /// Equal-weight reciprocal-rank fusion: sum(1 / (60 + rank_one_based)).
+    pub rrf_score: f64,
+    /// Strength derived only from retained evidence, never backend scores.
+    pub match_strength: SearchBatchMatchStrength,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
@@ -818,8 +872,6 @@ pub struct SearchBatchMatch {
     pub excerpt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path_class: Option<String>,
-    /// Relative strength score used for ranking (higher is better).
-    pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
 }
@@ -829,6 +881,8 @@ pub struct SearchBatchMatch {
 pub struct SearchBatchProbeSummary {
     pub id: String,
     pub kind: SearchBatchProbeKind,
+    /// Search substrate for this probe; it makes no completeness claim.
+    pub trust: SearchBatchProbeTrust,
     pub hits: usize,
     /// Canonical child cardinality, coverage, and cap state. `hits` remains the legacy count
     /// projection; consumers must use this envelope when a child cannot prove an exact total.
@@ -861,6 +915,11 @@ impl SearchBatchProbeSummary {
         Self {
             id,
             kind,
+            trust: match kind {
+                SearchBatchProbeKind::Text => SearchBatchProbeTrust::LexicalText,
+                SearchBatchProbeKind::Symbol => SearchBatchProbeTrust::IndexedSymbol,
+                SearchBatchProbeKind::Hybrid => SearchBatchProbeTrust::RankedHybrid,
+            },
             hits,
             completeness,
             zero_hit_reason,
@@ -887,6 +946,13 @@ impl SearchBatchProbeSummary {
 pub struct SearchBatchResponse {
     pub matches: Vec<SearchBatchMatch>,
     pub probe_summary: Vec<SearchBatchProbeSummary>,
+    /// The sole batch merge strategy.
+    pub merge_strategy: SearchBatchMergeStrategy,
+    /// Source-owned version of the deterministic merge algorithm.
+    pub merge_algorithm_version: String,
+    /// Emitted only when the schema-hidden legacy `merge` input was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compatibility_note: Option<String>,
     /// Canonical merged-row cardinality, child coverage, and v2 paging truth.
     pub completeness: ResultCompleteness,
     pub returned: usize,
@@ -904,6 +970,13 @@ pub struct SearchBatchResponse {
     /// Flattened recovery on all-zero batches and batch-level next steps.
     #[serde(flatten, default)]
     pub recovery: RecoveryFields,
+}
+
+/// Fixed batch evidence merge strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchBatchMergeStrategy {
+    ReciprocalRankFusion,
 }
 
 #[cfg(test)]
@@ -989,6 +1062,35 @@ mod tests {
         assert_eq!(
             value["stage_attribution"]["candidate_output_count"],
             json!(3)
+        );
+    }
+
+    #[test]
+    fn search_batch_legacy_merge_is_schema_hidden_and_strict() {
+        let schema = schemars::schema_for!(SearchBatchParams);
+        let schema = serde_json::to_value(schema).expect("search_batch schema serializes");
+        assert!(
+            schema["properties"].get("merge").is_none(),
+            "the canonical request schema must not advertise a merge choice"
+        );
+
+        let legacy: SearchBatchParams = serde_json::from_value(json!({
+            "probes": [],
+            "merge": "rank_by_probe_hit_strength"
+        }))
+        .expect("the documented legacy spelling remains readable during its compatibility window");
+        assert_eq!(
+            legacy.merge,
+            Some(SearchBatchMergeMode::RankByProbeHitStrength)
+        );
+
+        assert!(
+            serde_json::from_value::<SearchBatchParams>(json!({
+                "probes": [],
+                "merge": "reciprocal_rank_fusion"
+            }))
+            .is_err(),
+            "only the documented legacy spelling may be accepted"
         );
     }
 

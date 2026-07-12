@@ -11,10 +11,11 @@ use crate::mcp::server_cache::ContinuationBinding;
 use crate::mcp::types::{
     ContinuationValidationError, LatencyClass, NextActionOrigin, NextActionRole, NextActionTarget,
     ReadFileParams, ReadMatchParams, RecoveryFields, ReplayOriginTarget, ResultCompleteness,
-    ResultIncompleteReason, ResultTruncationReason, ResultUnit, SearchBatchMatch,
-    SearchBatchMergeMode, SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind,
-    SearchBatchProbeSummary, SearchBatchResponse, SearchHybridParams, SearchSymbolParams,
-    SearchSymbolPathClass, SearchTextParams, ZeroHitReason, ZeroHitScope, canonical_next_action,
+    ResultIncompleteReason, ResultTruncationReason, ResultUnit, SearchBatchEvidence,
+    SearchBatchMatch, SearchBatchMatchStrength, SearchBatchMergeStrategy, SearchBatchParams,
+    SearchBatchProbe, SearchBatchProbeKind, SearchBatchProbeSummary, SearchBatchProbeTrust,
+    SearchBatchResponse, SearchHybridParams, SearchSymbolParams, SearchSymbolPathClass,
+    SearchTextParams, ZeroHitReason, ZeroHitScope, canonical_next_action,
 };
 use crate::path_class::repository_path_class;
 use std::collections::hash_map::DefaultHasher;
@@ -26,6 +27,7 @@ const MAX_PROBES: usize = 8;
 const PER_PROBE_MATCH_CAP: usize = 40;
 /// Implicit total work budget: per-probe cap × probe count (≤ `MAX_PROBES`).
 const _TOTAL_MATCH_BUDGET: usize = PER_PROBE_MATCH_CAP * MAX_PROBES;
+const SEARCH_BATCH_MERGE_ALGORITHM_VERSION: &str = "rrf-v1";
 
 type SearchBatchProbeOutput =
     Result<Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>, ErrorData>;
@@ -92,9 +94,9 @@ impl FriggMcpServer {
         let (resume_from, continuation_binding) =
             self.search_batch_continuation_context(&params)?;
         let response_mode = params.response_mode;
-        let _merge = params
-            .merge
-            .unwrap_or(SearchBatchMergeMode::RankByProbeHitStrength);
+        let compatibility_note = params.merge.map(|_| {
+            "Deprecated merge=rank_by_probe_hit_strength was normalized to fixed reciprocal_rank_fusion. This compatibility input will be removed after two minor releases.".to_owned()
+        });
 
         let probe_outcomes = self
             .search_batch_run_probes_concurrent(
@@ -105,63 +107,7 @@ impl FriggMcpServer {
             .await?;
 
         let mut probe_summaries = Vec::with_capacity(probe_outcomes.len());
-        let mut merged: Vec<SearchBatchMatch> = Vec::new();
-        let mut dedupe_index: std::collections::HashMap<(String, String, usize, usize), usize> =
-            std::collections::HashMap::new();
-
-        for (summary, rows) in probe_outcomes {
-            for mut row in rows {
-                let key = (
-                    row.repository_id.clone(),
-                    row.path.clone(),
-                    row.line,
-                    row.column.unwrap_or(0),
-                );
-                if let Some(&idx) = dedupe_index.get(&key) {
-                    let existing = &mut merged[idx];
-                    for probe_id in row.probe_ids.drain(..) {
-                        if !existing.probe_ids.contains(&probe_id) {
-                            existing.probe_ids.push(probe_id);
-                        }
-                    }
-                    if row.score > existing.score
-                        || (row.score == existing.score
-                            && kind_rank(row.kind) < kind_rank(existing.kind))
-                    {
-                        existing.score = row.score;
-                        existing.kind = row.kind;
-                        if existing.excerpt.is_none() {
-                            existing.excerpt = row.excerpt.take();
-                        }
-                        if existing.symbol.is_none() {
-                            existing.symbol = row.symbol.take();
-                        }
-                        if existing.path_class.is_none() {
-                            existing.path_class = row.path_class.take();
-                        }
-                        if existing.stable_symbol_id.is_none() {
-                            existing.stable_symbol_id = row.stable_symbol_id.take();
-                        }
-                    }
-                } else {
-                    let idx = merged.len();
-                    dedupe_index.insert(key, idx);
-                    merged.push(row);
-                }
-            }
-            probe_summaries.push(summary);
-        }
-
-        let _ = _merge;
-        merged.sort_by(|left, right| {
-            right
-                .score
-                .partial_cmp(&left.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| kind_rank(left.kind).cmp(&kind_rank(right.kind)))
-                .then_with(|| left.path.cmp(&right.path))
-                .then_with(|| left.line.cmp(&right.line))
-        });
+        let merged = merge_batch_rows(probe_outcomes, &mut probe_summaries);
 
         let total_merged = merged.len();
         let page: Vec<SearchBatchMatch> =
@@ -215,6 +161,9 @@ impl FriggMcpServer {
         let mut response = SearchBatchResponse {
             matches: page,
             probe_summary: probe_summaries,
+            merge_strategy: SearchBatchMergeStrategy::ReciprocalRankFusion,
+            merge_algorithm_version: SEARCH_BATCH_MERGE_ALGORITHM_VERSION.to_owned(),
+            compatibility_note,
             completeness,
             returned,
             truncated,
@@ -496,19 +445,23 @@ impl FriggMcpServer {
                 let rows = body
                     .matches
                     .into_iter()
-                    .map(|matched| SearchBatchMatch {
+                    .enumerate()
+                    .map(|(index, matched)| SearchBatchMatch {
                         match_id: None,
                         target_ref: None,
                         stable_symbol_id: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Text,
+                        evidence: vec![batch_evidence(probe, index + 1)],
+                        consensus_count: 1,
+                        rrf_score: reciprocal_rank_fusion(&[index + 1]),
+                        match_strength: SearchBatchMatchStrength::ExactLiteral,
                         repository_id: matched.repository_id,
                         path: matched.path.clone(),
                         line: matched.line,
                         column: Some(matched.column),
                         excerpt: Some(matched.excerpt),
                         path_class: Some(repository_path_class(&matched.path).to_owned()),
-                        score: text_score(hits.max(1)),
                         symbol: None,
                     })
                     .collect::<Vec<_>>();
@@ -543,12 +496,17 @@ impl FriggMcpServer {
                 let rows = body
                     .matches
                     .into_iter()
-                    .map(|matched| SearchBatchMatch {
+                    .enumerate()
+                    .map(|(index, matched)| SearchBatchMatch {
                         match_id: None,
                         target_ref: None,
                         stable_symbol_id: matched.stable_symbol_id,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Symbol,
+                        evidence: vec![batch_evidence(probe, index + 1)],
+                        consensus_count: 1,
+                        rrf_score: reciprocal_rank_fusion(&[index + 1]),
+                        match_strength: SearchBatchMatchStrength::IndexedSymbol,
                         repository_id: matched.repository_id,
                         path: matched.path.clone(),
                         line: matched.line,
@@ -557,7 +515,6 @@ impl FriggMcpServer {
                         path_class: matched
                             .path_class
                             .or_else(|| Some(repository_path_class(&matched.path).to_owned())),
-                        score: symbol_score(hits.max(1)),
                         symbol: Some(matched.symbol),
                     })
                     .collect::<Vec<_>>();
@@ -593,12 +550,17 @@ impl FriggMcpServer {
                 let rows = body
                     .matches
                     .into_iter()
-                    .map(|matched| SearchBatchMatch {
+                    .enumerate()
+                    .map(|(index, matched)| SearchBatchMatch {
                         match_id: None,
                         target_ref: None,
                         stable_symbol_id: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Hybrid,
+                        evidence: vec![batch_evidence(probe, index + 1)],
+                        consensus_count: 1,
+                        rrf_score: reciprocal_rank_fusion(&[index + 1]),
+                        match_strength: SearchBatchMatchStrength::RankedHybrid,
                         repository_id: matched.repository_id,
                         path: matched.path.clone(),
                         line: matched.line,
@@ -608,7 +570,6 @@ impl FriggMcpServer {
                             .path_class
                             .map(|class| class.as_str().to_owned())
                             .or_else(|| Some(repository_path_class(&matched.path).to_owned())),
-                        score: hybrid_score(matched.blended_score),
                         symbol: None,
                     })
                     .collect::<Vec<_>>();
@@ -668,24 +629,118 @@ impl FriggMcpServer {
     }
 }
 
-fn kind_rank(kind: SearchBatchProbeKind) -> u8 {
-    match kind {
-        SearchBatchProbeKind::Symbol => 0,
-        SearchBatchProbeKind::Text => 1,
-        SearchBatchProbeKind::Hybrid => 2,
+fn batch_evidence(probe: &SearchBatchProbe, rank_one_based: usize) -> SearchBatchEvidence {
+    let trust = match probe.kind {
+        SearchBatchProbeKind::Text => SearchBatchProbeTrust::LexicalText,
+        SearchBatchProbeKind::Symbol => SearchBatchProbeTrust::IndexedSymbol,
+        SearchBatchProbeKind::Hybrid => SearchBatchProbeTrust::RankedHybrid,
+    };
+    SearchBatchEvidence {
+        probe_id: probe.id.clone(),
+        kind: probe.kind,
+        rank_one_based,
+        trust,
     }
 }
 
-fn text_score(total_hits: usize) -> f32 {
-    10.0 + (total_hits.min(20) as f32) * 0.1
+fn reciprocal_rank_fusion(ranks: &[usize]) -> f64 {
+    ranks.iter().map(|rank| 1.0 / (60 + rank) as f64).sum()
 }
 
-fn symbol_score(total_hits: usize) -> f32 {
-    20.0 + (total_hits.min(20) as f32) * 0.1
-}
+fn merge_batch_rows(
+    probe_outcomes: Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>,
+    probe_summaries: &mut Vec<SearchBatchProbeSummary>,
+) -> Vec<SearchBatchMatch> {
+    let mut merged = Vec::new();
+    let mut dedupe_index = std::collections::HashMap::new();
+    // Outcomes are returned in request order. Retain that order independently of
+    // probe ids: ids are caller-chosen labels, not a ranking signal.
+    let probe_request_order: std::collections::HashMap<String, usize> = probe_outcomes
+        .iter()
+        .enumerate()
+        .map(|(request_order, (summary, _))| (summary.id.clone(), request_order))
+        .collect();
 
-fn hybrid_score(blended: f32) -> f32 {
-    5.0 + blended.max(0.0)
+    for (summary, rows) in probe_outcomes {
+        for mut row in rows {
+            let key = (
+                row.repository_id.clone(),
+                row.path.clone(),
+                row.line,
+                row.column.unwrap_or(0),
+            );
+            if let Some(&index) = dedupe_index.get(&key) {
+                let existing: &mut SearchBatchMatch = &mut merged[index];
+                for evidence in row.evidence.drain(..) {
+                    if !existing
+                        .evidence
+                        .iter()
+                        .any(|retained| retained.probe_id == evidence.probe_id)
+                    {
+                        existing.evidence.push(evidence);
+                    }
+                }
+                // The first row is the earliest request-order contributor. It owns the
+                // representative, while later contributors only fill absent optional fields.
+                if existing.excerpt.is_none() {
+                    existing.excerpt = row.excerpt.take();
+                }
+                if existing.symbol.is_none() {
+                    existing.symbol = row.symbol.take();
+                }
+                if existing.path_class.is_none() {
+                    existing.path_class = row.path_class.take();
+                }
+                if existing.stable_symbol_id.is_none() {
+                    existing.stable_symbol_id = row.stable_symbol_id.take();
+                }
+            } else {
+                let index = merged.len();
+                dedupe_index.insert(key, index);
+                merged.push(row);
+            }
+        }
+        probe_summaries.push(summary);
+    }
+
+    for row in &mut merged {
+        row.evidence.sort_by_key(|evidence| {
+            *probe_request_order
+                .get(&evidence.probe_id)
+                .expect("merged evidence always belongs to a requested probe")
+        });
+        row.probe_ids = row
+            .evidence
+            .iter()
+            .map(|evidence| evidence.probe_id.clone())
+            .collect();
+        row.consensus_count = row.probe_ids.len();
+        row.rrf_score = reciprocal_rank_fusion(
+            &row.evidence
+                .iter()
+                .map(|evidence| evidence.rank_one_based)
+                .collect::<Vec<_>>(),
+        );
+        row.match_strength = row
+            .evidence
+            .iter()
+            .map(|evidence| SearchBatchMatchStrength::from_kind(evidence.kind))
+            .max()
+            .expect("merged rows always retain evidence");
+    }
+    merged.sort_by(|left, right| {
+        right
+            .consensus_count
+            .cmp(&left.consensus_count)
+            .then_with(|| right.rrf_score.total_cmp(&left.rrf_score))
+            .then_with(|| right.match_strength.cmp(&left.match_strength))
+            .then_with(|| left.repository_id.cmp(&right.repository_id))
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.column.cmp(&right.column))
+            .then_with(|| left.evidence.cmp(&right.evidence))
+    });
+    merged
 }
 
 /// Echo only filters actually applied by the probe kind (not raw request fields).
@@ -742,7 +797,6 @@ fn probe_scope(probe: &SearchBatchProbe) -> Option<ZeroHitScope> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::types::SearchBatchMergeMode;
 
     #[test]
     fn probe_count_bounds_are_documented() {
@@ -751,9 +805,201 @@ mod tests {
     }
 
     #[test]
-    fn kind_rank_prefers_symbol() {
-        assert!(kind_rank(SearchBatchProbeKind::Symbol) < kind_rank(SearchBatchProbeKind::Text));
-        assert!(kind_rank(SearchBatchProbeKind::Text) < kind_rank(SearchBatchProbeKind::Hybrid));
+    fn search_batch_rrf_consensus_strength_and_evidence_are_deterministic() {
+        let complete = ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+            .expect("empty probe fixture is complete");
+        let row = |probe_id: &str,
+                   kind: SearchBatchProbeKind,
+                   rank: usize,
+                   path: &str|
+         -> SearchBatchMatch {
+            SearchBatchMatch {
+                match_id: None,
+                target_ref: None,
+                stable_symbol_id: None,
+                probe_ids: vec![probe_id.to_owned()],
+                kind,
+                evidence: vec![SearchBatchEvidence {
+                    probe_id: probe_id.to_owned(),
+                    kind,
+                    rank_one_based: rank,
+                    trust: match kind {
+                        SearchBatchProbeKind::Text => SearchBatchProbeTrust::LexicalText,
+                        SearchBatchProbeKind::Symbol => SearchBatchProbeTrust::IndexedSymbol,
+                        SearchBatchProbeKind::Hybrid => SearchBatchProbeTrust::RankedHybrid,
+                    },
+                }],
+                consensus_count: 1,
+                rrf_score: 0.0,
+                match_strength: SearchBatchMatchStrength::RankedHybrid,
+                repository_id: "repo".to_owned(),
+                path: path.to_owned(),
+                line: 1,
+                column: Some(1),
+                excerpt: None,
+                path_class: None,
+                symbol: None,
+            }
+        };
+        let mut summaries = Vec::new();
+        let merged = merge_batch_rows(
+            vec![
+                (
+                    SearchBatchProbeSummary::canonical(
+                        "text".to_owned(),
+                        SearchBatchProbeKind::Text,
+                        2,
+                        complete.clone(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    vec![
+                        row("text", SearchBatchProbeKind::Text, 1, "shared.rs"),
+                        row("text", SearchBatchProbeKind::Text, 2, "text.rs"),
+                    ],
+                ),
+                (
+                    SearchBatchProbeSummary::canonical(
+                        "symbol".to_owned(),
+                        SearchBatchProbeKind::Symbol,
+                        1,
+                        complete,
+                        None,
+                        None,
+                        None,
+                    ),
+                    vec![row("symbol", SearchBatchProbeKind::Symbol, 1, "shared.rs")],
+                ),
+            ],
+            &mut summaries,
+        );
+        assert_eq!(
+            merged[0].path, "shared.rs",
+            "consensus sorts before strength"
+        );
+        assert_eq!(merged[0].consensus_count, 2);
+        assert_eq!(merged[0].evidence.len(), 2);
+        assert_eq!(
+            merged[0].match_strength,
+            SearchBatchMatchStrength::ExactLiteral
+        );
+        assert!((merged[0].rrf_score - (1.0 / 61.0 + 1.0 / 61.0)).abs() < 1e-12);
+        assert_eq!(
+            merged[0]
+                .evidence
+                .iter()
+                .map(|evidence| evidence.probe_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["text", "symbol"],
+            "evidence retains request order rather than lexical probe-id order"
+        );
+        assert_eq!(merged[1].path, "text.rs");
+        assert_eq!(
+            merged[1].match_strength,
+            SearchBatchMatchStrength::ExactLiteral
+        );
+        assert_eq!(summaries.len(), 2);
+    }
+
+    #[test]
+    fn search_batch_rrf_uses_strength_then_canonical_ties_and_dedupes_probe_evidence() {
+        let complete = ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+            .expect("empty probe fixture is complete");
+        let row = |probe_id: &str,
+                   kind: SearchBatchProbeKind,
+                   rank: usize,
+                   path: &str|
+         -> SearchBatchMatch {
+            SearchBatchMatch {
+                match_id: None,
+                target_ref: None,
+                stable_symbol_id: None,
+                probe_ids: vec![probe_id.to_owned()],
+                kind,
+                evidence: vec![SearchBatchEvidence {
+                    probe_id: probe_id.to_owned(),
+                    kind,
+                    rank_one_based: rank,
+                    trust: match kind {
+                        SearchBatchProbeKind::Text => SearchBatchProbeTrust::LexicalText,
+                        SearchBatchProbeKind::Symbol => SearchBatchProbeTrust::IndexedSymbol,
+                        SearchBatchProbeKind::Hybrid => SearchBatchProbeTrust::RankedHybrid,
+                    },
+                }],
+                consensus_count: 1,
+                rrf_score: 0.0,
+                match_strength: SearchBatchMatchStrength::RankedHybrid,
+                repository_id: "repo".to_owned(),
+                path: path.to_owned(),
+                line: 1,
+                column: Some(1),
+                excerpt: None,
+                path_class: None,
+                symbol: None,
+            }
+        };
+        let mut summaries = Vec::new();
+        let merged = merge_batch_rows(
+            vec![
+                (
+                    SearchBatchProbeSummary::canonical(
+                        "text".to_owned(),
+                        SearchBatchProbeKind::Text,
+                        5,
+                        complete.clone(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    vec![
+                        row("text", SearchBatchProbeKind::Text, 1, "exact.rs"),
+                        row("text", SearchBatchProbeKind::Text, 1, "b.rs"),
+                        row("text", SearchBatchProbeKind::Text, 1, "a.rs"),
+                        row("text", SearchBatchProbeKind::Text, 1, "duplicate.rs"),
+                        row("text", SearchBatchProbeKind::Text, 2, "duplicate.rs"),
+                    ],
+                ),
+                (
+                    SearchBatchProbeSummary::canonical(
+                        "symbol".to_owned(),
+                        SearchBatchProbeKind::Symbol,
+                        1,
+                        complete,
+                        None,
+                        None,
+                        None,
+                    ),
+                    vec![row("symbol", SearchBatchProbeKind::Symbol, 1, "symbol.rs")],
+                ),
+            ],
+            &mut summaries,
+        );
+
+        let paths = merged
+            .iter()
+            .map(|row| row.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec!["a.rs", "b.rs", "duplicate.rs", "exact.rs", "symbol.rs"],
+            "equal consensus and RRF rows use derived strength before canonical coordinates"
+        );
+        assert_eq!(
+            merged.last().expect("symbol row retained").match_strength,
+            SearchBatchMatchStrength::IndexedSymbol,
+            "exact literal strength wins the equal-RRF tie against indexed symbols"
+        );
+        let duplicate = merged
+            .iter()
+            .find(|row| row.path == "duplicate.rs")
+            .expect("duplicate coordinate retained once");
+        assert_eq!(duplicate.consensus_count, 1);
+        assert_eq!(duplicate.probe_ids, vec!["text"]);
+        assert_eq!(duplicate.evidence.len(), 1);
+        assert_eq!(duplicate.evidence[0].rank_one_based, 1);
+        assert!((duplicate.rrf_score - 1.0 / 61.0).abs() < 1e-12);
+        assert_eq!(summaries.len(), 2);
     }
 
     #[test]
@@ -856,13 +1102,5 @@ mod tests {
         assert_eq!(symbol_scope.path_regex.as_deref(), Some("^src/"));
         assert!(symbol_scope.glob.is_none());
         assert_eq!(symbol_scope.path_class.as_deref(), Some("runtime"));
-    }
-
-    #[test]
-    fn merge_mode_default_is_rank_by_probe_hit_strength() {
-        assert_eq!(
-            SearchBatchMergeMode::default(),
-            SearchBatchMergeMode::RankByProbeHitStrength
-        );
     }
 }

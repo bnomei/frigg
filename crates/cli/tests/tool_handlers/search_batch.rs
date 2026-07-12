@@ -2,8 +2,9 @@
 
 use super::*;
 use frigg::mcp::types::{
-    NextActionOrigin, NextActionTarget, ReplayOriginTarget, SearchBatchParams, SearchBatchProbe,
-    SearchBatchProbeKind, SearchBatchResponse,
+    NextActionOrigin, NextActionTarget, ReplayOriginTarget, SearchBatchMergeMode,
+    SearchBatchMergeStrategy, SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind,
+    SearchBatchResponse,
 };
 
 #[tokio::test]
@@ -52,6 +53,16 @@ async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
         "expected merged matches for greeting probes: {response:?}"
     );
     assert_eq!(response.probe_summary.len(), 2);
+    assert_eq!(
+        response.merge_strategy,
+        SearchBatchMergeStrategy::ReciprocalRankFusion
+    );
+    assert_eq!(response.merge_algorithm_version, "rrf-v1");
+    assert!(response.matches.iter().all(|matched| {
+        matched.consensus_count == matched.evidence.len()
+            && matched.rrf_score > 0.0
+            && !matched.evidence.is_empty()
+    }));
     assert_eq!(response.completeness.returned, response.matches.len());
     assert_eq!(response.completeness.total, Some(response.matches.len()));
     assert!(response.completeness.complete);
@@ -177,6 +188,44 @@ async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
             _ => unreachable!(),
         }
     }
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_batch_legacy_merge_emits_compatibility_note() {
+    let workspace_root = fresh_fixture_root("tool-handlers-search-batch-legacy-merge");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let params: SearchBatchParams = serde_json::from_value(serde_json::json!({
+        "probes": [
+            { "id": "text", "kind": "text", "query": "greeting" },
+            { "id": "symbol", "kind": "symbol", "query": "greeting" }
+        ],
+        "merge": "rank_by_probe_hit_strength",
+        "limit": 5
+    }))
+    .expect("the schema-hidden legacy merge spelling deserializes");
+    assert_eq!(
+        params.merge,
+        Some(SearchBatchMergeMode::RankByProbeHitStrength)
+    );
+
+    let response = server
+        .search_batch(Parameters(params))
+        .await
+        .expect("legacy merge input normalizes to fixed RRF")
+        .0;
+    assert_eq!(
+        response.merge_strategy,
+        SearchBatchMergeStrategy::ReciprocalRankFusion
+    );
+    assert!(
+        response
+            .compatibility_note
+            .as_deref()
+            .is_some_and(|note| note.contains("Deprecated merge=rank_by_probe_hit_strength")),
+        "legacy input must be observable as a compatibility deprecation"
+    );
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -311,6 +360,9 @@ async fn search_batch_response_wire_shape_includes_summaries() {
     let value = serde_json::to_value(SearchBatchResponse {
         matches: Vec::new(),
         probe_summary: Vec::new(),
+        merge_strategy: SearchBatchMergeStrategy::ReciprocalRankFusion,
+        merge_algorithm_version: "rrf-v1".to_owned(),
+        compatibility_note: None,
         completeness: ResultCompleteness::complete(ResultUnit::BatchProbe, 0, 0)
             .expect("empty batch fixture is complete"),
         returned: 0,
