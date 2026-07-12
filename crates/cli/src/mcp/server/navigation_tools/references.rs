@@ -368,6 +368,17 @@ impl FriggMcpServer {
         &self,
         params: FindReferencesParams,
     ) -> Result<Json<FindReferencesResponse>, ErrorData> {
+        self.find_references_for_resolved_target_impl(params, None)
+            .await
+    }
+
+    /// Run references with an already-selected target.  Composite tools use this to keep one
+    /// target decision through their child computations instead of re-resolving a public input.
+    pub(in crate::mcp::server) async fn find_references_for_resolved_target_impl(
+        &self,
+        params: FindReferencesParams,
+        resolved_target: Option<ResolvedNavigationTarget>,
+    ) -> Result<Json<FindReferencesResponse>, ErrorData> {
         let requested_page_limit = self.navigation_page_limit(params.limit)?;
         let execution_context =
             self.read_only_tool_execution_context("find_references", params.repository_id.clone());
@@ -375,6 +386,7 @@ impl FriggMcpServer {
         let resource_budgets = self.find_references_resource_budgets();
         let resource_budget_metadata = Self::find_references_budget_metadata(resource_budgets);
         let params_for_blocking = params.clone();
+        let resolved_target_for_blocking = resolved_target.clone();
         let server = self.clone();
         let resource_budget_metadata_for_blocking = resource_budget_metadata.clone();
         let execution = self.run_read_only_tool_blocking(&execution_context, move || {
@@ -482,7 +494,9 @@ impl FriggMcpServer {
                 let resolve_by_location = params_for_blocking.path.is_some()
                     || params_for_blocking.line.is_some()
                     || params_for_blocking.column.is_some();
-                let resolved_target = if resolve_by_location {
+                let resolved_target = if let Some(resolved_target) = resolved_target_for_blocking.clone() {
+                    resolved_target
+                } else if resolve_by_location {
                     server.resolve_navigation_request(
                         &corpora,
                         params_for_blocking.target.as_ref(),

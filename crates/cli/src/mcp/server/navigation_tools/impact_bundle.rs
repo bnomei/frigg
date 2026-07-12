@@ -7,8 +7,8 @@ use crate::mcp::types::{
     FindImplementationsParams, FindReferencesParams, ImpactBundleParams, ImpactBundleResponse,
     IncomingCallsParams, NextActionOrigin, NextActionRole, NextActionTarget, ReadFileParams,
     ReadMatchParams, ReplayOriginTarget, ResultCompleteness, ResultIncompleteReason, ResultUnit,
-    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceParams,
-    canonical_next_action,
+    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
+    WorkspaceParams, canonical_next_action,
 };
 
 fn unavailable_section(unit: ResultUnit) -> ResultCompleteness {
@@ -32,7 +32,37 @@ impl FriggMcpServer {
     ) -> Result<Json<ImpactBundleResponse>, ErrorData> {
         let execution_context =
             self.read_only_tool_execution_context("impact_bundle", params.repository_id.clone());
-        let symbol = params.symbol.trim().to_owned();
+        if params.target.is_some() && !params.symbol.trim().is_empty() {
+            return Err(Self::invalid_params(
+                "impact_bundle accepts either target or symbol, not both",
+                Some(json!({
+                    "error_code": "CONFLICTING_TARGET_INPUT",
+                    "correction_hint": "Pass an issued target or one non-empty legacy symbol."
+                })),
+            ));
+        }
+        // A stable target is authoritative. Resolve it before touching the symbol index so
+        // target-only callers do not fail the legacy required-symbol validation (and never let a
+        // caller-provided name override the issued target).
+        let resolved_target = if let Some(target) = params.target.as_ref() {
+            let corpora =
+                self.collect_repository_symbol_corpora(params.repository_id.as_deref())?;
+            Some(self.resolve_navigation_request(
+                &corpora,
+                Some(target),
+                None,
+                None,
+                None,
+                None,
+                params.repository_id.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        let symbol = resolved_target
+            .as_ref()
+            .map(|target| target.symbol_query.clone())
+            .unwrap_or_else(|| params.symbol.trim().to_owned());
         if symbol.is_empty() {
             let mut recovery = RecoveryFields::default();
             recovery.error_code = Some("MISSING_SYMBOL".to_owned());
@@ -64,6 +94,7 @@ impl FriggMcpServer {
                 ImpactBundleResponse {
                     symbol: String::new(),
                     path_class: "runtime".to_owned(),
+                    target_selection: None,
                     summary: ImpactBundleResponse::compute_summary(
                         &[],
                         &[],
@@ -106,8 +137,58 @@ impl FriggMcpServer {
         }
         .to_owned();
 
-        let symbols_response = self
-            .search_symbol_impl(SearchSymbolParams {
+        let symbols_response = if let Some(resolved_target) = resolved_target.as_ref() {
+            let NavigationTargetSelection::Resolved(target) = &resolved_target.selection else {
+                return Err(Self::invalid_params(
+                    "impact target must select exactly one symbol",
+                    Some(json!({"error_code":"TARGET_ANCHOR_INSUFFICIENT"})),
+                ));
+            };
+            let candidate = &target.candidate;
+            let path = Self::relative_display_path(&candidate.root, &candidate.symbol.path);
+            let symbol = SymbolMatch {
+                match_id: None,
+                target_ref: None,
+                stable_symbol_id: Some(candidate.symbol.stable_id.clone()),
+                repository_id: candidate.repository_id.clone(),
+                symbol: candidate.symbol.name.clone(),
+                kind: candidate.symbol.kind.as_str().to_owned(),
+                path: path.clone(),
+                line: candidate.symbol.line,
+                column: (candidate.symbol.span.start_column > 0)
+                    .then_some(candidate.symbol.span.start_column),
+                excerpt: Some(format!(
+                    "{} {}",
+                    candidate.symbol.kind.as_str(),
+                    candidate.symbol.name
+                )),
+                path_class: Some(Self::navigation_path_class(&path).to_owned()),
+                container: None,
+                signature: None,
+            };
+            SearchSymbolResponse {
+                matches: vec![symbol],
+                completeness: ResultCompleteness::try_new(
+                    ResultUnit::Symbol,
+                    1,
+                    Some(1),
+                    true,
+                    false,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                )
+                .expect("exact target symbol completeness is valid"),
+                result_handle: None,
+                handle_scope: None,
+                handle_expires: None,
+                latency_class: None,
+                metadata: None,
+                note: None,
+                recovery: RecoveryFields::default(),
+            }
+        } else {
+            self.search_symbol_impl(SearchSymbolParams {
                 query: symbol.clone(),
                 repository_id: params.repository_id.clone(),
                 path_class: Some(path_class),
@@ -117,7 +198,8 @@ impl FriggMcpServer {
                 response_mode: params.response_mode,
             })
             .await?
-            .0;
+            .0
+        };
 
         if symbols_response.matches.is_empty() {
             let mut recovery = symbols_response.recovery;
@@ -190,6 +272,7 @@ impl FriggMcpServer {
             let response = ImpactBundleResponse {
                 symbol,
                 path_class: path_class_label,
+                target_selection: None,
                 summary: ImpactBundleResponse::compute_summary(
                     &[],
                     &[],
@@ -227,46 +310,127 @@ impl FriggMcpServer {
             );
         }
 
+        let legacy_selection = if params.target.is_none() {
+            let corpora =
+                self.collect_repository_symbol_corpora(params.repository_id.as_deref())?;
+            Some((
+                self.resolve_navigation_request(
+                    &corpora,
+                    None,
+                    Some(&symbol),
+                    None,
+                    None,
+                    None,
+                    params.repository_id.as_deref(),
+                )?,
+                corpora,
+            ))
+        } else {
+            None
+        };
+
+        if let Some((resolved_legacy_target, corpora)) = legacy_selection.as_ref()
+            && matches!(
+                &resolved_legacy_target.selection,
+                NavigationTargetSelection::DisambiguationRequired(_)
+            )
+        {
+            let target_selection = Self::navigation_target_selection_summary_for_selection(
+                corpora,
+                &resolved_legacy_target.symbol_query,
+                &resolved_legacy_target.selection,
+            );
+            let references_completeness = unavailable_section(ResultUnit::Reference);
+            let incoming_calls_completeness = unavailable_section(ResultUnit::IncomingCall);
+            let completeness = ImpactBundleResponse::aggregate_completeness(&[
+                &symbols_response.completeness,
+                &references_completeness,
+                &incoming_calls_completeness,
+            ]);
+            return Ok(Json(
+                ImpactBundleResponse {
+                    symbol,
+                    path_class: path_class_label,
+                    target_selection: Some(target_selection),
+                    summary: ImpactBundleResponse::compute_summary(
+                        &symbols_response.matches,
+                        &[],
+                        &[],
+                        &[],
+                        NavigationMode::UnavailableNoPrecise,
+                        NavigationMode::UnavailableNoPrecise,
+                        None,
+                        false,
+                    ),
+                    symbols: symbols_response.matches,
+                    symbols_completeness: symbols_response.completeness,
+                    symbols_result_handle: symbols_response.result_handle,
+                    references: Vec::new(),
+                    references_completeness,
+                    references_result_handle: None,
+                    references_mode: NavigationMode::UnavailableNoPrecise,
+                    incoming_calls: Vec::new(),
+                    incoming_calls_completeness,
+                    incoming_calls_result_handle: None,
+                    incoming_calls_mode: NavigationMode::UnavailableNoPrecise,
+                    implementations: Vec::new(),
+                    implementations_completeness: None,
+                    implementations_result_handle: None,
+                    implementations_mode: None,
+                    implementations_included: false,
+                    completeness,
+                    recovery: RecoveryFields::default(),
+                }
+                .with_computed_summary(),
+            ));
+        }
+
         let selected_symbol = symbols_response
             .matches
-            .first()
-            .expect("non-empty symbols response should have a first match")
-            .clone();
+            .get(0)
+            .cloned()
+            .expect("non-empty symbols response should have a first match");
         let selected_repository_id = Some(selected_symbol.repository_id.clone());
         let selected_path = Some(selected_symbol.path.clone());
         let selected_line = Some(selected_symbol.line);
         let selected_column = selected_symbol.column;
 
         let references_response = self
-            .find_references_impl(FindReferencesParams {
-                target: None,
-                symbol: None,
-                repository_id: selected_repository_id.clone(),
-                path: selected_path.clone(),
-                line: selected_line,
-                column: selected_column,
-                include_definition: Some(false),
-                include_follow_up_structural: None,
-                limit: None,
-                continuation: None,
-                response_mode: params.response_mode,
-            })
+            .find_references_for_resolved_target_impl(
+                FindReferencesParams {
+                    target: params.target.clone(),
+                    symbol: None,
+                    repository_id: selected_repository_id.clone(),
+                    path: selected_path.clone(),
+                    line: selected_line,
+                    column: selected_column,
+                    include_definition: Some(false),
+                    include_follow_up_structural: None,
+                    limit: None,
+                    continuation: None,
+                    response_mode: params.response_mode,
+                },
+                resolved_target.clone(),
+            )
             .await?
             .0;
 
         let incoming_response = self
-            .incoming_calls_impl(IncomingCallsParams {
-                target: None,
-                symbol: None,
-                repository_id: selected_repository_id.clone(),
-                path: selected_path.clone(),
-                line: selected_line,
-                column: selected_column,
-                include_follow_up_structural: None,
-                limit: None,
-                continuation: None,
-                response_mode: params.response_mode,
-            })
+            .incoming_calls_for_resolved_target_impl(
+                IncomingCallsParams {
+                    target: params.target.clone(),
+                    symbol: None,
+                    repository_id: selected_repository_id.clone(),
+                    path: selected_path.clone(),
+                    line: selected_line,
+                    column: selected_column,
+                    include_follow_up_structural: None,
+                    limit: None,
+                    continuation: None,
+                    response_mode: params.response_mode,
+                },
+                resolved_target.clone(),
+            )
             .await?
             .0;
 
@@ -284,18 +448,21 @@ impl FriggMcpServer {
             implementations_mode,
         ) = if include_implementations {
             let impl_response = self
-                .find_implementations_impl(FindImplementationsParams {
-                    target: None,
-                    symbol: None,
-                    repository_id: selected_repository_id.clone(),
-                    path: selected_path.clone(),
-                    line: selected_line,
-                    column: selected_column,
-                    include_follow_up_structural: None,
-                    limit: None,
-                    continuation: None,
-                    response_mode: params.response_mode,
-                })
+                .find_implementations_for_resolved_target_impl(
+                    FindImplementationsParams {
+                        target: params.target.clone(),
+                        symbol: None,
+                        repository_id: selected_repository_id.clone(),
+                        path: selected_path.clone(),
+                        line: selected_line,
+                        column: selected_column,
+                        include_follow_up_structural: None,
+                        limit: None,
+                        continuation: None,
+                        response_mode: params.response_mode,
+                    },
+                    resolved_target.clone(),
+                )
                 .await?
                 .0;
             (
@@ -432,6 +599,7 @@ impl FriggMcpServer {
         let response = ImpactBundleResponse {
             symbol: symbol.clone(),
             path_class: path_class_label,
+            target_selection: None,
             summary: ImpactBundleResponse::compute_summary(
                 &symbols_response.matches,
                 &references_response.matches,

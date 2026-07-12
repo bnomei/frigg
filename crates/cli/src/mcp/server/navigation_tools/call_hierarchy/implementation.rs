@@ -11,6 +11,16 @@ impl FriggMcpServer {
         &self,
         params: FindImplementationsParams,
     ) -> Result<Json<FindImplementationsResponse>, ErrorData> {
+        self.find_implementations_for_resolved_target_impl(params, None)
+            .await
+    }
+
+    /// Run implementations against a target selected by a composite navigation operation.
+    pub(in crate::mcp::server) async fn find_implementations_for_resolved_target_impl(
+        &self,
+        params: FindImplementationsParams,
+        resolved_target: Option<ResolvedNavigationTarget>,
+    ) -> Result<Json<FindImplementationsResponse>, ErrorData> {
         let page_limit = self.navigation_page_limit(params.limit)?;
         let (resume_offset, continuation_binding) = self.navigation_continuation_context(
             "find_implementations",
@@ -23,6 +33,7 @@ impl FriggMcpServer {
         let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
+        let resolved_target_for_blocking = resolved_target.clone();
         let server = self.clone();
         let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
@@ -62,7 +73,7 @@ impl FriggMcpServer {
                     .map(|corpus| corpus.repository_id.clone())
                     .collect::<Vec<_>>();
 
-                let resolved_target = server.resolve_navigation_request(
+                let resolved_target = resolved_target_for_blocking.clone().unwrap_or(server.resolve_navigation_request(
                     &corpora,
                     params_for_blocking.target.as_ref(),
                     params_for_blocking.symbol.as_deref(),
@@ -70,7 +81,7 @@ impl FriggMcpServer {
                     params_for_blocking.line,
                     params_for_blocking.column,
                     params_for_blocking.repository_id.as_deref(),
-                )?;
+                )?);
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
                 let target_selection = Some(Self::navigation_target_selection_summary_for_selection(
@@ -269,6 +280,16 @@ impl FriggMcpServer {
         &self,
         params: IncomingCallsParams,
     ) -> Result<Json<IncomingCallsResponse>, ErrorData> {
+        self.incoming_calls_for_resolved_target_impl(params, None)
+            .await
+    }
+
+    /// Run incoming-call discovery against a target selected by a composite navigation operation.
+    pub(in crate::mcp::server) async fn incoming_calls_for_resolved_target_impl(
+        &self,
+        params: IncomingCallsParams,
+        resolved_target: Option<ResolvedNavigationTarget>,
+    ) -> Result<Json<IncomingCallsResponse>, ErrorData> {
         let page_limit = self.navigation_page_limit(params.limit)?;
         let (resume_offset, continuation_binding) = self.navigation_continuation_context(
             "incoming_calls",
@@ -281,6 +302,7 @@ impl FriggMcpServer {
         let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
+        let resolved_target_for_blocking = resolved_target.clone();
         let server = self.clone();
         let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
@@ -314,15 +336,17 @@ impl FriggMcpServer {
                     .map(|corpus| corpus.repository_id.clone())
                     .collect::<Vec<_>>();
 
-                let resolved_target = server.resolve_navigation_request(
-                    &corpora,
-                    params_for_blocking.target.as_ref(),
-                    params_for_blocking.symbol.as_deref(),
-                    params_for_blocking.path.as_deref(),
-                    params_for_blocking.line,
-                    params_for_blocking.column,
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
+                let resolved_target = resolved_target_for_blocking.clone().unwrap_or(
+                    server.resolve_navigation_request(
+                        &corpora,
+                        params_for_blocking.target.as_ref(),
+                        params_for_blocking.symbol.as_deref(),
+                        params_for_blocking.path.as_deref(),
+                        params_for_blocking.line,
+                        params_for_blocking.column,
+                        params_for_blocking.repository_id.as_deref(),
+                    )?,
+                );
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
                 let target_selection =

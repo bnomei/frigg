@@ -3482,7 +3482,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
 }
 
 #[tokio::test]
-async fn impact_bundle_anchors_followups_to_selected_symbol_location() {
+async fn impact_bundle_same_rank_legacy_symbol_requires_disambiguation() {
     let workspace_root = temp_workspace_root("impact-bundle-anchor-selected-symbol");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -3546,27 +3546,34 @@ async fn impact_bundle_anchors_followups_to_selected_symbol_location() {
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
-        .expect("impact_bundle should compose duplicate-name target")
+        .expect("impact_bundle should surface duplicate-name target selection")
         .0;
 
-    let selected_path = response
-        .symbols
-        .first()
-        .expect("impact_bundle should include selected symbol")
-        .path
-        .clone();
-    assert_eq!(selected_path, "src/lib.rs");
+    let selection = response
+        .target_selection
+        .expect("same-rank legacy symbol must surface target selection");
     assert!(
-        !response.references.is_empty(),
-        "selected target should resolve references instead of disambiguating: {response:?}"
+        matches!(
+            selection.status,
+            frigg::mcp::types::NavigationTargetSelectionStatus::DisambiguationRequired
+        ),
+        "same-rank legacy symbol must require disambiguation: {selection:?}"
+    );
+    assert_eq!(selection.candidate_count, 2);
+    assert_eq!(selection.same_rank_candidate_count, 2);
+    assert!(selection.selected_stable_symbol_id.is_none());
+    assert_eq!(
+        response.symbols.len(),
+        2,
+        "symbol alternatives remain visible"
     );
     assert!(
-        response
-            .references
-            .iter()
-            .all(|reference| reference.path == selected_path),
-        "references should stay anchored to selected symbol path {selected_path}: {:?}",
-        response.references
+        response.references.is_empty(),
+        "must not choose a target for references"
+    );
+    assert!(
+        response.incoming_calls.is_empty(),
+        "must not choose a target for incoming calls"
     );
 
     cleanup_workspace_root(&workspace_root);

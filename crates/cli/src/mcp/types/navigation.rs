@@ -2,8 +2,9 @@
 
 use super::{MetadataObject, ResponseMode, ResultCompleteness, TargetRef};
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Parameters for `find_references`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -537,10 +538,12 @@ pub struct InspectSyntaxTreeResponse {
 }
 
 /// Parameters for optional `impact_bundle` convenience composition.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImpactBundleParams {
     pub target: Option<TargetRef>,
-    /// Symbol name to resolve impact for (required).
+    /// Legacy symbol name to resolve impact for. Either this non-empty value or `target` is
+    /// required; both together are rejected so an issued target can never be overridden.
+    #[serde(default)]
     pub symbol: String,
     /// Path class for the initial symbol lookup. Defaults to `runtime`.
     pub path_class: Option<crate::mcp::types::SearchSymbolPathClass>,
@@ -550,6 +553,39 @@ pub struct ImpactBundleParams {
     pub include_implementations: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
+}
+
+impl JsonSchema for ImpactBundleParams {
+    fn schema_name() -> Cow<'static, str> {
+        "ImpactBundleParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let target = serde_json::to_value(generator.subschema_for::<TargetRef>())
+            .expect("target schema must serialize");
+        let path_class = serde_json::to_value(
+            generator.subschema_for::<crate::mcp::types::SearchSymbolPathClass>(),
+        )
+        .expect("path-class schema must serialize");
+        let response_mode = serde_json::to_value(generator.subschema_for::<ResponseMode>())
+            .expect("response-mode schema must serialize");
+        Schema::try_from(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": target,
+                "symbol": { "type": "string", "minLength": 1 },
+                "path_class": path_class,
+                "repository_id": { "type": "string" },
+                "include_implementations": { "type": "boolean" },
+                "response_mode": response_mode
+            },
+            "oneOf": [
+                { "required": ["target"], "not": { "required": ["symbol"] } },
+                { "required": ["symbol"], "not": { "required": ["target"] } }
+            ]
+        }))
+        .expect("impact bundle schema must be valid")
+    }
 }
 
 /// Section role for a path tally row in `ImpactBundleSummary.top_paths`.
@@ -609,6 +645,9 @@ pub struct ImpactBundleSummary {
 pub struct ImpactBundleResponse {
     pub symbol: String,
     pub path_class: String,
+    /// Selection evidence when the supplied legacy symbol needs a more specific target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     /// Always-on plan-friendly counts / modes / top paths (EXP-nav-impact-shape B).
     pub summary: ImpactBundleSummary,
     pub symbols: Vec<crate::domain::model::SymbolMatch>,
@@ -981,6 +1020,7 @@ mod tests {
         let success = ImpactBundleResponse {
             symbol: "catalog_entries".to_owned(),
             path_class: "runtime".to_owned(),
+            target_selection: None,
             summary: empty_impact_summary(NavigationMode::Precise, NavigationMode::Precise),
             symbols: Vec::new(),
             symbols_completeness: ResultCompleteness::complete(ResultUnit::Symbol, 0, 0)
@@ -1038,6 +1078,7 @@ mod tests {
         let zero = ImpactBundleResponse {
             symbol: "missing_sym".to_owned(),
             path_class: "runtime".to_owned(),
+            target_selection: None,
             summary: empty_impact_summary(
                 NavigationMode::UnavailableNoPrecise,
                 NavigationMode::UnavailableNoPrecise,
