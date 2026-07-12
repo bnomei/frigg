@@ -4,25 +4,54 @@
 //! this is deterministic proof validation rather than an event-delivery test.
 
 use super::*;
-use frigg::mcp::types::{SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind};
+use frigg::mcp::types::{SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind, TargetRef};
 
 #[derive(Debug)]
 struct IssuedPair {
     origin: &'static str,
     result_handle: String,
     match_id: String,
+    target_ref: TargetRef,
 }
 
 fn issued_pair(
     origin: &'static str,
     result_handle: Option<String>,
     match_id: Option<String>,
+    target_ref: Option<TargetRef>,
 ) -> IssuedPair {
+    let result_handle =
+        result_handle.unwrap_or_else(|| panic!("{origin} should issue a result_handle"));
+    let match_id = match_id.unwrap_or_else(|| panic!("{origin} should issue a match_id"));
+    let target_ref = target_ref.unwrap_or_else(|| panic!("{origin} should issue a target_ref"));
+    match &target_ref {
+        TargetRef::ResultMatch {
+            result_handle: target_handle,
+            match_id: target_match_id,
+            target_scope,
+        } => {
+            assert_eq!(
+                target_handle, &result_handle,
+                "{origin} target handle must match"
+            );
+            assert_eq!(
+                target_match_id, &match_id,
+                "{origin} target match id must match"
+            );
+            assert!(
+                !target_scope.is_empty(),
+                "{origin} target scope must be opaque"
+            );
+        }
+        TargetRef::StableSymbol { .. } => {
+            panic!("{origin} central handle binding must issue a result_match target")
+        }
+    }
     IssuedPair {
         origin,
-        result_handle: result_handle
-            .unwrap_or_else(|| panic!("{origin} should issue a result_handle")),
-        match_id: match_id.unwrap_or_else(|| panic!("{origin} should issue a match_id")),
+        result_handle,
+        match_id,
+        target_ref,
     }
 }
 
@@ -41,6 +70,10 @@ fn assert_stale_proof_anchor(error: &rmcp::ErrorData, pair: &IssuedPair) {
     assert!(data["correction_hint"].is_string());
     assert!(data["related_tools"].is_array());
     assert_eq!(data["retryable"], false);
+    // Typed recovery fields are emitted by the common recovery serialization contract even
+    // when a stale proof has no safe replay action. They must remain explicitly empty.
+    assert_eq!(data["next_actions"], serde_json::json!([]));
+    assert_eq!(data["suggested_next"], serde_json::json!([]));
     let allowed = [
         "error_code",
         "repository_id",
@@ -51,6 +84,8 @@ fn assert_stale_proof_anchor(error: &rmcp::ErrorData, pair: &IssuedPair) {
         "correction_hint",
         "related_tools",
         "retryable",
+        "next_actions",
+        "suggested_next",
     ];
     for key in data
         .as_object()
@@ -80,6 +115,23 @@ async fn assert_pair_is_stale_after_edit(server: &FriggMcpServer, pair: &IssuedP
     assert_stale_proof_anchor(&error, pair);
 }
 
+async fn assert_pair_target_replays(server: &FriggMcpServer, pair: &IssuedPair) {
+    server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(pair.target_ref.clone()),
+            limit: Some(20),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} child target should replay unchanged: {error:?}",
+                pair.origin
+            )
+        });
+}
+
 async fn issue_text_proof(server: &FriggMcpServer) -> IssuedPair {
     let response = server
         .search_text(Parameters(SearchTextParams {
@@ -100,6 +152,10 @@ async fn issue_text_proof(server: &FriggMcpServer) -> IssuedPair {
             .matches
             .first()
             .and_then(|row| row.match_id.clone()),
+        response
+            .matches
+            .first()
+            .and_then(|row| row.target_ref.clone()),
     )
 }
 
@@ -115,6 +171,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
          pub struct WorkerImpl;\n\
          impl Worker for WorkerImpl { fn work(&self) {} }\n\
          pub fn target() {}\n\
+         pub fn target_impl() {}\n\
          pub fn caller() { target(); }\n\
          pub mod nested { pub fn child() {} }\n",
     )
@@ -131,14 +188,17 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
               { "symbol": "scip-rust pkg repo#Worker", "range": [2, 5, 11], "symbol_roles": 8 },
               { "symbol": "scip-rust pkg repo#WorkerImpl", "range": [2, 16, 26], "symbol_roles": 8 },
               { "symbol": "scip-rust pkg repo#target", "range": [3, 7, 13], "symbol_roles": 1 },
-              { "symbol": "scip-rust pkg repo#caller", "range": [4, 7, 13], "symbol_roles": 1 },
-              { "symbol": "scip-rust pkg repo#target", "range": [4, 18, 24], "symbol_roles": 8 }
+              { "symbol": "scip-rust pkg repo#target_impl", "range": [4, 7, 18], "symbol_roles": 1 },
+              { "symbol": "scip-rust pkg repo#caller", "range": [5, 7, 13], "symbol_roles": 1 },
+              { "symbol": "scip-rust pkg repo#target", "range": [5, 18, 24], "symbol_roles": 8 }
             ],
             "symbols": [
               { "symbol": "scip-rust pkg repo#Worker", "display_name": "Worker", "kind": "trait", "relationships": [] },
               { "symbol": "scip-rust pkg repo#WorkerImpl", "display_name": "WorkerImpl", "kind": "struct",
                 "relationships": [{ "symbol": "scip-rust pkg repo#Worker", "is_implementation": true }] },
               { "symbol": "scip-rust pkg repo#target", "display_name": "target", "kind": "function", "relationships": [] },
+              { "symbol": "scip-rust pkg repo#target_impl", "display_name": "target_impl", "kind": "function",
+                "relationships": [{ "symbol": "scip-rust pkg repo#target", "is_implementation": true }] },
               { "symbol": "scip-rust pkg repo#caller", "display_name": "caller", "kind": "function", "relationships": [] }
             ]
           }]
@@ -162,6 +222,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "search_text",
         text.result_handle,
         text.matches.first().and_then(|r| r.match_id.clone()),
+        text.matches.first().and_then(|r| r.target_ref.clone()),
     );
 
     let symbol = server
@@ -181,6 +242,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "search_symbol",
         symbol.result_handle,
         symbol.matches.first().and_then(|r| r.match_id.clone()),
+        symbol.matches.first().and_then(|r| r.target_ref.clone()),
     );
 
     let batch = server
@@ -221,6 +283,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "search_batch",
         batch.result_handle,
         batch.matches.first().and_then(|r| r.match_id.clone()),
+        batch.matches.first().and_then(|r| r.target_ref.clone()),
     );
 
     let hybrid = server
@@ -241,6 +304,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "search_hybrid",
         hybrid.result_handle,
         hybrid.matches.first().and_then(|r| r.match_id.clone()),
+        hybrid.matches.first().and_then(|r| r.target_ref.clone()),
     );
 
     let references = server
@@ -264,6 +328,10 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "find_references",
         references.result_handle,
         references.matches.first().and_then(|r| r.match_id.clone()),
+        references
+            .matches
+            .first()
+            .and_then(|r| r.target_ref.clone()),
     );
 
     let definition = server
@@ -286,6 +354,10 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "go_to_definition",
         definition.result_handle,
         definition.matches.first().and_then(|r| r.match_id.clone()),
+        definition
+            .matches
+            .first()
+            .and_then(|r| r.target_ref.clone()),
     );
 
     let declarations = server
@@ -311,6 +383,10 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             .matches
             .first()
             .and_then(|r| r.match_id.clone()),
+        declarations
+            .matches
+            .first()
+            .and_then(|r| r.target_ref.clone()),
     );
 
     let implementations = server
@@ -336,6 +412,10 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             .matches
             .first()
             .and_then(|r| r.match_id.clone()),
+        implementations
+            .matches
+            .first()
+            .and_then(|r| r.target_ref.clone()),
     );
 
     let incoming = server
@@ -358,6 +438,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "incoming_calls",
         incoming.result_handle,
         incoming.matches.first().and_then(|r| r.match_id.clone()),
+        incoming.matches.first().and_then(|r| r.target_ref.clone()),
     );
 
     let outgoing = server
@@ -380,7 +461,10 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "outgoing_calls",
         outgoing.result_handle,
         outgoing.matches.first().and_then(|r| r.match_id.clone()),
+        outgoing.matches.first().and_then(|r| r.target_ref.clone()),
     );
+    assert_pair_target_replays(&server, &incoming_pair).await;
+    assert_pair_target_replays(&server, &outgoing_pair).await;
 
     let symbols = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -405,6 +489,11 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             .iter()
             .find(|r| r.symbol == "target")
             .and_then(|r| r.match_id.clone()),
+        symbols
+            .symbols
+            .iter()
+            .find(|r| r.symbol == "target")
+            .and_then(|r| r.target_ref.clone()),
     );
     let nested_document_pair = issued_pair(
         "document_symbols",
@@ -415,12 +504,18 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             .find(|row| row.symbol == "nested")
             .and_then(|row| row.children.first())
             .and_then(|row| row.match_id.clone()),
+        symbols
+            .symbols
+            .iter()
+            .find(|row| row.symbol == "nested")
+            .and_then(|row| row.children.first())
+            .and_then(|row| row.target_ref.clone()),
     );
 
     let impact = server
         .impact_bundle(Parameters(ImpactBundleParams {
             target: None,
-            symbol: "Worker".to_owned(),
+            symbol: "target".to_owned(),
             path_class: None,
             repository_id: Some("repo-001".to_owned()),
             include_implementations: Some(true),
@@ -434,40 +529,62 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         impact_wire.get("result_handle").is_none(),
         "impact_bundle must not introduce an aggregate proof handle"
     );
-    let mut impact_pairs = Vec::new();
-    if !impact.symbols.is_empty() {
-        impact_pairs.push(issued_pair(
+    assert!(
+        !impact.symbols.is_empty(),
+        "impact fixture must produce a symbol child"
+    );
+    assert!(
+        !impact.references.is_empty(),
+        "impact fixture must produce a reference child"
+    );
+    assert!(
+        !impact.incoming_calls.is_empty(),
+        "impact fixture must produce an incoming-call child"
+    );
+    assert!(
+        !impact.implementations.is_empty(),
+        "impact fixture must produce an implementation child"
+    );
+    let impact_pairs = vec![
+        issued_pair(
             "search_symbol",
-            impact.symbols_result_handle,
+            impact.symbols_result_handle.clone(),
             impact.symbols.first().and_then(|r| r.match_id.clone()),
-        ));
-    }
-    if !impact.references.is_empty() {
-        impact_pairs.push(issued_pair(
+            impact.symbols.first().and_then(|r| r.target_ref.clone()),
+        ),
+        issued_pair(
             "find_references",
-            impact.references_result_handle,
+            impact.references_result_handle.clone(),
             impact.references.first().and_then(|r| r.match_id.clone()),
-        ));
-    }
-    if !impact.incoming_calls.is_empty() {
-        impact_pairs.push(issued_pair(
+            impact.references.first().and_then(|r| r.target_ref.clone()),
+        ),
+        issued_pair(
             "incoming_calls",
-            impact.incoming_calls_result_handle,
+            impact.incoming_calls_result_handle.clone(),
             impact
                 .incoming_calls
                 .first()
                 .and_then(|r| r.match_id.clone()),
-        ));
-    }
-    if !impact.implementations.is_empty() {
-        impact_pairs.push(issued_pair(
+            impact
+                .incoming_calls
+                .first()
+                .and_then(|r| r.target_ref.clone()),
+        ),
+        issued_pair(
             "find_implementations",
-            impact.implementations_result_handle,
+            impact.implementations_result_handle.clone(),
             impact
                 .implementations
                 .first()
                 .and_then(|r| r.match_id.clone()),
-        ));
+            impact
+                .implementations
+                .first()
+                .and_then(|r| r.target_ref.clone()),
+        ),
+    ];
+    for pair in &impact_pairs {
+        assert_pair_target_replays(&server, pair).await;
     }
 
     fs::write(
@@ -517,6 +634,10 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
         "search_text",
         delete.result_handle,
         delete.matches.first().and_then(|row| row.match_id.clone()),
+        delete
+            .matches
+            .first()
+            .and_then(|row| row.target_ref.clone()),
     );
     fs::remove_file(&source_path).expect("fixture source deletion should persist");
     assert_pair_is_stale_after_edit(&server, &delete_pair).await;

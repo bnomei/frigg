@@ -12,7 +12,9 @@ use std::path::Component;
 
 impl FriggMcpServer {
     /// Resolve either an issued target reference or legacy direct navigation inputs.
-    /// Target references always take precedence and never fall back to name ranking.
+    /// Target references are exclusive with direct identity fields and never fall back to name
+    /// ranking. A top-level repository id remains legal only as an equality assertion.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::mcp::server) fn resolve_navigation_request(
         &self,
         corpora: &[Arc<RepositorySymbolCorpus>],
@@ -24,9 +26,133 @@ impl FriggMcpServer {
         repository_id_hint: Option<&str>,
     ) -> Result<ResolvedNavigationTarget, ErrorData> {
         if let Some(target) = target {
-            return self.resolve_target_ref(corpora, target);
+            Self::validate_navigation_target_inputs(Some(target), symbol, path, line, column)?;
+            return match repository_id_hint {
+                Some(repository_id) => self.resolve_target_ref_with_repository_assertion(
+                    corpora,
+                    target,
+                    Some(repository_id),
+                ),
+                None => self.resolve_target_ref(corpora, target),
+            };
         }
         Self::resolve_navigation_target(corpora, symbol, path, line, column, repository_id_hint)
+    }
+
+    pub(in crate::mcp::server) fn validate_navigation_target_inputs(
+        target: Option<&TargetRef>,
+        symbol: Option<&str>,
+        path: Option<&str>,
+        line: Option<usize>,
+        column: Option<usize>,
+    ) -> Result<(), ErrorData> {
+        if target.is_some()
+            && (symbol.is_some() || path.is_some() || line.is_some() || column.is_some())
+        {
+            return Err(Self::target_invalid_params(
+                "CONFLICTING_TARGET_INPUT",
+                "target cannot be combined with symbol, path, line, or column",
+                "Remove the direct symbol/location fields and send the issued target unchanged.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Derive the only repository that an issued target is allowed to address. This preflight is
+    /// used before corpus/freshness collection so a target without a redundant repository
+    /// assertion cannot accidentally inherit the session default repository.
+    pub(in crate::mcp::server) fn navigation_target_repository_hint(
+        &self,
+        target: Option<&TargetRef>,
+        repository_id_assertion: Option<&str>,
+    ) -> Result<Option<String>, ErrorData> {
+        let Some(target) = target else {
+            return Ok(repository_id_assertion.map(str::to_owned));
+        };
+        let repository_id = match target {
+            TargetRef::StableSymbol { repository_id, .. } => repository_id.clone(),
+            TargetRef::ResultMatch {
+                result_handle,
+                match_id,
+                target_scope,
+            } => {
+                if target_scope != &self.session_state.display_session_id() {
+                    return Err(Self::target_invalid_params(
+                        "TARGET_SCOPE_MISMATCH",
+                        "result target belongs to a different session",
+                        "Use a target issued by this session.",
+                    ));
+                }
+                match self.session_result_handle_lookup(result_handle, match_id) {
+                    SessionResultHandleLookup::Found(anchor) => anchor.repository_id.clone(),
+                    SessionResultHandleLookup::StaleHandle => {
+                        return Err(Self::target_not_found(
+                            "STALE_HANDLE",
+                            "result target is stale",
+                            "Issue a fresh search or navigation request.",
+                        ));
+                    }
+                    SessionResultHandleLookup::MixedHandle { .. } => {
+                        return Err(Self::target_not_found(
+                            "MIXED_HANDLE",
+                            "result target does not belong to this handle",
+                            "Use the target with its original result handle.",
+                        ));
+                    }
+                    SessionResultHandleLookup::TargetScopeMismatch => unreachable!(),
+                }
+            }
+        };
+        if repository_id_assertion.is_some_and(|asserted| asserted != repository_id) {
+            return Err(Self::target_invalid_params(
+                "TARGET_REPOSITORY_MISMATCH",
+                "repository assertion does not match the target",
+                "Remove the repository assertion or use the target's original repository.",
+            ));
+        }
+        if self
+            .attached_workspaces_for_repository(Some(&repository_id))
+            .is_err()
+        {
+            return Err(Self::target_not_found(
+                "REPOSITORY_NOT_FOUND",
+                "target repository is not available",
+                "Attach the target repository and issue a fresh result.",
+            ));
+        }
+        Ok(Some(repository_id))
+    }
+
+    fn target_error_detail(error_code: &'static str, correction_hint: &'static str) -> Value {
+        serde_json::json!({
+            "error_code": error_code,
+            "correction_hint": correction_hint,
+            "related_tools": ["search_symbol", "search_text"],
+            "next_actions": [],
+            "suggested_next": [],
+        })
+    }
+
+    pub(in crate::mcp::server) fn target_invalid_params(
+        error_code: &'static str,
+        message: &'static str,
+        correction_hint: &'static str,
+    ) -> ErrorData {
+        Self::invalid_params(
+            message,
+            Some(Self::target_error_detail(error_code, correction_hint)),
+        )
+    }
+
+    pub(in crate::mcp::server) fn target_not_found(
+        error_code: &'static str,
+        message: &'static str,
+        correction_hint: &'static str,
+    ) -> ErrorData {
+        Self::resource_not_found(
+            message,
+            Some(Self::target_error_detail(error_code, correction_hint)),
+        )
     }
 
     /// Resolve an issued target without falling back to name ranking.  This is the single
@@ -38,6 +164,15 @@ impl FriggMcpServer {
         corpora: &[Arc<RepositorySymbolCorpus>],
         target: &TargetRef,
     ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        self.resolve_target_ref_with_repository_assertion(corpora, target, None)
+    }
+
+    fn resolve_target_ref_with_repository_assertion(
+        &self,
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        target: &TargetRef,
+        repository_id_assertion: Option<&str>,
+    ) -> Result<ResolvedNavigationTarget, ErrorData> {
         match target {
             TargetRef::ResultMatch {
                 result_handle,
@@ -45,55 +180,76 @@ impl FriggMcpServer {
                 target_scope,
             } => {
                 if target_scope != &self.session_state.display_session_id() {
-                    return Err(Self::invalid_params(
+                    return Err(Self::target_invalid_params(
+                        "TARGET_SCOPE_MISMATCH",
                         "result target belongs to a different session",
-                        Some(
-                            serde_json::json!({"error_code":"TARGET_SCOPE_MISMATCH","correction_hint":"Use a target issued by this session."}),
-                        ),
+                        "Use a target issued by this session.",
                     ));
                 }
                 let anchor = match self.session_result_handle_lookup(result_handle, match_id) {
                     SessionResultHandleLookup::Found(anchor) => anchor,
                     SessionResultHandleLookup::StaleHandle => {
-                        return Err(Self::resource_not_found(
+                        return Err(Self::target_not_found(
+                            "STALE_HANDLE",
                             "result target is stale",
-                            Some(
-                                serde_json::json!({"error_code":"STALE_HANDLE","correction_hint":"Issue a fresh search or navigation request."}),
-                            ),
+                            "Issue a fresh search or navigation request.",
                         ));
                     }
                     SessionResultHandleLookup::MixedHandle { .. } => {
-                        return Err(Self::resource_not_found(
+                        return Err(Self::target_not_found(
+                            "MIXED_HANDLE",
                             "result target does not belong to this handle",
-                            Some(
-                                serde_json::json!({"error_code":"MIXED_HANDLE","correction_hint":"Use the target with its original result handle."}),
-                            ),
+                            "Use the target with its original result handle.",
                         ));
                     }
                     SessionResultHandleLookup::TargetScopeMismatch => unreachable!(),
                 };
+                if repository_id_assertion.is_some_and(|asserted| asserted != anchor.repository_id)
+                {
+                    return Err(Self::target_invalid_params(
+                        "TARGET_REPOSITORY_MISMATCH",
+                        "repository assertion does not match the result target",
+                        "Remove the repository assertion or use the target's original repository.",
+                    ));
+                }
+                self.verify_result_target_anchor_freshness(result_handle, match_id, &anchor)?;
                 let corpus = corpora
                     .iter()
                     .find(|c| c.repository_id == anchor.repository_id)
                     .ok_or_else(|| {
-                        Self::resource_not_found(
+                        Self::target_not_found(
+                            "REPOSITORY_NOT_FOUND",
                             "target repository is not available",
-                            Some(serde_json::json!({"error_code":"REPOSITORY_NOT_FOUND"})),
+                            "Attach the target repository and issue a fresh result.",
                         )
                     })?;
-                let index = anchor
-                    .stable_symbol_id
-                    .as_deref()
-                    .and_then(|id| corpus.symbol_index_by_stable_id.get(id).copied())
-                    .or_else(|| {
-                        Self::unique_coordinate_symbol_index(
-                            corpus,
-                            &anchor.path,
-                            anchor.line,
-                            anchor.column,
+                let index = if let Some(stable_symbol_id) = anchor.stable_symbol_id.as_deref() {
+                    corpus
+                        .symbol_index_by_stable_id
+                        .get(stable_symbol_id)
+                        .copied()
+                        .ok_or_else(|| {
+                            Self::target_not_found(
+                                "TARGET_NOT_FOUND",
+                                "target symbol was not found",
+                                "Issue a fresh symbol-bearing result.",
+                            )
+                        })?
+                } else {
+                    Self::unique_coordinate_symbol_index(
+                        corpus,
+                        &anchor.path,
+                        anchor.line,
+                        anchor.column,
+                    )
+                    .ok_or_else(|| {
+                        Self::target_invalid_params(
+                            "TARGET_ANCHOR_INSUFFICIENT",
+                            "target anchor cannot be resolved exactly",
+                            "Issue a fresh result with an exact symbol target.",
                         )
-                    });
-                let index = index.ok_or_else(|| Self::invalid_params("target anchor cannot be resolved exactly", Some(serde_json::json!({"error_code":"TARGET_ANCHOR_INSUFFICIENT","correction_hint":"Issue a fresh result with a stable target."}))))?;
+                    })?
+                };
                 let mut candidates = Vec::new();
                 Self::push_symbol_candidate(&mut candidates, corpus, index, 0);
                 Ok(ResolvedNavigationTarget {
@@ -112,25 +268,41 @@ impl FriggMcpServer {
                 stable_symbol_id,
                 snapshot_token,
             } => {
+                if repository_id_assertion.is_some_and(|asserted| asserted != repository_id) {
+                    return Err(Self::target_invalid_params(
+                        "TARGET_REPOSITORY_MISMATCH",
+                        "repository assertion does not match the stable-symbol target",
+                        "Remove the repository assertion or use the target's embedded repository.",
+                    ));
+                }
                 let corpus = corpora
                     .iter()
                     .find(|c| &c.repository_id == repository_id)
                     .ok_or_else(|| {
-                        Self::resource_not_found(
+                        Self::target_not_found(
+                            "REPOSITORY_NOT_FOUND",
                             "target repository is not available",
-                            Some(serde_json::json!({"error_code":"REPOSITORY_NOT_FOUND"})),
+                            "Attach the target repository and issue a fresh symbol result.",
                         )
                     })?;
                 if &corpus.root_signature != snapshot_token {
-                    return Err(Self::resource_not_found(
+                    return Err(Self::target_not_found(
+                        "STALE_TARGET_SNAPSHOT",
                         "target snapshot is stale",
-                        Some(
-                            serde_json::json!({"error_code":"STALE_TARGET_SNAPSHOT","correction_hint":"Issue a fresh symbol result."}),
-                        ),
+                        "Issue a fresh symbol result from the current repository snapshot.",
                     ));
                 }
-                let index = corpus.symbol_index_by_stable_id.get(stable_symbol_id).copied()
-                    .ok_or_else(|| Self::resource_not_found("target symbol was not found", Some(serde_json::json!({"error_code":"TARGET_NOT_FOUND","correction_hint":"Issue a fresh symbol result."}))))?;
+                let index = corpus
+                    .symbol_index_by_stable_id
+                    .get(stable_symbol_id)
+                    .copied()
+                    .ok_or_else(|| {
+                        Self::target_not_found(
+                            "TARGET_NOT_FOUND",
+                            "target symbol was not found",
+                            "Issue a fresh symbol result.",
+                        )
+                    })?;
                 let mut candidates = Vec::new();
                 Self::push_symbol_candidate(&mut candidates, corpus, index, 0);
                 Ok(ResolvedNavigationTarget {
@@ -153,41 +325,47 @@ impl FriggMcpServer {
         line: usize,
         column: Option<usize>,
     ) -> Option<usize> {
+        let column = column?;
         let key = Self::normalize_relative_input_path(path);
         let indexes = corpus.symbols_by_relative_path.get(&key)?;
+        let exact = indexes
+            .iter()
+            .copied()
+            .filter(|i| {
+                let symbol = &corpus.symbols[*i];
+                symbol.span.start_line == line && symbol.span.start_column == column
+            })
+            .collect::<Vec<_>>();
+        if exact.len() == 1 {
+            return exact.first().copied();
+        }
+        if !exact.is_empty() {
+            return None;
+        }
         let mut containing: Vec<usize> = indexes
             .iter()
             .copied()
             .filter(|i| {
                 let s = &corpus.symbols[*i];
                 let start_ok = (s.span.start_line < line)
-                    || (s.span.start_line == line
-                        && column.is_some_and(|c| s.span.start_column <= c));
+                    || (s.span.start_line == line && s.span.start_column <= column);
                 let end_ok = s.span.end_line > line
-                    || (s.span.end_line == line && column.is_none_or(|c| c <= s.span.end_column));
+                    || (s.span.end_line == line && column < s.span.end_column);
                 start_ok && end_ok
             })
             .collect();
         containing.sort_by_key(|i| {
             let s = &corpus.symbols[*i];
-            (
-                s.span.end_line.saturating_sub(s.span.start_line),
-                s.span.end_column.saturating_sub(s.span.start_column),
-            )
+            s.span.end_byte.saturating_sub(s.span.start_byte)
         });
-        (containing.len() == 1
-            || containing
-                .get(0)
-                .zip(containing.get(1))
-                .is_some_and(|(a, b)| {
-                    let x = &corpus.symbols[*a];
-                    let y = &corpus.symbols[*b];
-                    x.span.start_line != y.span.start_line
-                        || x.span.start_column != y.span.start_column
-                        || x.span.end_line != y.span.end_line
-                        || x.span.end_column != y.span.end_column
-                }))
-        .then(|| containing[0])
+        let first = *containing.first()?;
+        let first_span = &corpus.symbols[first].span;
+        let first_size = first_span.end_byte.saturating_sub(first_span.start_byte);
+        let tied = containing.get(1).is_some_and(|second| {
+            let span = &corpus.symbols[*second].span;
+            span.end_byte.saturating_sub(span.start_byte) == first_size
+        });
+        (!tied).then_some(first)
     }
     fn php_helper_prefixes() -> &'static [(&'static str, NavigationPhpHelperKind)] {
         &[
@@ -410,6 +588,7 @@ impl FriggMcpServer {
         location_relative_path: Option<&str>,
         rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
         require_disambiguation: bool,
+        path_class_filter: Option<SearchSymbolPathClass>,
     ) -> Result<NavigationTargetSelection, ErrorData> {
         let mut candidates = Vec::new();
         let query_lower = symbol_query.to_ascii_lowercase();
@@ -472,6 +651,27 @@ impl FriggMcpServer {
                     }
                 }
             }
+        }
+
+        if let Some(path_class_filter) = path_class_filter {
+            candidates.retain(|candidate| {
+                corpora.iter().any(|corpus| {
+                    corpus.repository_id == candidate.repository_id
+                        && corpus
+                            .symbol_index_by_stable_id
+                            .get(candidate.symbol.stable_id.as_str())
+                            .is_some_and(|symbol_index| {
+                                Self::build_ranked_symbol_match(
+                                    corpus,
+                                    *symbol_index,
+                                    candidate.rank,
+                                    Some(path_class_filter),
+                                    None,
+                                )
+                                .is_some()
+                            })
+                })
+            });
         }
 
         candidates.sort_by(|left, right| {
@@ -1304,6 +1504,7 @@ impl FriggMcpServer {
                 None,
                 None,
                 true,
+                None,
             )?;
             return Ok(ResolvedNavigationTarget {
                 symbol_query: query.to_owned(),
@@ -1342,6 +1543,34 @@ impl FriggMcpServer {
         )
     }
 
+    /// Resolve a legacy symbol request using the same path-class boundary as `search_symbol`.
+    /// This keeps target selection and the visible candidate rows in one filtered universe.
+    pub(in crate::mcp::server) fn resolve_navigation_symbol_request_with_path_class(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol: &str,
+        path_class: SearchSymbolPathClass,
+        repository_id_hint: Option<&str>,
+    ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        let query = symbol.trim();
+        if query.is_empty() {
+            return Err(Self::invalid_params("symbol must not be empty", None));
+        }
+        let target = Self::resolve_navigation_symbol_target(
+            corpora,
+            query,
+            repository_id_hint,
+            None,
+            None,
+            true,
+            Some(path_class),
+        )?;
+        Ok(ResolvedNavigationTarget {
+            symbol_query: query.to_owned(),
+            selection: target,
+            resolution_source: "symbol",
+        })
+    }
+
     pub(in crate::mcp::server) fn resolve_navigation_target_from_location_hint(
         corpora: &[Arc<RepositorySymbolCorpus>],
         raw_path: &str,
@@ -1364,6 +1593,7 @@ impl FriggMcpServer {
                 Some(location_hint.relative_path.as_str()),
                 location_hint.rust_hint.as_ref(),
                 false,
+                None,
             )
         {
             return Ok(ResolvedNavigationTarget {
@@ -1386,6 +1616,7 @@ impl FriggMcpServer {
             None,
             None,
             false,
+            None,
         )?;
         Ok(ResolvedNavigationTarget {
             symbol_query,
@@ -1397,10 +1628,98 @@ impl FriggMcpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FriggMcpServer, NavigationPhpHelperKind};
-    use crate::indexer::byte_offset_for_line_column;
+    use super::{FriggMcpServer, NavigationPhpHelperKind, RepositorySymbolCorpus};
+    use crate::indexer::{SourceSpan, SymbolDefinition, SymbolKind, byte_offset_for_line_column};
+    use crate::languages::SymbolLanguage;
+    use crate::mcp::server_state::RepositoryDiagnosticsSummary;
+    use std::collections::BTreeMap;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    fn coordinate_corpus(spans: &[(usize, usize, usize, usize)]) -> RepositorySymbolCorpus {
+        let symbols = spans
+            .iter()
+            .enumerate()
+            .map(
+                |(index, (start_line, start_column, end_line, end_column))| SymbolDefinition {
+                    stable_id: format!("symbol-{index}"),
+                    language: SymbolLanguage::Rust,
+                    kind: SymbolKind::Function,
+                    name: format!("symbol_{index}"),
+                    path: PathBuf::from("src/lib.rs"),
+                    line: *start_line,
+                    span: SourceSpan {
+                        start_byte: start_line.saturating_mul(1_000) + start_column,
+                        end_byte: end_line.saturating_mul(1_000) + end_column,
+                        start_line: *start_line,
+                        start_column: *start_column,
+                        end_line: *end_line,
+                        end_column: *end_column,
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        RepositorySymbolCorpus {
+            repository_id: "repo".to_owned(),
+            runtime_repository_id: "repo".to_owned(),
+            root: PathBuf::from("/repo"),
+            root_signature: "snapshot".to_owned(),
+            source_paths: vec![PathBuf::from("src/lib.rs")],
+            container_symbol_index_by_index: vec![None; symbols.len()],
+            symbols_by_relative_path: BTreeMap::from([(
+                "src/lib.rs".to_owned(),
+                (0..symbols.len()).collect(),
+            )]),
+            symbol_index_by_stable_id: symbols
+                .iter()
+                .enumerate()
+                .map(|(index, symbol)| (symbol.stable_id.clone(), index))
+                .collect(),
+            symbol_indices_by_name: BTreeMap::new(),
+            symbol_indices_by_lower_name: BTreeMap::new(),
+            canonical_symbol_name_by_stable_id: BTreeMap::new(),
+            symbol_indices_by_canonical_name: BTreeMap::new(),
+            symbol_indices_by_lower_canonical_name: BTreeMap::new(),
+            rust_symbol_context_by_index: vec![None; symbols.len()],
+            rust_implementation_facts: Vec::new(),
+            php_evidence_by_relative_path: BTreeMap::new(),
+            blade_evidence_by_relative_path: BTreeMap::new(),
+            diagnostics: RepositoryDiagnosticsSummary::default(),
+            symbols,
+        }
+    }
+
+    #[test]
+    fn coordinate_target_prefers_exact_start_and_rejects_missing_or_tied_anchors() {
+        let exact = coordinate_corpus(&[(1, 1, 20, 1), (5, 8, 5, 14)]);
+        assert_eq!(
+            FriggMcpServer::unique_coordinate_symbol_index(&exact, "src/lib.rs", 5, Some(8),),
+            Some(1),
+            "an exact symbol start must win over an enclosing symbol"
+        );
+        assert_eq!(
+            FriggMcpServer::unique_coordinate_symbol_index(&exact, "src/lib.rs", 5, Some(10),),
+            Some(1),
+            "the unique smallest enclosing symbol must be selected"
+        );
+        assert_eq!(
+            FriggMcpServer::unique_coordinate_symbol_index(&exact, "src/lib.rs", 5, Some(14),),
+            Some(0),
+            "a symbol's exclusive end column must not count as containment"
+        );
+        assert_eq!(
+            FriggMcpServer::unique_coordinate_symbol_index(&exact, "src/lib.rs", 5, None),
+            None,
+            "a coordinate target without a column is insufficient"
+        );
+
+        let tied = coordinate_corpus(&[(5, 2, 5, 12), (5, 4, 5, 14)]);
+        assert_eq!(
+            FriggMcpServer::unique_coordinate_symbol_index(&tied, "src/lib.rs", 5, Some(8),),
+            None,
+            "equal-smallest enclosing candidates must not select the first row"
+        );
+    }
 
     #[test]
     fn navigation_relative_input_path_collapses_double_slash_segments() {

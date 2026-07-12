@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 use crate::graph::RelationKind;
 use crate::indexer::{
     SymbolDefinition, SymbolKind, extract_php_source_evidence_from_source,
-    extract_symbols_from_source,
+    extract_symbols_from_source_with_identity_path,
 };
 use crate::languages::{
     BladeSourceEvidence, PhpSourceEvidence, SymbolLanguage,
@@ -166,7 +166,13 @@ fn prepare_ast_projection_source(
     let Ok(source) = fs::read_to_string(absolute_path) else {
         return None;
     };
-    let symbols = extract_symbols_from_source(language, absolute_path, &source).unwrap_or_default();
+    let symbols = extract_symbols_from_source_with_identity_path(
+        language,
+        absolute_path,
+        Path::new(&relative_path),
+        &source,
+    )
+    .unwrap_or_default();
     let evidence = match language {
         SymbolLanguage::Php => {
             extract_php_source_evidence_from_source(absolute_path, &source, &symbols)

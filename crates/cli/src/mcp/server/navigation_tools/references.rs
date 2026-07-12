@@ -366,8 +366,19 @@ impl FriggMcpServer {
 
     pub(in crate::mcp::server) async fn find_references_impl(
         &self,
-        params: FindReferencesParams,
+        mut params: FindReferencesParams,
     ) -> Result<Json<FindReferencesResponse>, ErrorData> {
+        Self::validate_navigation_target_inputs(
+            params.target.as_ref(),
+            params.symbol.as_deref(),
+            params.path.as_deref(),
+            params.line,
+            params.column,
+        )?;
+        params.repository_id = self.navigation_target_repository_hint(
+            params.target.as_ref(),
+            params.repository_id.as_deref(),
+        )?;
         self.find_references_for_resolved_target_impl(params, None)
             .await
     }
@@ -615,6 +626,18 @@ impl FriggMcpServer {
                                     direct_precise_target.coverage_mode,
                                 );
                                 resolution_precision = Some(precision.to_owned());
+                                let target_selection = Some(
+                                    Self::navigation_target_selection_summary_for_direct(
+                                        &symbol_query,
+                                        Some(
+                                            direct_precise_target
+                                                .precise_target
+                                                .symbol
+                                                .clone(),
+                                        ),
+                                        "symbol_precise_direct",
+                                    ),
+                                );
                                 let metadata = json!({
                                     "precision": precision,
                                     "heuristic": false,
@@ -673,7 +696,7 @@ impl FriggMcpServer {
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
-                                    target_selection: None,
+                                    target_selection,
                                     metadata,
                                     note,
                     recovery: RecoveryFields::default(),
@@ -690,6 +713,7 @@ impl FriggMcpServer {
                     &corpora,
                     &symbol_query,
                     &resolved_target.selection,
+                    resolved_target.resolution_source,
                 ));
                 let target_resolution = match resolved_target.selection {
                     NavigationTargetSelection::Resolved(target_resolution) => target_resolution,

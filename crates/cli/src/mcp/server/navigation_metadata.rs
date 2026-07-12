@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::languages::rust_implementation_candidates_from_facts;
+use crate::mcp::types::NavigationResolutionSource;
 
 #[derive(Debug, Clone)]
 pub(in crate::mcp::server) struct StructuralFollowUpSourceFile {
@@ -242,9 +243,11 @@ impl FriggMcpServer {
     pub(in crate::mcp::server) fn navigation_target_selection_summary_for_resolved(
         symbol_query: &str,
         target: &ResolvedSymbolTarget,
+        resolution_source: &str,
     ) -> NavigationTargetSelectionSummary {
         NavigationTargetSelectionSummary {
             status: NavigationTargetSelectionStatus::Resolved,
+            resolution_source: Self::public_navigation_resolution_source(resolution_source),
             symbol_query: symbol_query.to_owned(),
             selected_stable_symbol_id: Some(target.candidate.symbol.stable_id.clone()),
             candidate_count: target.candidate_count,
@@ -258,9 +261,11 @@ impl FriggMcpServer {
         corpora: &[Arc<RepositorySymbolCorpus>],
         symbol_query: &str,
         target: &DisambiguationRequiredSymbolTarget,
+        resolution_source: &str,
     ) -> NavigationTargetSelectionSummary {
         NavigationTargetSelectionSummary {
             status: NavigationTargetSelectionStatus::DisambiguationRequired,
+            resolution_source: Self::public_navigation_resolution_source(resolution_source),
             symbol_query: symbol_query.to_owned(),
             selected_stable_symbol_id: None,
             candidate_count: target.candidate_count,
@@ -278,18 +283,50 @@ impl FriggMcpServer {
         corpora: &[Arc<RepositorySymbolCorpus>],
         symbol_query: &str,
         selection: &NavigationTargetSelection,
+        resolution_source: &str,
     ) -> NavigationTargetSelectionSummary {
         match selection {
             NavigationTargetSelection::Resolved(target) => {
-                Self::navigation_target_selection_summary_for_resolved(symbol_query, target)
+                Self::navigation_target_selection_summary_for_resolved(
+                    symbol_query,
+                    target,
+                    resolution_source,
+                )
             }
             NavigationTargetSelection::DisambiguationRequired(target) => {
                 Self::navigation_target_selection_summary_for_disambiguation(
                     corpora,
                     symbol_query,
                     target,
+                    resolution_source,
                 )
             }
+        }
+    }
+
+    pub(in crate::mcp::server) fn navigation_target_selection_summary_for_direct(
+        symbol_query: &str,
+        selected_stable_symbol_id: Option<String>,
+        resolution_source: &str,
+    ) -> NavigationTargetSelectionSummary {
+        NavigationTargetSelectionSummary {
+            status: NavigationTargetSelectionStatus::Resolved,
+            resolution_source: Self::public_navigation_resolution_source(resolution_source),
+            symbol_query: symbol_query.to_owned(),
+            selected_stable_symbol_id,
+            candidate_count: 1,
+            same_rank_candidate_count: 1,
+            ambiguous_query: false,
+            candidates: Vec::new(),
+        }
+    }
+
+    fn public_navigation_resolution_source(source: &str) -> NavigationResolutionSource {
+        match source {
+            "result_match" => NavigationResolutionSource::ResultMatch,
+            "stable_symbol" => NavigationResolutionSource::StableSymbol,
+            "symbol" | "symbol_precise_direct" => NavigationResolutionSource::DirectSymbol,
+            _ => NavigationResolutionSource::DirectLocation,
         }
     }
 

@@ -28,6 +28,7 @@ fastembed = { workspace = true, optional = true }
 hf-hub = { workspace = true, optional = true }
 ignore.workspace = true
 indicatif.workspace = true
+jsonschema = { version = "0.46.9", default-features = false }
 memchr.workspace = true
 notify.workspace = true
 petgraph.workspace = true
@@ -78,7 +79,6 @@ cc = "1.2.67"
 
 [dev-dependencies]
 criterion = "0.8.2"
-jsonschema = { version = "0.46.9", default-features = false }
 rmcp = { workspace = true, features = ["client"] }
 rusqlite.workspace = true
 

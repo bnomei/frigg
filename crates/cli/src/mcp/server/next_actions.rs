@@ -5,7 +5,7 @@
 //! This module only validates advisory follow-ups before they leave the server. It deliberately
 //! does not dispatch tools, replay origins, or mutate the registered router.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use tracing::warn;
@@ -46,10 +46,11 @@ pub(super) fn validate_next_actions_for_router(
 ) -> Vec<NextAction> {
     let actions = actions.into_iter().collect::<Vec<_>>();
     let input_count = actions.len();
+    let mut validators = HashMap::new();
     let retained = actions
         .into_iter()
         .filter(|action| {
-            router.get(action.target.tool_name()).is_some()
+            target_validates_against_live_schema(router, &action.target, &mut validators)
                 && target_has_required_fields(&action.target)
         })
         .collect::<Vec<_>>();
@@ -64,6 +65,29 @@ pub(super) fn validate_next_actions_for_router(
         );
     }
     normalized
+}
+
+fn target_validates_against_live_schema(
+    router: &ToolRouter<FriggMcpServer>,
+    target: &NextActionTarget,
+    validators: &mut HashMap<&'static str, Option<jsonschema::Validator>>,
+) -> bool {
+    let tool_name = target.tool_name();
+    let validator = validators.entry(tool_name).or_insert_with(|| {
+        let tool = router.get(tool_name)?;
+        let schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
+        jsonschema::validator_for(&schema).ok()
+    });
+    let Some(validator) = validator.as_ref() else {
+        return false;
+    };
+    let Ok(serialized) = serde_json::to_value(target) else {
+        return false;
+    };
+    let Some(arguments) = serialized.get("arguments") else {
+        return false;
+    };
+    validator.validate(arguments).is_ok()
 }
 
 fn target_has_required_fields(target: &NextActionTarget) -> bool {
@@ -147,7 +171,7 @@ fn target_has_required_fields(target: &NextActionTarget) -> bool {
         NextActionTarget::InspectSyntaxTree(params) => non_empty(&params.path),
         NextActionTarget::SearchStructural(params) => non_empty(&params.query),
         NextActionTarget::ImpactBundle(params) => {
-            params.target.is_some() || non_empty(&params.symbol)
+            params.target.is_some() ^ non_empty(&params.symbol)
         }
     }
 }
@@ -230,32 +254,42 @@ mod tests {
     #[test]
     fn target_bearing_navigation_actions_validate_without_reconstructed_inputs() {
         let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Core);
-        let target = TargetRef::result_match(
+        let result_target = TargetRef::result_match(
             "result-000001".to_owned(),
             "search:m1".to_owned(),
             "session-scope".to_owned(),
         )
         .expect("non-empty target");
-        let retained = validate_next_actions_for_router(
-            &router,
-            [
-                action(
-                    "definition",
-                    NextActionTarget::GoToDefinition(GoToDefinitionParams {
-                        target: Some(target.clone()),
-                        ..GoToDefinitionParams::default()
-                    }),
-                ),
-                action(
-                    "impact",
-                    NextActionTarget::ImpactBundle(ImpactBundleParams {
-                        target: Some(target),
-                        ..ImpactBundleParams::default()
-                    }),
-                ),
-            ],
-        );
-        assert_eq!(retained.len(), 2);
+        let stable_target = TargetRef::StableSymbol {
+            repository_id: "repo-001".to_owned(),
+            stable_symbol_id: "stable-symbol-001".to_owned(),
+            snapshot_token: "snapshot-001".to_owned(),
+        };
+        let mut validated = 0usize;
+        for target in [result_target, stable_target] {
+            for tool in [
+                "find_references",
+                "go_to_definition",
+                "find_declarations",
+                "find_implementations",
+                "incoming_calls",
+                "outgoing_calls",
+                "impact_bundle",
+            ] {
+                let typed_target = serde_json::from_value::<NextActionTarget>(json!({
+                    "tool": tool,
+                    "arguments": {"target": target.clone()},
+                }))
+                .expect("target-bearing action fixture should parse");
+                let retained = validate_next_actions_for_router(
+                    &router,
+                    [action(&format!("{tool}:{validated}"), typed_target)],
+                );
+                assert_eq!(retained.len(), 1, "{tool} target action should validate");
+                validated = validated.saturating_add(1);
+            }
+        }
+        assert_eq!(validated, 14);
     }
 
     #[test]
@@ -279,6 +313,78 @@ mod tests {
             )],
         );
         assert!(retained.is_empty());
+    }
+
+    #[test]
+    fn live_schema_validation_rejects_empty_target_identity() {
+        let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Core);
+        let invalid_target = TargetRef::ResultMatch {
+            result_handle: String::new(),
+            match_id: "search:m1".to_owned(),
+            target_scope: "session-scope".to_owned(),
+        };
+        let retained = validate_next_actions_for_router(
+            &router,
+            [action(
+                "invalid-target",
+                NextActionTarget::GoToDefinition(GoToDefinitionParams {
+                    target: Some(invalid_target),
+                    ..GoToDefinitionParams::default()
+                }),
+            )],
+        );
+        assert!(
+            retained.is_empty(),
+            "live target schema must contribute minLength validation"
+        );
+    }
+
+    #[test]
+    fn impact_actions_require_exactly_one_input_family() {
+        let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Core);
+        let target = TargetRef::result_match(
+            "result-000001".to_owned(),
+            "search:m1".to_owned(),
+            "session-scope".to_owned(),
+        )
+        .expect("non-empty target");
+        let retained = validate_next_actions_for_router(
+            &router,
+            [
+                action(
+                    "target-only",
+                    NextActionTarget::ImpactBundle(ImpactBundleParams {
+                        target: Some(target.clone()),
+                        ..ImpactBundleParams::default()
+                    }),
+                ),
+                action(
+                    "symbol-only",
+                    NextActionTarget::ImpactBundle(ImpactBundleParams {
+                        symbol: "needle".to_owned(),
+                        ..ImpactBundleParams::default()
+                    }),
+                ),
+                action(
+                    "both",
+                    NextActionTarget::ImpactBundle(ImpactBundleParams {
+                        target: Some(target),
+                        symbol: "needle".to_owned(),
+                        ..ImpactBundleParams::default()
+                    }),
+                ),
+                action(
+                    "neither",
+                    NextActionTarget::ImpactBundle(ImpactBundleParams::default()),
+                ),
+            ],
+        );
+        let mut retained_ids = retained
+            .iter()
+            .map(|action| action.id.0.as_str())
+            .collect::<Vec<_>>();
+        retained_ids.sort_unstable();
+        assert_eq!(retained_ids, vec!["symbol-only", "target-only"]);
     }
 
     #[test]
@@ -346,8 +452,10 @@ mod tests {
             crate::settings::FriggConfig::default(),
             false,
         );
-        let mut recovery = RecoveryFields::default();
-        recovery.next_actions = vec![action("valid", text_target("needle"))];
+        let mut recovery = RecoveryFields {
+            next_actions: vec![action("valid", text_target("needle"))],
+            ..RecoveryFields::default()
+        };
         let RecoveryFields { suggested_next, .. } = &mut recovery;
         suggested_next.push(crate::mcp::types::SuggestedNext {
             tool: "workspace".to_owned(),

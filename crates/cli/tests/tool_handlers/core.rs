@@ -1091,6 +1091,13 @@ async fn core_search_text_context_lines_and_per_file_limits_shape_results() {
         response
             .matches
             .iter()
+            .all(|matched| matched.target_ref.is_some()),
+        "every handle-bound text row should publish its executable target_ref"
+    );
+    assert!(
+        response
+            .matches
+            .iter()
             .all(|matched| matched.excerpt.contains('\n')),
         "context_lines should expand inline excerpts beyond a single line"
     );
@@ -1174,7 +1181,35 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
         .expect("search_hybrid should be deterministic")
         .0;
 
-    assert_eq!(first.matches, second.matches);
+    let mut first_matches = first.matches.clone();
+    let mut second_matches = second.matches.clone();
+    for matched in &mut first_matches {
+        matched.target_ref = None;
+    }
+    for matched in &mut second_matches {
+        matched.target_ref = None;
+    }
+    assert_eq!(first_matches, second_matches);
+    assert!(
+        first
+            .matches
+            .iter()
+            .zip(&second.matches)
+            .all(|(first, second)| {
+                first.match_id == second.match_id
+                    && first
+                        .target_ref
+                        .as_ref()
+                        .and_then(|target| target.target_scope())
+                        == second
+                            .target_ref
+                            .as_ref()
+                            .and_then(|target| target.target_scope())
+                    && first.target_ref.is_some()
+                    && second.target_ref.is_some()
+            }),
+        "deterministic search rows must issue fresh, same-session target refs"
+    );
     assert_eq!(first.matches.len(), 1);
     assert_eq!(first.matches[0].repository_id, repository_id);
     assert_eq!(first.matches[0].path, "src/lib.rs");
@@ -1479,6 +1514,13 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
             .iter()
             .all(|matched| matched.match_id.is_some()),
         "compact search_hybrid matches should expose match ids"
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.target_ref.is_some()),
+        "every handle-bound hybrid row should publish its executable target_ref"
     );
 
     let explicit_false = server

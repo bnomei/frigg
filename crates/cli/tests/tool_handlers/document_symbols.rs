@@ -563,6 +563,24 @@ async fn document_symbols_returns_hierarchy_for_nested_symbols() {
         response.symbols[0].children[0].container.as_deref(),
         Some("inner")
     );
+    for symbol in [&response.symbols[0], &response.symbols[0].children[0]] {
+        let match_id = symbol
+            .match_id
+            .as_deref()
+            .expect("every recursive symbol should be bound to the result handle");
+        assert!(
+            matches!(
+                symbol.target_ref.as_ref(),
+                Some(frigg::mcp::types::TargetRef::ResultMatch {
+                    result_handle,
+                    match_id: target_match_id,
+                    ..
+                }) if response.result_handle.as_deref() == Some(result_handle)
+                    && target_match_id == match_id
+            ),
+            "every recursive symbol should publish its bound target_ref"
+        );
+    }
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -614,6 +632,10 @@ async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children
     assert!(
         response.symbols[0].match_id.is_some(),
         "compact document_symbols should expose match ids"
+    );
+    assert!(
+        response.symbols[0].target_ref.is_some(),
+        "compact document_symbols should expose a target_ref with each match id"
     );
 
     cleanup_workspace_root(&workspace_root);

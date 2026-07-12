@@ -56,10 +56,12 @@ use semantic::{RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecuto
 use semantic::{build_file_semantic_chunks, build_semantic_chunk_candidates};
 pub use symbols::{
     HeuristicReference, HeuristicReferenceConfidence, HeuristicReferenceEvidence,
-    HeuristicReferenceResolver, SourceSpan, StructuralQueryAnchorSelection, StructuralQueryCapture,
-    StructuralQueryMatch, StructuralQueryResultMode, SymbolDefinition, SymbolExtractionDiagnostic,
+    HeuristicReferenceResolver, STABLE_SYMBOL_ID_ALGORITHM_VERSION, SourceSpan,
+    StructuralQueryAnchorSelection, StructuralQueryCapture, StructuralQueryMatch,
+    StructuralQueryResultMode, SymbolDefinition, SymbolExtractionDiagnostic,
     SymbolExtractionOutput, SymbolKind, SyntaxTreeInspection, SyntaxTreeInspectionNode,
-    extract_symbols_for_paths, extract_symbols_from_file, extract_symbols_from_source,
+    extract_symbols_for_paths, extract_symbols_for_paths_with_root, extract_symbols_from_file,
+    extract_symbols_from_source, extract_symbols_from_source_with_identity_path,
     generated_follow_up_structural_at_location_in_source, inspect_syntax_tree_in_source,
     inspect_syntax_tree_with_follow_up_in_source, navigation_symbol_target_rank,
     register_symbol_definitions, resolve_heuristic_references, search_structural_grouped_in_source,
@@ -67,6 +69,7 @@ pub use symbols::{
     search_structural_with_follow_up_in_source,
 };
 pub(crate) use symbols::{
+    assign_repository_relative_symbol_identities, assign_symbol_identity_path,
     byte_offset_for_line_column, line_column_for_offset, push_symbol_definition, source_span,
     source_span_from_offsets,
 };

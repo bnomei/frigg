@@ -114,8 +114,12 @@ impl FriggMcpServer {
                         .map_err(|error| Self::invalid_params(error.message.clone(), Some(json!({ "continuation": error }))))?,
                     None => params_for_blocking.resume_from.unwrap_or(0),
                 };
-                let symbols = extract_symbols_from_source(language, &absolute_path, &source)
+                let mut symbols = extract_symbols_from_source(language, &absolute_path, &source)
                     .map_err(Self::map_frigg_error)?;
+                crate::indexer::assign_symbol_identity_path(
+                    &mut symbols,
+                    Path::new(&display_path),
+                );
 
                 let outline = Self::build_document_symbol_tree(
                     &symbols,
@@ -295,6 +299,7 @@ impl FriggMcpServer {
             nodes.push(PendingDocumentSymbolNode {
                 item: crate::mcp::types::DocumentSymbolItem {
                     match_id: None,
+                    target_ref: None,
                     stable_symbol_id: Some(symbol.stable_id.clone()),
                     symbol: symbol.name.clone(),
                     kind: symbol.kind.as_str().to_owned(),

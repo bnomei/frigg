@@ -1,8 +1,468 @@
 //! Integration tests for navigation MCP handlers (go-to-definition, implementations, and call hierarchy).
 
 use super::*;
-use frigg::mcp::types::{MetadataObject, NavigationTargetSelectionStatus};
+use frigg::mcp::types::{
+    MetadataObject, NavigationResolutionSource, NavigationTargetSelectionStatus, TargetRef,
+};
 use frigg::mcp::types::{NextActionOrigin, NextActionTarget, ReplayOriginTarget};
+
+fn root_signature_for_manifest_paths(workspace_root: &Path, paths: &[&str]) -> String {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn write_bytes(state: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *state ^= u64::from(*byte);
+            *state = state.wrapping_mul(FNV_PRIME);
+        }
+    }
+
+    fn write_separator(state: &mut u64) {
+        write_bytes(state, &[0xff]);
+    }
+
+    let mut entries = paths
+        .iter()
+        .map(|path| {
+            let metadata = fs::metadata(workspace_root.join(path))
+                .expect("manifest signature path should exist");
+            (
+                workspace_root.join(path).to_string_lossy().into_owned(),
+                metadata.len(),
+                metadata.modified().ok().and_then(system_time_to_unix_nanos),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut state = OFFSET_BASIS;
+    for (path, size_bytes, mtime_ns) in entries {
+        write_bytes(&mut state, path.as_bytes());
+        write_separator(&mut state);
+        write_bytes(&mut state, &size_bytes.to_le_bytes());
+        write_separator(&mut state);
+        match mtime_ns {
+            Some(value) => {
+                write_bytes(&mut state, &[1]);
+                write_bytes(&mut state, &value.to_le_bytes());
+                write_separator(&mut state);
+            }
+            None => {
+                write_bytes(&mut state, &[0]);
+                write_separator(&mut state);
+            }
+        }
+    }
+    format!("stable-symbol-v2:{state:016x}")
+}
+
+fn assert_exact_target_selection(
+    selection: Option<&frigg::mcp::types::NavigationTargetSelectionSummary>,
+    expected_source: NavigationResolutionSource,
+    expected_stable_symbol_id: &str,
+) {
+    let selection = selection.expect("target request should expose selection evidence");
+    assert_eq!(selection.status, NavigationTargetSelectionStatus::Resolved);
+    assert_eq!(selection.resolution_source, expected_source);
+    assert_eq!(
+        selection.selected_stable_symbol_id.as_deref(),
+        Some(expected_stable_symbol_id)
+    );
+    assert_eq!(selection.candidate_count, 1);
+    assert_eq!(selection.same_rank_candidate_count, 1);
+    assert!(!selection.ambiguous_query);
+    assert!(selection.candidates.is_empty());
+}
+
+fn assert_bound_target_pair(
+    family: &str,
+    result_handle: Option<&str>,
+    match_id: Option<&str>,
+    target_ref: Option<&TargetRef>,
+) {
+    let result_handle = result_handle.unwrap_or_else(|| panic!("{family} should issue a handle"));
+    let match_id = match_id.unwrap_or_else(|| panic!("{family} should issue a match id"));
+    assert!(
+        matches!(
+            target_ref,
+            Some(TargetRef::ResultMatch {
+                result_handle: target_handle,
+                match_id: target_match_id,
+                ..
+            }) if target_handle == result_handle && target_match_id == match_id
+        ),
+        "{family} child row should carry the exact bound target pair"
+    );
+}
+
+async fn assert_result_target_replays_to_definition(
+    server: &FriggMcpServer,
+    family: &str,
+    target: &TargetRef,
+    expected_repository_id: &str,
+    expected_stable_symbol_id: Option<&str>,
+) {
+    let replay = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(target.clone()),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_or_else(|error| panic!("{family} child target should replay unchanged: {error:?}"))
+        .0;
+    let selection = replay
+        .target_selection
+        .as_ref()
+        .expect("replayed result target should expose selection evidence");
+    assert_eq!(selection.status, NavigationTargetSelectionStatus::Resolved);
+    assert_eq!(
+        selection.resolution_source,
+        NavigationResolutionSource::ResultMatch
+    );
+    assert_eq!(selection.candidate_count, 1);
+    assert_eq!(selection.same_rank_candidate_count, 1);
+    assert!(!selection.ambiguous_query);
+    if let Some(expected_stable_symbol_id) = expected_stable_symbol_id {
+        assert_eq!(
+            selection.selected_stable_symbol_id.as_deref(),
+            Some(expected_stable_symbol_id)
+        );
+    } else {
+        assert!(
+            selection.selected_stable_symbol_id.is_some(),
+            "coordinate-bound {family} target should resolve one indexed symbol"
+        );
+    }
+    assert!(
+        replay
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id),
+        "{family} child target must remain repository-bound"
+    );
+}
+
+fn assert_target_error_contract(error: &rmcp::ErrorData, expected_code: &str, private_root: &Path) {
+    assert_eq!(error_code_tag(error), Some(expected_code));
+    let data = error
+        .data
+        .as_ref()
+        .expect("target failure should include structured recovery");
+    assert_eq!(data["error_code"], expected_code);
+    assert!(data["correction_hint"].is_string());
+    assert!(data["related_tools"].is_array());
+    assert_eq!(data["next_actions"], serde_json::json!([]));
+    assert_eq!(data["suggested_next"], serde_json::json!([]));
+    let wire = serde_json::to_string(data).expect("target error data should serialize");
+    assert!(
+        !wire.contains(&private_root.to_string_lossy().into_owned()),
+        "target errors must not expose absolute workspace paths"
+    );
+    for private_key in [
+        "source_digest",
+        "source_bytes",
+        "source_revision",
+        "resolved_absolute_path",
+        "cache_key",
+        "authorization",
+    ] {
+        assert!(data.get(private_key).is_none());
+    }
+}
+
+async fn assert_target_routes_through_every_consumer(
+    server: &FriggMcpServer,
+    target: &TargetRef,
+    expected_source: NavigationResolutionSource,
+    expected_repository_id: &str,
+    expected_stable_symbol_id: &str,
+) {
+    let references = server
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(target.clone()),
+            include_definition: Some(true),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("find_references should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        references.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert!(
+        references
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id)
+    );
+
+    let definition = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(target.clone()),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("go_to_definition should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        definition.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert!(
+        definition
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id)
+    );
+
+    let declarations = server
+        .find_declarations(Parameters(FindDeclarationsParams {
+            target: Some(target.clone()),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("find_declarations should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        declarations.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert!(
+        declarations
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id)
+    );
+
+    let implementations = server
+        .find_implementations(Parameters(FindImplementationsParams {
+            target: Some(target.clone()),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("find_implementations should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        implementations.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert!(
+        implementations
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id)
+    );
+
+    let incoming = server
+        .incoming_calls(Parameters(IncomingCallsParams {
+            target: Some(target.clone()),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("incoming_calls should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        incoming.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert!(
+        incoming
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id)
+    );
+
+    let outgoing = server
+        .outgoing_calls(Parameters(OutgoingCallsParams {
+            target: Some(target.clone()),
+            limit: Some(10),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("outgoing_calls should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        outgoing.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert!(
+        outgoing
+            .matches
+            .iter()
+            .all(|matched| matched.repository_id == expected_repository_id)
+    );
+
+    let impact = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: Some(target.clone()),
+            symbol: String::new(),
+            path_class: None,
+            repository_id: None,
+            include_implementations: Some(true),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("impact_bundle should accept the exact target")
+        .0;
+    assert_exact_target_selection(
+        impact.target_selection.as_ref(),
+        expected_source,
+        expected_stable_symbol_id,
+    );
+    assert_eq!(impact.symbol, "target");
+    assert_eq!(impact.symbols.len(), 1);
+    assert!(
+        !impact.references.is_empty(),
+        "target fixture must produce impact reference children"
+    );
+    assert!(
+        !impact.incoming_calls.is_empty(),
+        "target fixture must produce impact incoming-call children"
+    );
+    assert!(
+        !impact.implementations.is_empty(),
+        "target fixture must produce impact implementation children"
+    );
+    assert_eq!(impact.symbols[0].repository_id, expected_repository_id);
+    assert_eq!(
+        impact.symbols[0].stable_symbol_id.as_deref(),
+        Some(expected_stable_symbol_id)
+    );
+    assert_bound_target_pair(
+        "impact symbols",
+        impact.symbols_result_handle.as_deref(),
+        impact.symbols[0].match_id.as_deref(),
+        impact.symbols[0].target_ref.as_ref(),
+    );
+    let issued_symbol_target = impact.symbols[0]
+        .target_ref
+        .clone()
+        .expect("target-mode impact symbol should issue a child target");
+    assert_result_target_replays_to_definition(
+        server,
+        "impact symbols",
+        &issued_symbol_target,
+        expected_repository_id,
+        Some(
+            impact.symbols[0]
+                .stable_symbol_id
+                .as_deref()
+                .expect("impact symbol child should preserve stable identity"),
+        ),
+    )
+    .await;
+    if let Some(implementation_action) =
+        impact
+            .recovery
+            .next_actions
+            .iter()
+            .find_map(|action| match &action.target {
+                NextActionTarget::FindImplementations(params) => Some(params),
+                _ => None,
+            })
+    {
+        assert_eq!(
+            implementation_action.target.as_ref(),
+            Some(&issued_symbol_target)
+        );
+        assert!(implementation_action.symbol.is_none());
+        assert!(implementation_action.path.is_none());
+        server
+            .find_implementations(Parameters(implementation_action.clone()))
+            .await
+            .expect("impact's target-bearing implementation action should replay unchanged");
+    }
+    for matched in &impact.references {
+        assert_eq!(matched.repository_id, expected_repository_id);
+        assert_bound_target_pair(
+            "impact references",
+            impact.references_result_handle.as_deref(),
+            matched.match_id.as_deref(),
+            matched.target_ref.as_ref(),
+        );
+        assert_result_target_replays_to_definition(
+            server,
+            "impact references",
+            matched
+                .target_ref
+                .as_ref()
+                .expect("impact reference child should issue a target"),
+            expected_repository_id,
+            Some(
+                matched
+                    .stable_symbol_id
+                    .as_deref()
+                    .expect("impact reference child should preserve stable identity"),
+            ),
+        )
+        .await;
+    }
+    for matched in &impact.incoming_calls {
+        assert_eq!(matched.repository_id, expected_repository_id);
+        assert_bound_target_pair(
+            "impact incoming calls",
+            impact.incoming_calls_result_handle.as_deref(),
+            matched.match_id.as_deref(),
+            matched.target_ref.as_ref(),
+        );
+        assert_result_target_replays_to_definition(
+            server,
+            "impact incoming calls",
+            matched
+                .target_ref
+                .as_ref()
+                .expect("impact incoming-call child should issue a target"),
+            expected_repository_id,
+            Some(
+                matched
+                    .source_stable_symbol_id
+                    .as_deref()
+                    .expect("impact incoming-call child should preserve source identity"),
+            ),
+        )
+        .await;
+    }
+    for matched in &impact.implementations {
+        assert_eq!(matched.repository_id, expected_repository_id);
+        assert_bound_target_pair(
+            "impact implementations",
+            impact.implementations_result_handle.as_deref(),
+            matched.match_id.as_deref(),
+            matched.target_ref.as_ref(),
+        );
+        assert_result_target_replays_to_definition(
+            server,
+            "impact implementations",
+            matched
+                .target_ref
+                .as_ref()
+                .expect("impact implementation child should issue a target"),
+            expected_repository_id,
+            matched.stable_symbol_id.as_deref(),
+        )
+        .await;
+    }
+}
 
 fn assert_response_metadata_has_freshness(metadata: &Option<MetadataObject>, tool_name: &str) {
     let metadata = metadata
@@ -216,8 +676,706 @@ async fn navigation_go_to_definition_defaults_to_compact_but_keeps_mode_and_hand
             .all(|matched| matched.match_id.is_some()),
         "compact go_to_definition matches should expose match ids"
     );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.target_ref.is_some()),
+        "compact navigation rows should publish target refs with their match ids"
+    );
 
     cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn result_target_enforces_exclusive_inputs_repository_assertions_and_source_freshness() {
+    let workspace_root = temp_workspace_root("result-target-request-validation");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let source_path = src_root.join("lib.rs");
+    fs::write(&source_path, "pub fn target() {}\n")
+        .expect("failed to seed temporary fixture source");
+    let other_root = temp_workspace_root("result-target-request-validation-other");
+    fs::create_dir_all(other_root.join("src")).expect("failed to create second fixture");
+    fs::write(other_root.join("src/lib.rs"), "pub fn other() {}\n")
+        .expect("failed to seed second fixture source");
+    let config =
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone(), other_root.clone()])
+            .expect("two fixture roots must produce valid config");
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+    let repository_id = stable_public_repository_id_for_root(&workspace_root);
+    let other_repository_id = stable_public_repository_id_for_root(&other_root);
+
+    let produced = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("search_symbol should issue a target")
+        .0;
+    let target = produced
+        .matches
+        .first()
+        .and_then(|row| row.target_ref.clone())
+        .expect("symbol row should carry its executable target");
+
+    let _accepted_stable_assertion = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(target.clone()),
+            repository_id: Some(repository_id.clone()),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("an equal repository assertion should be accepted");
+
+    let text_target = server
+        .search_text(Parameters(SearchTextParams {
+            query: "target".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id.clone()),
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("search_text should issue a coordinate-bound target")
+        .0
+        .matches
+        .into_iter()
+        .find_map(|row| row.target_ref)
+        .expect("text row should carry its coordinate target");
+    let _accepted_result_assertion = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(text_target),
+            repository_id: Some(repository_id.clone()),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("an exact symbol-start coordinate target should resolve");
+
+    let conflict = match server
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(target.clone()),
+            symbol: Some("target".to_owned()),
+            repository_id: Some(repository_id.clone()),
+            include_definition: Some(true),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("target plus direct symbol must be rejected"),
+    };
+    assert_eq!(conflict.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&conflict), Some("CONFLICTING_TARGET_INPUT"));
+
+    let precedence_conflict = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(target.clone()),
+            symbol: Some("target".to_owned()),
+            repository_id: Some(repository_id.clone()),
+            limit: Some(0),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("target conflict preflight must run before generic limit validation"),
+    };
+    assert_eq!(precedence_conflict.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error_code_tag(&precedence_conflict),
+        Some("CONFLICTING_TARGET_INPUT")
+    );
+
+    let precedence_mismatch = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(target.clone()),
+            repository_id: Some(other_repository_id.clone()),
+            limit: Some(0),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("target repository preflight must run before generic limit validation"),
+    };
+    assert_eq!(precedence_mismatch.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error_code_tag(&precedence_mismatch),
+        Some("TARGET_REPOSITORY_MISMATCH")
+    );
+
+    let mismatch = match server
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(target.clone()),
+            repository_id: Some(other_repository_id),
+            include_definition: Some(true),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a conflicting repository assertion must be rejected"),
+    };
+    assert_eq!(mismatch.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error_code_tag(&mismatch),
+        Some("TARGET_REPOSITORY_MISMATCH")
+    );
+
+    fs::write(
+        &source_path,
+        "// changed before any watcher invalidation\npub fn target() {}\n",
+    )
+    .expect("fixture mutation should persist");
+    let stale = match server
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(target),
+            repository_id: Some(repository_id),
+            include_definition: Some(true),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("navigation must verify the producer source revision before dispatch"),
+    };
+    assert_eq!(stale.code, ErrorCode::RESOURCE_NOT_FOUND);
+    assert_eq!(error_code_tag(&stale), Some("STALE_PROOF_ANCHOR"));
+    let data = stale
+        .data
+        .expect("stale target failure should include structured recovery");
+    assert!(data["correction_hint"].is_string());
+    assert!(data["related_tools"].is_array());
+    assert_eq!(data["next_actions"], serde_json::json!([]));
+    assert!(data.get("resolved_absolute_path").is_none());
+    assert!(data.get("source_revision").is_none());
+
+    cleanup_workspace_root(&workspace_root);
+    cleanup_workspace_root(&other_root);
+}
+
+#[tokio::test]
+async fn result_target_routes_through_every_navigation_consumer() {
+    let workspace_root = temp_workspace_root("result-target-consumer-matrix-a");
+    let collision_root = temp_workspace_root("result-target-consumer-matrix-b");
+    let source = "pub fn target() {}\n\
+                  pub fn target_impl() {}\n\
+                  pub fn caller() { target(); }\n";
+    let precise_fixture = r#"{
+      "documents": [{
+        "relative_path": "src/lib.rs",
+        "occurrences": [
+          { "symbol": "scip-rust pkg shared#target", "range": [0, 7, 13], "symbol_roles": 1 },
+          { "symbol": "scip-rust pkg shared#target_impl", "range": [1, 7, 18], "symbol_roles": 1 },
+          { "symbol": "scip-rust pkg shared#caller", "range": [2, 7, 13], "symbol_roles": 1 },
+          { "symbol": "scip-rust pkg shared#target", "range": [2, 18, 24], "symbol_roles": 8 }
+        ],
+        "symbols": [
+          { "symbol": "scip-rust pkg shared#target", "display_name": "target", "kind": "function", "relationships": [] },
+          { "symbol": "scip-rust pkg shared#target_impl", "display_name": "target_impl", "kind": "function",
+            "relationships": [{ "symbol": "scip-rust pkg shared#target", "is_implementation": true }] },
+          { "symbol": "scip-rust pkg shared#caller", "display_name": "caller", "kind": "function", "relationships": [] }
+        ]
+      }]
+    }"#;
+    for root in [&workspace_root, &collision_root] {
+        fs::create_dir_all(root.join("src")).expect("failed to create collision fixture");
+        fs::write(root.join("src/lib.rs"), source)
+            .expect("failed to seed collision fixture source");
+        write_scip_fixture(root, "same-stable-id.json", precise_fixture);
+        let repository_id = stable_public_repository_id_for_root(root);
+        seed_manifest_snapshot(root, &repository_id, "snapshot-001", &["src/lib.rs"]);
+    }
+    let repository_id = stable_public_repository_id_for_root(&workspace_root);
+    let collision_repository_id = stable_public_repository_id_for_root(&collision_root);
+    let config =
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone(), collision_root.clone()])
+            .expect("collision roots must produce valid config");
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+
+    let produced = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("search_symbol should issue the matrix target")
+        .0;
+    let row = produced
+        .matches
+        .first()
+        .expect("symbol fixture should expose target");
+    let stable_symbol_id = row
+        .stable_symbol_id
+        .clone()
+        .expect("symbol row should expose stable identity");
+    let result_target = row
+        .target_ref
+        .clone()
+        .expect("symbol row should carry the matrix target");
+
+    let collision = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some(collision_repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("collision repository should expose the same target")
+        .0;
+    assert_eq!(collision.matches[0].symbol, "target");
+    let collision_stable_symbol_id = collision.matches[0]
+        .stable_symbol_id
+        .clone()
+        .expect("collision symbol should expose stable identity");
+    let stable_target = TargetRef::StableSymbol {
+        repository_id: repository_id.clone(),
+        stable_symbol_id: stable_symbol_id.clone(),
+        snapshot_token: root_signature_for_manifest_paths(&workspace_root, &["src/lib.rs"]),
+    };
+
+    assert_target_routes_through_every_consumer(
+        &server,
+        &result_target,
+        NavigationResolutionSource::ResultMatch,
+        &repository_id,
+        &stable_symbol_id,
+    )
+    .await;
+
+    assert_target_routes_through_every_consumer(
+        &server,
+        &stable_target,
+        NavigationResolutionSource::StableSymbol,
+        &repository_id,
+        &stable_symbol_id,
+    )
+    .await;
+
+    let target_actions = produced
+        .recovery
+        .next_actions
+        .iter()
+        .filter(|action| {
+            matches!(
+                action.target,
+                NextActionTarget::GoToDefinition(_)
+                    | NextActionTarget::FindReferences(_)
+                    | NextActionTarget::ImpactBundle(_)
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(target_actions.len(), 3);
+    for action in target_actions {
+        match &action.target {
+            NextActionTarget::GoToDefinition(params) => {
+                assert_eq!(params.target.as_ref(), Some(&result_target));
+                server
+                    .go_to_definition(Parameters(params.clone()))
+                    .await
+                    .expect("issued definition action should replay unchanged");
+            }
+            NextActionTarget::FindReferences(params) => {
+                assert_eq!(params.target.as_ref(), Some(&result_target));
+                server
+                    .find_references(Parameters(params.clone()))
+                    .await
+                    .expect("issued references action should replay unchanged");
+            }
+            NextActionTarget::ImpactBundle(params) => {
+                assert_eq!(params.target.as_ref(), Some(&result_target));
+                assert!(params.symbol.is_empty());
+                server
+                    .impact_bundle(Parameters(params.clone()))
+                    .await
+                    .expect("issued impact action should replay unchanged");
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(
+        collision_stable_symbol_id, stable_symbol_id,
+        "matching source and SCIP identity in two repositories must expose the same public stable symbol id"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+    cleanup_workspace_root(&collision_root);
+}
+
+#[tokio::test]
+async fn stable_and_coordinate_targets_cover_fixed_errors_mutation_and_legacy_sources() {
+    let workspace_root = temp_workspace_root("target-error-and-coordinate-matrix");
+    let other_root = temp_workspace_root("target-error-and-coordinate-matrix-other");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create target fixture");
+    fs::create_dir_all(other_root.join("src")).expect("failed to create assertion fixture");
+    let source_path = workspace_root.join("src/lib.rs");
+    fs::write(
+        &source_path,
+        "// orphan_marker\npub fn target() { let inside_marker = 1; }// boundary_marker\n",
+    )
+    .expect("failed to seed target fixture");
+    fs::write(other_root.join("src/lib.rs"), "pub fn other() {}\n")
+        .expect("failed to seed assertion fixture");
+    let repository_id = stable_public_repository_id_for_root(&workspace_root);
+    let other_repository_id = stable_public_repository_id_for_root(&other_root);
+    seed_manifest_snapshot(
+        &workspace_root,
+        &repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    seed_manifest_snapshot(
+        &other_root,
+        &other_repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    let config =
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone(), other_root.clone()])
+            .expect("target fixtures must produce valid config");
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+
+    let symbol_response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("symbol fixture should be indexed")
+        .0;
+    let stable_symbol_id = symbol_response.matches[0]
+        .stable_symbol_id
+        .clone()
+        .expect("symbol fixture should expose stable identity");
+    let snapshot_token = root_signature_for_manifest_paths(&workspace_root, &["src/lib.rs"]);
+    let stable_target = TargetRef::StableSymbol {
+        repository_id: repository_id.clone(),
+        stable_symbol_id: stable_symbol_id.clone(),
+        snapshot_token: snapshot_token.clone(),
+    };
+
+    let stale_snapshot = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(TargetRef::StableSymbol {
+                repository_id: repository_id.clone(),
+                stable_symbol_id: stable_symbol_id.clone(),
+                snapshot_token: "stale-snapshot-token".to_owned(),
+            }),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a stale corpus token must fail"),
+    };
+    assert_target_error_contract(&stale_snapshot, "STALE_TARGET_SNAPSHOT", &workspace_root);
+
+    let pre_algorithm_snapshot = snapshot_token
+        .strip_prefix("stable-symbol-v2:")
+        .expect("current target snapshots must carry the stable-symbol algorithm version")
+        .to_owned();
+    let pre_algorithm_target = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(TargetRef::StableSymbol {
+                repository_id: repository_id.clone(),
+                stable_symbol_id: stable_symbol_id.clone(),
+                snapshot_token: pre_algorithm_snapshot,
+            }),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a pre-algorithm-version target must fail closed"),
+    };
+    assert_target_error_contract(
+        &pre_algorithm_target,
+        "STALE_TARGET_SNAPSHOT",
+        &workspace_root,
+    );
+
+    let missing_symbol = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(TargetRef::StableSymbol {
+                repository_id: repository_id.clone(),
+                stable_symbol_id: "stable-id-not-in-this-corpus".to_owned(),
+                snapshot_token: snapshot_token.clone(),
+            }),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("an absent stable symbol must fail"),
+    };
+    assert_target_error_contract(&missing_symbol, "TARGET_NOT_FOUND", &workspace_root);
+
+    let repository_mismatch = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(stable_target.clone()),
+            repository_id: Some(other_repository_id.clone()),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a mismatched stable-target repository assertion must fail"),
+    };
+    assert_target_error_contract(
+        &repository_mismatch,
+        "TARGET_REPOSITORY_MISMATCH",
+        &workspace_root,
+    );
+
+    let missing_repository = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(TargetRef::StableSymbol {
+                repository_id: "repo-not-attached".to_owned(),
+                stable_symbol_id: stable_symbol_id.clone(),
+                snapshot_token: snapshot_token.clone(),
+            }),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("an absent target repository must fail"),
+    };
+    assert_target_error_contract(&missing_repository, "REPOSITORY_NOT_FOUND", &workspace_root);
+
+    let orphan_response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "orphan_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id.clone()),
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("orphan marker should produce a coordinate target")
+        .0;
+    assert!(
+        orphan_response
+            .recovery
+            .next_actions
+            .iter()
+            .all(|action| !matches!(
+                action.target,
+                NextActionTarget::GoToDefinition(_)
+                    | NextActionTarget::FindReferences(_)
+                    | NextActionTarget::ImpactBundle(_)
+            )),
+        "an anchor known to be semantically unresolvable must not advertise navigation actions"
+    );
+    let orphan_target = orphan_response.matches[0]
+        .target_ref
+        .clone()
+        .expect("text row should expose a result target");
+    let insufficient = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(orphan_target),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a coordinate outside every indexed symbol must fail closed"),
+    };
+    assert_target_error_contract(&insufficient, "TARGET_ANCHOR_INSUFFICIENT", &workspace_root);
+
+    let boundary_response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "boundary_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id.clone()),
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("same-line boundary marker should produce a coordinate target")
+        .0;
+    assert!(
+        boundary_response
+            .recovery
+            .next_actions
+            .iter()
+            .all(|action| !matches!(
+                action.target,
+                NextActionTarget::GoToDefinition(_)
+                    | NextActionTarget::FindReferences(_)
+                    | NextActionTarget::ImpactBundle(_)
+            )),
+        "a row at a symbol's exclusive end must not advertise navigation actions"
+    );
+    let boundary_target = boundary_response.matches[0]
+        .target_ref
+        .clone()
+        .expect("boundary text row should expose a proof target");
+    let boundary_error = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(boundary_target),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("tree-sitter's exclusive symbol end must not resolve as containment"),
+    };
+    assert_target_error_contract(
+        &boundary_error,
+        "TARGET_ANCHOR_INSUFFICIENT",
+        &workspace_root,
+    );
+
+    let inside_target = server
+        .search_text(Parameters(SearchTextParams {
+            query: "inside_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id.clone()),
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("inside marker should produce a coordinate target")
+        .0
+        .matches[0]
+        .target_ref
+        .clone()
+        .expect("inside text row should expose a result target");
+    let enclosing = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(inside_target),
+            ..Default::default()
+        }))
+        .await
+        .expect("the unique smallest enclosing symbol should resolve")
+        .0;
+    assert_exact_target_selection(
+        enclosing.target_selection.as_ref(),
+        NavigationResolutionSource::ResultMatch,
+        &stable_symbol_id,
+    );
+
+    let direct_symbol = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("target".to_owned()),
+            repository_id: Some(repository_id.clone()),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("legacy symbol navigation should remain valid")
+        .0;
+    assert_exact_target_selection(
+        direct_symbol.target_selection.as_ref(),
+        NavigationResolutionSource::DirectSymbol,
+        &stable_symbol_id,
+    );
+    let direct_location = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            repository_id: Some(repository_id.clone()),
+            path: Some("src/lib.rs".to_owned()),
+            line: Some(2),
+            column: Some(27),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("legacy location navigation should remain valid")
+        .0;
+    assert_exact_target_selection(
+        direct_location.target_selection.as_ref(),
+        NavigationResolutionSource::DirectLocation,
+        &stable_symbol_id,
+    );
+
+    rewrite_file_with_new_mtime(
+        &source_path,
+        "// orphan_marker\npub fn changed_target() { let inside_marker = 1; }\n",
+    );
+    seed_manifest_snapshot(
+        &workspace_root,
+        &repository_id,
+        "snapshot-002",
+        &["src/lib.rs"],
+    );
+    let mutated_config =
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone(), other_root.clone()])
+            .expect("mutated target fixtures must produce valid config");
+    let mutated_server = FriggMcpServer::new(mutated_config);
+    attach_session_repositories(&mutated_server).await;
+    let changed = mutated_server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "changed_target".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("the changed corpus should be adopted before stale-target validation")
+        .0;
+    assert_eq!(changed.matches[0].symbol, "changed_target");
+    let stale_after_mutation = match mutated_server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(stable_target),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("an old stable target must fail after corpus mutation"),
+    };
+    assert_target_error_contract(
+        &stale_after_mutation,
+        "STALE_TARGET_SNAPSHOT",
+        &workspace_root,
+    );
+
+    cleanup_workspace_root(&workspace_root);
+    cleanup_workspace_root(&other_root);
 }
 
 #[tokio::test]
@@ -3574,6 +4732,105 @@ async fn impact_bundle_same_rank_legacy_symbol_requires_disambiguation() {
     assert!(
         response.incoming_calls.is_empty(),
         "must not choose a target for incoming calls"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_legacy_path_class_constrains_target_selection() {
+    let workspace_root = temp_workspace_root("impact-bundle-path-class-selection");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create runtime fixture");
+    fs::create_dir_all(workspace_root.join("tests")).expect("failed to create support fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn target() {}\npub fn runtime_caller() { target(); }\n",
+    )
+    .expect("failed to seed runtime target");
+    fs::write(
+        workspace_root.join("tests/support.rs"),
+        "pub fn target() {}\npub fn support_caller() { target(); }\n",
+    )
+    .expect("failed to seed support target");
+    write_scip_fixture(
+        &workspace_root,
+        "impact_bundle_path_class.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#runtime_target", "range": [0, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#runtime_caller", "range": [1, 7, 21], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#runtime_target", "range": [1, 26, 32], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                { "symbol": "scip-rust pkg repo#runtime_target", "display_name": "target", "kind": "function", "relationships": [] },
+                { "symbol": "scip-rust pkg repo#runtime_caller", "display_name": "runtime_caller", "kind": "function", "relationships": [] }
+              ]
+            },
+            {
+              "relative_path": "tests/support.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#support_target", "range": [0, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#support_caller", "range": [1, 7, 21], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#support_target", "range": [1, 26, 32], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                { "symbol": "scip-rust pkg repo#support_target", "display_name": "target", "kind": "function", "relationships": [] },
+                { "symbol": "scip-rust pkg repo#support_caller", "display_name": "support_caller", "kind": "function", "relationships": [] }
+              ]
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
+            symbol: "target".to_owned(),
+            path_class: Some(SearchSymbolPathClass::Support),
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: Some(false),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("legacy support-only impact selection should resolve exactly")
+        .0;
+
+    assert_eq!(response.symbols.len(), 1);
+    assert_eq!(response.symbols[0].path, "tests/support.rs");
+    let selection = response
+        .target_selection
+        .as_ref()
+        .expect("legacy impact should expose its selected target");
+    assert_eq!(selection.status, NavigationTargetSelectionStatus::Resolved);
+    assert_eq!(
+        selection.resolution_source,
+        NavigationResolutionSource::DirectSymbol
+    );
+    assert_eq!(selection.candidate_count, 1);
+    assert_eq!(selection.same_rank_candidate_count, 1);
+    assert_eq!(
+        selection.selected_stable_symbol_id,
+        response.symbols[0].stable_symbol_id
+    );
+    assert!(
+        !response.references.is_empty()
+            && response
+                .references
+                .iter()
+                .all(|matched| matched.path == "tests/support.rs"),
+        "support path_class must constrain reference composition"
+    );
+    assert!(
+        !response.incoming_calls.is_empty()
+            && response
+                .incoming_calls
+                .iter()
+                .all(|matched| matched.path == "tests/support.rs"),
+        "support path_class must constrain incoming-call composition"
     );
 
     cleanup_workspace_root(&workspace_root);

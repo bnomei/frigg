@@ -15,7 +15,8 @@ use crate::domain::{
 use crate::graph::{HeuristicConfidence, RelationKind, SymbolGraph};
 use crate::indexer::{
     PhpDeclarationRelation, SymbolDefinition, extract_php_graph_analysis_from_source,
-    extract_symbols_for_paths, php_declaration_relation_edges_for_relations,
+    extract_php_source_evidence_from_source, extract_symbols_from_source_with_identity_path,
+    php_declaration_relation_edges_for_relations,
     php_heuristic_implementation_candidates_for_target, register_symbol_definitions,
     resolve_php_target_evidence_edges,
 };
@@ -77,7 +78,7 @@ struct HybridGraphCandidateExtraction {
     blade_evidence_by_relative_path: BTreeMap<String, BladeSourceEvidence>,
 }
 
-pub(in crate::searcher) const HYBRID_GRAPH_ARTIFACT_VERSION: u32 = 1;
+pub(in crate::searcher) const HYBRID_GRAPH_ARTIFACT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::searcher) struct HybridGraphArtifactCacheKey {
@@ -1174,7 +1175,7 @@ fn hybrid_graph_candidate_signature(
         hasher.update(relative_path.as_bytes());
         hasher.update(&[0x00]);
         if snapshot_id.is_none() {
-            let metadata = hybrid_graph_file_analysis_cache_key(absolute_path)?;
+            let metadata = hybrid_graph_file_analysis_cache_key(relative_path, absolute_path)?;
             hasher.update(relative_path.as_bytes());
             hasher.update(&[0x01]);
             hasher.update(&metadata.modified_unix_nanos.to_le_bytes());
@@ -1192,7 +1193,9 @@ fn extract_graph_candidate_data(
     let mut extraction = HybridGraphCandidateExtraction::default();
 
     for (relative_path, absolute_path) in candidate_files {
-        let Some(file_analysis) = hybrid_graph_file_analysis(searcher, absolute_path) else {
+        let Some(file_analysis) =
+            hybrid_graph_file_analysis(searcher, relative_path, absolute_path)
+        else {
             continue;
         };
         extraction
@@ -1223,9 +1226,10 @@ fn extract_graph_candidate_data(
 
 fn hybrid_graph_file_analysis(
     searcher: &TextSearcher,
+    relative_path: &str,
     absolute_path: &Path,
 ) -> Option<std::sync::Arc<HybridGraphFileAnalysis>> {
-    let cache_key = hybrid_graph_file_analysis_cache_key(absolute_path);
+    let cache_key = hybrid_graph_file_analysis_cache_key(relative_path, absolute_path);
     if let Some(key) = cache_key.as_ref()
         && let Some(cached) = searcher
             .hybrid_graph_file_analysis_cache
@@ -1237,7 +1241,10 @@ fn hybrid_graph_file_analysis(
         return Some(cached);
     }
 
-    let analysis = std::sync::Arc::new(build_hybrid_graph_file_analysis(absolute_path)?);
+    let analysis = std::sync::Arc::new(build_hybrid_graph_file_analysis(
+        relative_path,
+        absolute_path,
+    )?);
     if let Some(key) = cache_key {
         let mut cache = searcher
             .hybrid_graph_file_analysis_cache
@@ -1250,6 +1257,7 @@ fn hybrid_graph_file_analysis(
 }
 
 fn hybrid_graph_file_analysis_cache_key(
+    relative_path: &str,
     absolute_path: &Path,
 ) -> Option<HybridGraphFileAnalysisCacheKey> {
     let metadata = fs::metadata(absolute_path).ok()?;
@@ -1259,18 +1267,38 @@ fn hybrid_graph_file_analysis_cache_key(
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_nanos();
+    let mut identity_hasher = SignatureHasher::new();
+    identity_hasher.update(absolute_path.to_string_lossy().as_bytes());
+    identity_hasher.update(&[0]);
+    identity_hasher.update(relative_path.as_bytes());
+    let cache_identity_path = PathBuf::from(format!(
+        "{}#frigg-identity-{}",
+        absolute_path.display(),
+        identity_hasher.finalize().to_hex()
+    ));
     Some(HybridGraphFileAnalysisCacheKey {
-        path: absolute_path.to_path_buf(),
+        path: cache_identity_path,
         modified_unix_nanos,
         size_bytes: metadata.len(),
     })
 }
 
-fn build_hybrid_graph_file_analysis(absolute_path: &Path) -> Option<HybridGraphFileAnalysis> {
+fn build_hybrid_graph_file_analysis(
+    relative_path: &str,
+    absolute_path: &Path,
+) -> Option<HybridGraphFileAnalysis> {
     match SymbolLanguage::from_path(absolute_path) {
         Some(SymbolLanguage::Php) => {
             let source = fs::read_to_string(absolute_path).ok()?;
-            let analysis = extract_php_graph_analysis_from_source(absolute_path, &source).ok()?;
+            let mut analysis =
+                extract_php_graph_analysis_from_source(absolute_path, &source).ok()?;
+            crate::indexer::assign_symbol_identity_path(
+                &mut analysis.symbols,
+                Path::new(relative_path),
+            );
+            analysis.source_evidence =
+                extract_php_source_evidence_from_source(absolute_path, &source, &analysis.symbols)
+                    .ok()?;
             Some(HybridGraphFileAnalysis {
                 symbols: analysis.symbols,
                 php_declaration_relations: Some(analysis.declaration_relations),
@@ -1280,25 +1308,38 @@ fn build_hybrid_graph_file_analysis(absolute_path: &Path) -> Option<HybridGraphF
         }
         Some(SymbolLanguage::Blade) => {
             let source = fs::read_to_string(absolute_path).ok()?;
-            let mut extracted = extract_symbols_for_paths(&[absolute_path.to_path_buf()]);
-            let blade_evidence =
-                extract_blade_source_evidence_from_source(&source, &extracted.symbols);
+            let symbols = extract_symbols_from_source_with_identity_path(
+                SymbolLanguage::Blade,
+                absolute_path,
+                Path::new(relative_path),
+                &source,
+            )
+            .ok()?;
+            let blade_evidence = extract_blade_source_evidence_from_source(&source, &symbols);
             Some(HybridGraphFileAnalysis {
-                symbols: std::mem::take(&mut extracted.symbols),
+                symbols,
                 php_declaration_relations: None,
                 php_evidence: None,
                 blade_evidence: Some(blade_evidence),
             })
         }
-        Some(_) => {
-            let mut extracted = extract_symbols_for_paths(&[absolute_path.to_path_buf()]);
-            Some(HybridGraphFileAnalysis {
-                symbols: std::mem::take(&mut extracted.symbols),
+        Some(language) => fs::read_to_string(absolute_path)
+            .ok()
+            .and_then(|source| {
+                extract_symbols_from_source_with_identity_path(
+                    language,
+                    absolute_path,
+                    Path::new(relative_path),
+                    &source,
+                )
+                .ok()
+            })
+            .map(|symbols| HybridGraphFileAnalysis {
+                symbols,
                 php_declaration_relations: None,
                 php_evidence: None,
                 blade_evidence: None,
-            })
-        }
+            }),
         None => None,
     }
 }
@@ -1457,5 +1498,36 @@ fn register_search_blade_relation_evidence(
             let _ =
                 graph.add_relation(&source_symbol.stable_id, &target_symbol.stable_id, relation);
         }
+    }
+}
+
+#[cfg(test)]
+mod stable_identity_tests {
+    use super::*;
+
+    #[test]
+    fn hybrid_file_cache_identity_includes_repository_relative_path() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!(
+            "frigg-hybrid-cache-identity-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp).expect("create temporary graph cache fixture");
+        let absolute_path = temp.join("shared.rs");
+        fs::write(&absolute_path, "pub fn shared() {}\n").expect("write graph cache fixture");
+
+        let root_key = hybrid_graph_file_analysis_cache_key("shared.rs", &absolute_path)
+            .expect("root-relative cache key");
+        let nested_key = hybrid_graph_file_analysis_cache_key("nested/shared.rs", &absolute_path)
+            .expect("nested-relative cache key");
+
+        assert_ne!(root_key.path, nested_key.path);
+        assert_eq!(root_key.modified_unix_nanos, nested_key.modified_unix_nanos);
+        assert_eq!(root_key.size_bytes, nested_key.size_bytes);
+
+        fs::remove_dir_all(temp).expect("remove temporary graph cache fixture");
     }
 }

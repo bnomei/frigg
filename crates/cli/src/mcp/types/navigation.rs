@@ -48,10 +48,21 @@ pub enum NavigationTargetSelectionStatus {
     DisambiguationRequired,
 }
 
+/// Closed public category describing how the selected navigation target was resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationResolutionSource {
+    ResultMatch,
+    StableSymbol,
+    DirectSymbol,
+    DirectLocation,
+}
+
 /// Target-resolution summary shared by navigation tool responses.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigationTargetSelectionSummary {
     pub status: NavigationTargetSelectionStatus,
+    pub resolution_source: NavigationResolutionSource,
     pub symbol_query: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_stable_symbol_id: Option<String>,
@@ -445,6 +456,9 @@ pub struct DocumentSymbolsParams {
 pub struct DocumentSymbolItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    /// Opaque executable identity for this handle-bound symbol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<TargetRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_symbol_id: Option<String>,
     pub symbol: String,
@@ -544,7 +558,7 @@ pub struct ImpactBundleParams {
     pub target: Option<TargetRef>,
     /// Legacy symbol name to resolve impact for. Either this non-empty value or `target` is
     /// required; both together are rejected so an issued target can never be overridden.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub symbol: String,
     /// Path class for the initial symbol lookup. Defaults to `runtime`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -693,6 +707,7 @@ pub struct ImpactBundleResponse {
 
 impl ImpactBundleResponse {
     /// Build the always-on summary from current list sections (global top_paths cap 8).
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_summary(
         symbols: &[crate::domain::model::SymbolMatch],
         references: &[crate::domain::model::ReferenceMatch],

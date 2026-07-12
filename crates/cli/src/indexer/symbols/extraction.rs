@@ -6,10 +6,26 @@
 use super::*;
 use rayon::prelude::*;
 
+/// Stable-symbol identity algorithm version included in public corpus snapshot tokens.
+pub const STABLE_SYMBOL_ID_ALGORITHM_VERSION: u32 = 2;
+
 /// Extracts symbol definitions from parsed source for a known language adapter.
 pub fn extract_symbols_from_source(
     language: SymbolLanguage,
     path: &Path,
+    source: &str,
+) -> FriggResult<Vec<SymbolDefinition>> {
+    extract_symbols_from_source_with_identity_path(language, path, path, source)
+}
+
+/// Extracts symbols while keeping the operational source path separate from public identity.
+///
+/// `path` remains available for file reads and source navigation. `identity_path` is the
+/// repository-relative path hashed into every stable symbol ID.
+pub fn extract_symbols_from_source_with_identity_path(
+    language: SymbolLanguage,
+    path: &Path,
+    identity_path: &Path,
     source: &str,
 ) -> FriggResult<Vec<SymbolDefinition>> {
     let mut parser = parser_for_path(language, path)?;
@@ -21,8 +37,22 @@ pub fn extract_symbols_from_source(
     })?;
     let mut symbols = Vec::new();
     collect_symbols_from_tree(language, path, source, &tree, &mut symbols);
+    assign_symbol_identity_path(&mut symbols, identity_path);
     symbols.sort_by(symbol_definition_order);
     Ok(symbols)
+}
+
+/// Reassigns extracted symbols to one repository-relative identity path.
+pub(crate) fn assign_symbol_identity_path(symbols: &mut [SymbolDefinition], identity_path: &Path) {
+    for symbol in symbols {
+        symbol.stable_id = stable_symbol_id(
+            symbol.language,
+            symbol.kind,
+            identity_path,
+            &symbol.name,
+            &symbol.span,
+        );
+    }
 }
 
 /// Reads a file from disk and extracts symbol definitions when the extension is supported.
@@ -42,6 +72,20 @@ pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
     let mut ordered_paths = paths.to_vec();
     ordered_paths.sort();
 
+    extract_symbols_for_ordered_paths(ordered_paths)
+}
+
+/// Extracts symbols for repository paths while hashing only repository-relative identity paths.
+pub fn extract_symbols_for_paths_with_root(
+    root: &Path,
+    paths: &[PathBuf],
+) -> SymbolExtractionOutput {
+    let mut output = extract_symbols_for_paths(paths);
+    assign_repository_relative_symbol_identities(root, &mut output);
+    output
+}
+
+fn extract_symbols_for_ordered_paths(ordered_paths: Vec<PathBuf>) -> SymbolExtractionOutput {
     let mut output = ordered_paths
         .into_par_iter()
         .filter_map(|path| {
@@ -86,6 +130,40 @@ pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
             .then(left.message.cmp(&right.message))
     });
     output
+}
+
+/// Rebinds a batch extraction to repository-relative identity while preserving operational paths.
+pub(crate) fn assign_repository_relative_symbol_identities(
+    root: &Path,
+    output: &mut SymbolExtractionOutput,
+) {
+    let mut relative_symbols = Vec::with_capacity(output.symbols.len());
+    for mut symbol in output.symbols.drain(..) {
+        match symbol.path.strip_prefix(root) {
+            Ok(relative_path) if !relative_path.as_os_str().is_empty() => {
+                let relative_path = relative_path.to_path_buf();
+                assign_symbol_identity_path(std::slice::from_mut(&mut symbol), &relative_path);
+                relative_symbols.push(symbol);
+            }
+            Ok(_) | Err(_) => output.diagnostics.push(SymbolExtractionDiagnostic {
+                path: symbol.path.clone(),
+                language: Some(symbol.language),
+                message: format!(
+                    "source path {} is not a repository-relative child of {}",
+                    symbol.path.display(),
+                    root.display()
+                ),
+            }),
+        }
+    }
+    output.symbols = relative_symbols;
+    output.symbols.sort_by(symbol_definition_order);
+    output.diagnostics.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.language.cmp(&right.language))
+            .then(left.message.cmp(&right.message))
+    });
 }
 
 fn collect_symbols_from_tree(
@@ -163,11 +241,14 @@ fn stable_symbol_id(
     span: &SourceSpan,
 ) -> String {
     let mut hasher = Hasher::new();
+    hasher.update(&STABLE_SYMBOL_ID_ALGORITHM_VERSION.to_le_bytes());
+    hasher.update(&[0]);
     hasher.update(language.as_str().as_bytes());
     hasher.update(&[0]);
     hasher.update(kind.as_str().as_bytes());
     hasher.update(&[0]);
-    hasher.update(path.to_string_lossy().as_bytes());
+    let normalized_identity_path = path.to_string_lossy().replace('\\', "/");
+    hasher.update(normalized_identity_path.as_bytes());
     hasher.update(&[0]);
     hasher.update(name.as_bytes());
     hasher.update(&[0]);

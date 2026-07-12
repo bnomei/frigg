@@ -196,7 +196,7 @@ impl FriggMcpServer {
                 }
             }
         }
-        let root_signature = Self::root_signature(file_digests.as_ref());
+        let root_signature = Self::symbol_corpus_root_signature(file_digests.as_ref());
         let cache_key = SymbolCorpusCacheKey {
             repository_id: repository_id.clone(),
             manifest_token: manifest_token.clone(),
@@ -224,10 +224,12 @@ impl FriggMcpServer {
         });
         source_paths.sort();
 
+        let mut symbol_extraction = extract_symbols_for_paths(&source_paths);
+        crate::indexer::assign_repository_relative_symbol_identities(&root, &mut symbol_extraction);
         let SymbolExtractionOutput {
             symbols,
             diagnostics: symbol_diagnostics,
-        } = extract_symbols_for_paths(&source_paths);
+        } = symbol_extraction;
         diagnostics.symbol_extraction_count = symbol_diagnostics.len();
         let symbols_by_relative_path = Self::symbols_by_relative_path(&root, &symbols);
         let symbol_index_by_stable_id = Self::symbol_index_by_stable_id(&symbols);
@@ -410,15 +412,27 @@ impl FriggMcpServer {
         repository_id: &str,
     ) -> Result<String, ErrorData> {
         match Self::load_latest_validated_manifest_snapshot_shared(root, repository_id, None) {
-            Ok(Some(snapshot)) => return Ok(Self::root_signature(snapshot.digests.as_ref())),
+            Ok(Some(snapshot)) => {
+                return Ok(Self::symbol_corpus_root_signature(
+                    snapshot.digests.as_ref(),
+                ));
+            }
             Ok(None) => {}
             Err(err) => return Err(err),
         }
 
         ManifestBuilder::default()
             .build_metadata_with_diagnostics(root)
-            .map(|output| Self::root_signature(&output.entries))
+            .map(|output| Self::symbol_corpus_root_signature(&output.entries))
             .map_err(Self::map_frigg_error)
+    }
+
+    fn symbol_corpus_root_signature(file_digests: &[FileMetadataDigest]) -> String {
+        format!(
+            "stable-symbol-v{}:{}",
+            crate::indexer::STABLE_SYMBOL_ID_ALGORITHM_VERSION,
+            Self::root_signature(file_digests)
+        )
     }
 
     pub(super) fn manifest_source_paths_for_digests(

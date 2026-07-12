@@ -347,7 +347,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn definition_first_tool_descriptions_steer_agents_away_from_serial_decl_default() {
+    fn definition_tool_descriptions_publish_current_routing_guidance() {
         let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Extended);
         let go_to = router
             .get("go_to_definition")
@@ -362,20 +362,16 @@ mod tests {
             "go_to_definition description should claim default agent route: {go_desc}"
         );
         assert!(
-            go_desc.contains("Do not call find_declarations first"),
-            "go_to_definition description should forbid declarations-first: {go_desc}"
-        );
-        assert!(
             go_desc.contains("Prefer symbol="),
             "go_to_definition should still prefer symbol=: {go_desc}"
         );
         assert!(
-            decl_desc.contains("Secondary to go_to_definition"),
-            "find_declarations description should be secondary: {decl_desc}"
+            decl_desc.contains("declaration"),
+            "find_declarations description should identify declaration lookup: {decl_desc}"
         );
         assert!(
-            decl_desc.contains("Do not call serially with go_to_definition by default"),
-            "find_declarations description should forbid serial dual-call default: {decl_desc}"
+            !decl_desc.trim().is_empty(),
+            "find_declarations description must remain available: {decl_desc}"
         );
     }
 

@@ -6,7 +6,9 @@
 
 use super::presentation::SessionResultHandleLookup;
 use super::*;
-use crate::mcp::server_cache::{ContinuationBinding, ResultHandleSourceRevision};
+use crate::mcp::server_cache::{
+    ContinuationBinding, ResultHandleMatchAnchor, ResultHandleSourceRevision,
+};
 use crate::mcp::types::{
     ContextEfficiencyMetadata, ExploreAnchor, ExploreCursor, NextActionOrigin, ResultCompleteness,
     ResultTruncationReason, ResultUnit,
@@ -504,6 +506,80 @@ impl FriggMcpServer {
                 "suggested_next": suggested_next,
             })),
         )
+    }
+
+    /// Reuse `read_match`'s bounded, containment-checked source revision verification before a
+    /// result target reaches any navigation consumer. Verification failures deliberately collapse
+    /// to the established `STALE_PROOF_ANCHOR` contract so navigation does not disclose private
+    /// filesystem or digest details.
+    pub(super) fn verify_result_target_anchor_freshness(
+        &self,
+        result_handle: &str,
+        match_id: &str,
+        anchor: &ResultHandleMatchAnchor,
+    ) -> Result<(), ErrorData> {
+        let Some(origin_tool) = self.session_result_handle_origin_tool(result_handle) else {
+            return Err(Self::resource_not_found(
+                "source proof anchor is stale",
+                Some(json!({
+                    "error_code": "STALE_PROOF_ANCHOR",
+                    "result_handle": result_handle,
+                    "match_id": match_id,
+                    "correction_hint": "Issue a fresh search or navigation result.",
+                    "related_tools": [],
+                    "next_actions": [],
+                    "suggested_next": [],
+                })),
+            ));
+        };
+        let expectation = ReadMatchProofExpectation {
+            revision: anchor.revision.clone(),
+            origin_tool,
+            origin: None,
+            result_handle: result_handle.to_owned(),
+            match_id: match_id.to_owned(),
+            repository_id: anchor.repository_id.clone(),
+            path: anchor.path.clone(),
+        };
+        let verified = (|| -> Result<(), ErrorData> {
+            let params = ReadFileParams {
+                path: anchor.path.clone(),
+                repository_id: Some(anchor.repository_id.clone()),
+                max_bytes: None,
+                start_line: None,
+                end_line: None,
+                line_count: None,
+                presentation_mode: None,
+                include_context_efficiency: None,
+            };
+            let (repository_id, canonical_path, _) = self.resolve_file_path(&params)?;
+            if repository_id != anchor.repository_id {
+                return Err(Self::resource_not_found(
+                    "proof repository no longer matches its anchor",
+                    None,
+                ));
+            }
+            let workspace = self
+                .attached_workspaces_for_repository(Some(anchor.repository_id.as_str()))?
+                .into_iter()
+                .find(|workspace| workspace.repository_id == anchor.repository_id)
+                .ok_or_else(|| {
+                    Self::resource_not_found("proof repository is no longer attached", None)
+                })?;
+            let snapshot =
+                self.file_content_snapshot_for_bound_proof(&workspace, &canonical_path)?;
+            if snapshot.source_revision() != anchor.revision {
+                return Err(Self::resource_not_found(
+                    "source revision no longer matches the proof anchor",
+                    None,
+                ));
+            }
+            Ok(())
+        })();
+        verified.map_err(|_| {
+            crate::mcp::routing_stats::record_handle_failure();
+            self.stale_proof_anchor_error(&expectation)
+        })
     }
 
     fn session_result_handle_origin_tool(&self, result_handle: &str) -> Option<&'static str> {
@@ -1081,7 +1157,7 @@ impl FriggMcpServer {
                             start_line: 1,
                             end_line: None,
                         },
-                        ExploreOperation::Zoom | ExploreOperation::Refine => scope.clone(),
+                        ExploreOperation::Zoom | ExploreOperation::Refine => scope,
                     };
                     let original_scan = snapshot.scan_file_scope_lossy(
                         original_scope,
@@ -1808,8 +1884,8 @@ mod tests {
             Some(expected_path)
         );
         assert!(data.get("content").is_none());
-        assert!(data.get("suggested_next").is_none());
-        assert!(data.get("next_actions").is_none());
+        assert_eq!(data.get("suggested_next"), Some(&json!([])));
+        assert_eq!(data.get("next_actions"), Some(&json!([])));
     }
 
     #[test]
@@ -1928,8 +2004,8 @@ mod tests {
         );
         assert_eq!(data.get("path").and_then(Value::as_str), Some("src/lib.rs"));
         assert!(data.get("content").is_none());
-        assert!(data.get("suggested_next").is_none());
-        assert!(data.get("next_actions").is_none());
+        assert_eq!(data.get("suggested_next"), Some(&json!([])));
+        assert_eq!(data.get("next_actions"), Some(&json!([])));
         assert!(
             !data
                 .to_string()

@@ -239,6 +239,28 @@ async fn search_hybrid_compact_includes_discovery_pivots() {
 
 #[tokio::test]
 async fn search_hybrid_compact_and_full_keep_canonical_actions_identical() {
+    fn normalize_issued_result_handles(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object.get("kind").and_then(serde_json::Value::as_str) == Some("result_match") {
+                    object.insert(
+                        "result_handle".to_owned(),
+                        serde_json::Value::String("<issued-result-handle>".to_owned()),
+                    );
+                }
+                for child in object.values_mut() {
+                    normalize_issued_result_handles(child);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    normalize_issued_result_handles(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
     let workspace_root = fresh_fixture_root("tool-handlers-search-hybrid-action-parity");
     let server = server_for_workspace_root(&workspace_root).await;
     let params = SearchHybridParams {
@@ -265,12 +287,15 @@ async fn search_hybrid_compact_and_full_keep_canonical_actions_identical() {
         .expect("full search_hybrid should succeed")
         .0;
 
+    let mut compact_actions = serde_json::to_value(&compact.recovery.next_actions)
+        .expect("compact canonical actions serialize");
+    let mut full_actions = serde_json::to_value(&full.recovery.next_actions)
+        .expect("full canonical actions serialize");
+    normalize_issued_result_handles(&mut compact_actions);
+    normalize_issued_result_handles(&mut full_actions);
     assert_eq!(
-        serde_json::to_value(&compact.recovery.next_actions)
-            .expect("compact canonical actions serialize"),
-        serde_json::to_value(&full.recovery.next_actions)
-            .expect("full canonical actions serialize"),
-        "response detail must not change executable action ids, roles, targets, or dependencies"
+        compact_actions, full_actions,
+        "response detail must not change executable action ids, roles, target kind, or dependencies"
     );
     assert_eq!(
         compact.recovery.suggested_next,

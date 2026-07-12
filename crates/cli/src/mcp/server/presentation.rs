@@ -77,10 +77,27 @@ impl FriggMcpServer {
         ]
     }
 
-    fn append_target_follow_up_actions(
+    pub(super) fn target_is_semantically_resolvable(
+        &self,
+        target: &crate::mcp::types::TargetRef,
+    ) -> bool {
+        let Ok(repository_id) = self.navigation_target_repository_hint(Some(target), None) else {
+            return false;
+        };
+        let Ok(corpora) = self.collect_repository_symbol_corpora(repository_id.as_deref()) else {
+            return false;
+        };
+        self.resolve_target_ref(&corpora, target).is_ok()
+    }
+
+    fn append_target_follow_up_actions<'a>(
+        &self,
         recovery: &mut RecoveryFields,
-        target: Option<&crate::mcp::types::TargetRef>,
+        targets: impl IntoIterator<Item = &'a crate::mcp::types::TargetRef>,
     ) {
+        let target = targets
+            .into_iter()
+            .find(|target| self.target_is_semantically_resolvable(target));
         let mut actions = std::mem::take(&mut recovery.next_actions);
         let next_order = actions
             .iter()
@@ -840,18 +857,18 @@ impl FriggMcpServer {
         &self,
         tool_name: &'static str,
         matches: &mut [T],
-        source: impl Fn(&T) -> (String, String, usize, Option<usize>),
+        source: impl Fn(&T) -> (String, String, usize, Option<usize>, Option<String>),
         assign_match_id: impl Fn(&mut T, Option<String>, Option<crate::mcp::types::TargetRef>),
     ) -> Option<String> {
         let snapshots = self.bind_result_handle_source_snapshots(matches.iter().map(|found| {
-            let (repository_id, path, _, _) = source(found);
+            let (repository_id, path, _, _, _) = source(found);
             (repository_id, path)
         }));
         let scope = Self::result_handle_scope_for_tool(tool_name);
         let mut stored = BTreeMap::new();
         let mut assigned = Vec::with_capacity(matches.len());
         for (index, found) in matches.iter_mut().enumerate() {
-            let (repository_id, path, line, column) = source(found);
+            let (repository_id, path, line, column, stable_symbol_id) = source(found);
             let Some(snapshot) = snapshots.get(&(repository_id, path)).cloned() else {
                 assign_match_id(found, None, None);
                 assigned.push(None);
@@ -864,7 +881,7 @@ impl FriggMcpServer {
                     source: snapshot,
                     line,
                     column,
-                    stable_symbol_id: None,
+                    stable_symbol_id,
                 },
             );
             assigned.push(Some(match_id.clone()));
@@ -896,6 +913,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     Some(found.column),
+                    None,
                 )
             },
             |found, match_id, target| {
@@ -919,6 +937,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     found.column,
+                    found.stable_symbol_id.clone(),
                 )
             },
             |found, match_id, target| {
@@ -942,6 +961,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     found.column,
+                    found.stable_symbol_id.clone(),
                 )
             },
             |found, match_id, target| {
@@ -965,6 +985,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     Some(found.column),
+                    None,
                 )
             },
             |found, match_id, target| {
@@ -988,6 +1009,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     Some(found.column),
+                    found.stable_symbol_id.clone(),
                 )
             },
             |found, match_id, target| {
@@ -1011,6 +1033,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     Some(found.column),
+                    found.stable_symbol_id.clone(),
                 )
             },
             |found, match_id, target| {
@@ -1034,6 +1057,7 @@ impl FriggMcpServer {
                     found.path.clone(),
                     found.line,
                     Some(found.column),
+                    found.stable_symbol_id.clone(),
                 )
             },
             |found, match_id, target| {
@@ -1052,11 +1076,17 @@ impl FriggMcpServer {
             tool_name,
             matches,
             |found| {
+                let stable_symbol_id = match tool_name {
+                    "incoming_calls" => found.source_stable_symbol_id.clone(),
+                    "outgoing_calls" => found.target_stable_symbol_id.clone(),
+                    _ => None,
+                };
                 (
                     found.repository_id.clone(),
                     found.path.clone(),
                     found.line,
                     Some(found.column),
+                    stable_symbol_id,
                 )
             },
             |found, match_id, target| {
@@ -1112,13 +1142,31 @@ impl FriggMcpServer {
             }
         }
 
+        fn assign_targets(
+            server: &FriggMcpServer,
+            result_handle: &Option<String>,
+            symbols: &mut [DocumentSymbolItem],
+        ) {
+            for symbol in symbols {
+                symbol.target_ref = result_handle
+                    .as_ref()
+                    .zip(symbol.match_id.as_ref())
+                    .and_then(|(handle, match_id)| {
+                        server.result_target(handle.clone(), match_id.clone())
+                    });
+                assign_targets(server, result_handle, &mut symbol.children);
+            }
+        }
+
         let mut pending = Vec::new();
         pending_sources(symbols, &mut pending);
         let snapshots = self.bind_result_handle_source_snapshots(pending);
         let mut stored = BTreeMap::new();
         let mut next_id = 1usize;
         visit(scope, symbols, &mut next_id, &mut stored, &snapshots);
-        self.store_session_result_handle(tool_name, stored)
+        let result_handle = self.store_session_result_handle(tool_name, stored);
+        assign_targets(self, &result_handle, symbols);
+        result_handle
     }
 
     fn expand_text_match_excerpt(
@@ -1203,12 +1251,12 @@ impl FriggMcpServer {
 
         response.result_handle =
             self.assign_result_handle_for_text_matches("search_text", &mut response.matches);
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "search_text");
@@ -1431,9 +1479,7 @@ impl FriggMcpServer {
         if !Self::should_return_full_response(response_mode) {
             response.metadata = response.metadata.and_then(|mut metadata| {
                 let context_efficiency = metadata.context_efficiency.take();
-                if context_efficiency.is_none() {
-                    return None;
-                }
+                context_efficiency.as_ref()?;
                 Some(SearchHybridMetadata {
                     channels: BTreeMap::new(),
                     lexical_backend: None,
@@ -1464,12 +1510,12 @@ impl FriggMcpServer {
                 })
             });
         }
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         self.validate_recovery_actions(&mut response.recovery);
         response
@@ -1483,12 +1529,12 @@ impl FriggMcpServer {
     ) -> SearchSymbolResponse {
         response.result_handle =
             self.assign_result_handle_for_symbol_matches("search_symbol", &mut response.matches);
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "search_symbol");
@@ -1605,12 +1651,12 @@ impl FriggMcpServer {
     ) -> FindReferencesResponse {
         response.result_handle = self
             .assign_result_handle_for_reference_matches("find_references", &mut response.matches);
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "find_references");
@@ -1646,12 +1692,12 @@ impl FriggMcpServer {
             "go_to_definition",
             &mut response.matches,
         );
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "go_to_definition");
@@ -1687,12 +1733,12 @@ impl FriggMcpServer {
             "find_declarations",
             &mut response.matches,
         );
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
@@ -1724,12 +1770,12 @@ impl FriggMcpServer {
             "find_implementations",
             &mut response.matches,
         );
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
@@ -1761,12 +1807,12 @@ impl FriggMcpServer {
             "incoming_calls",
             &mut response.matches,
         );
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
@@ -1798,12 +1844,12 @@ impl FriggMcpServer {
             "outgoing_calls",
             &mut response.matches,
         );
-        Self::append_target_follow_up_actions(
+        self.append_target_follow_up_actions(
             &mut response.recovery,
             response
                 .matches
-                .first()
-                .and_then(|matched| matched.target_ref.as_ref()),
+                .iter()
+                .filter_map(|matched| matched.target_ref.as_ref()),
         );
         response = response.with_provisional_honesty();
         if response.matches.is_empty() {
@@ -1902,7 +1948,7 @@ impl FriggMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::types::{ResultCompleteness, SearchPatternType};
+    use crate::mcp::types::{NavigationResolutionSource, ResultCompleteness, SearchPatternType};
     use crate::settings::FriggConfig;
     use rmcp::model::ErrorCode;
     use std::fs;
@@ -2149,6 +2195,50 @@ mod tests {
         sample_text_match(&workspace.repository_id, path)
     }
 
+    fn call_hierarchy_match(
+        server: &FriggMcpServer,
+        source_stable_symbol_id: Option<&str>,
+        target_stable_symbol_id: Option<&str>,
+        line: usize,
+        column: usize,
+    ) -> CallHierarchyMatch {
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("presentation fixture workspace");
+        let path = "src/calls.rs";
+        let source = workspace.root.join(path);
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("source parent should be creatable");
+        fs::write(&source, "    fn caller() {}\n    fn callee() {}\n")
+            .expect("source should be writable");
+        CallHierarchyMatch {
+            match_id: None,
+            target_ref: None,
+            source_stable_symbol_id: source_stable_symbol_id.map(str::to_owned),
+            target_stable_symbol_id: target_stable_symbol_id.map(str::to_owned),
+            source_symbol: "caller".to_owned(),
+            target_symbol: "callee".to_owned(),
+            repository_id: workspace.repository_id,
+            path: path.to_owned(),
+            line,
+            column,
+            relation: "calls".to_owned(),
+            source_container: None,
+            target_container: None,
+            source_signature: None,
+            target_signature: None,
+            precision: Some("heuristic".to_owned()),
+            call_path: None,
+            call_line: None,
+            call_column: None,
+            call_end_line: None,
+            call_end_column: None,
+            follow_up_structural: Vec::new(),
+        }
+    }
+
     #[test]
     fn search_text_limit_zero_with_collapse_by_file_returns_no_matches() {
         let server = presentation_test_server();
@@ -2326,11 +2416,12 @@ mod tests {
     #[test]
     fn scoped_match_ids_and_handle_metadata_are_assigned() {
         let server = presentation_test_server();
+        let matched = bound_text_match(&server, "src/a.rs");
         let response = server
             .present_search_text_response(
                 SearchTextResponse {
                     total_matches: 1,
-                    matches: vec![sample_text_match("repo-001", "src/a.rs")],
+                    matches: vec![matched],
                     completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 1, 1)
                         .expect("complete fixture"),
                     result_handle: None,
@@ -2366,6 +2457,152 @@ mod tests {
             server.session_result_handle_lookup(&handle, "nav:m9"),
             SessionResultHandleLookup::MixedHandle { .. }
         ));
+    }
+
+    #[test]
+    fn symbol_binder_preserves_stable_identity_in_the_verified_anchor() {
+        let server = presentation_test_server();
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("presentation fixture workspace");
+        let source = workspace.root.join("src/symbol.rs");
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("source parent should be creatable");
+        fs::write(&source, "fn stable_target() {}\n").expect("source should be writable");
+        let mut matches = vec![SymbolMatch {
+            match_id: None,
+            target_ref: None,
+            stable_symbol_id: Some("scip-rust pkg repo#stable_target".to_owned()),
+            repository_id: workspace.repository_id,
+            symbol: "stable_target".to_owned(),
+            kind: "function".to_owned(),
+            path: "src/symbol.rs".to_owned(),
+            line: 1,
+            column: Some(4),
+            excerpt: Some("fn stable_target()".to_owned()),
+            path_class: Some("runtime".to_owned()),
+            container: None,
+            signature: None,
+        }];
+
+        let handle = server
+            .assign_result_handle_for_symbol_matches("search_symbol", &mut matches)
+            .expect("bound symbol should create a handle");
+        let match_id = matches[0]
+            .match_id
+            .as_deref()
+            .expect("bound symbol should create a match id");
+        assert!(matches[0].target_ref.is_some());
+        let anchor = server
+            .session_result_handle_match(&handle, match_id)
+            .expect("bound symbol anchor should be stored");
+        assert_eq!(
+            anchor.stable_symbol_id.as_deref(),
+            Some("scip-rust pkg repo#stable_target")
+        );
+    }
+
+    #[test]
+    fn call_hierarchy_binder_uses_the_row_side_identity_and_coordinate() {
+        let server = presentation_test_server();
+        let mut incoming = vec![call_hierarchy_match(
+            &server,
+            Some("caller-stable-id"),
+            Some("selected-target-id"),
+            1,
+            5,
+        )];
+        let incoming_handle = server
+            .assign_result_handle_for_call_hierarchy_matches("incoming_calls", &mut incoming)
+            .expect("incoming row should bind");
+        let incoming_anchor = server
+            .session_result_handle_match(
+                &incoming_handle,
+                incoming[0].match_id.as_deref().expect("incoming match id"),
+            )
+            .expect("incoming anchor");
+        assert_eq!(
+            incoming_anchor.stable_symbol_id.as_deref(),
+            Some("caller-stable-id")
+        );
+        assert_eq!(incoming_anchor.column, Some(5));
+
+        let mut outgoing = vec![call_hierarchy_match(
+            &server,
+            Some("selected-source-id"),
+            Some("callee-stable-id"),
+            2,
+            5,
+        )];
+        let outgoing_handle = server
+            .assign_result_handle_for_call_hierarchy_matches("outgoing_calls", &mut outgoing)
+            .expect("outgoing row should bind");
+        let outgoing_anchor = server
+            .session_result_handle_match(
+                &outgoing_handle,
+                outgoing[0].match_id.as_deref().expect("outgoing match id"),
+            )
+            .expect("outgoing anchor");
+        assert_eq!(
+            outgoing_anchor.stable_symbol_id.as_deref(),
+            Some("callee-stable-id")
+        );
+        assert_eq!(outgoing_anchor.column, Some(5));
+    }
+
+    #[test]
+    fn orphan_text_target_is_retained_without_navigation_actions() {
+        let server = presentation_test_server();
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("presentation fixture workspace");
+        let path = "src/orphan.rs";
+        let source = workspace.root.join(path);
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("source parent should be creatable");
+        fs::write(&source, "// orphan_marker\n").expect("source should be writable");
+
+        let response = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 1,
+                    matches: vec![sample_text_match(&workspace.repository_id, path)],
+                    completeness: ResultCompleteness::complete(ResultUnit::Occurrence, 1, 1)
+                        .expect("complete fixture"),
+                    result_handle: None,
+                    handle_scope: None,
+                    handle_expires: None,
+                    count_only: None,
+                    latency_class: None,
+                    metadata: None,
+                    recovery: RecoveryFields::default(),
+                },
+                &SearchTextParams {
+                    query: "orphan_marker".to_owned(),
+                    repository_id: Some(workspace.repository_id),
+                    ..Default::default()
+                },
+            )
+            .expect("orphan text result should still be presented");
+
+        assert!(response.matches[0].target_ref.is_some());
+        assert!(
+            response
+                .recovery
+                .next_actions
+                .iter()
+                .all(|action| !matches!(
+                    &action.target,
+                    NextActionTarget::GoToDefinition(_)
+                        | NextActionTarget::FindReferences(_)
+                        | NextActionTarget::ImpactBundle(_)
+                )),
+            "unresolvable anchors must not advertise target navigation"
+        );
     }
 
     #[test]
@@ -3058,6 +3295,7 @@ mod tests {
                 mode: NavigationMode::UnavailableNoPrecise,
                 target_selection: Some(NavigationTargetSelectionSummary {
                     status: NavigationTargetSelectionStatus::DisambiguationRequired,
+                    resolution_source: NavigationResolutionSource::DirectSymbol,
                     symbol_query: "Handler".to_owned(),
                     selected_stable_symbol_id: None,
                     candidate_count: 2,
@@ -3103,6 +3341,7 @@ mod tests {
                 mode: NavigationMode::UnavailableNoPrecise,
                 target_selection: Some(NavigationTargetSelectionSummary {
                     status: NavigationTargetSelectionStatus::DisambiguationRequired,
+                    resolution_source: NavigationResolutionSource::DirectSymbol,
                     symbol_query: "Handler".to_owned(),
                     selected_stable_symbol_id: None,
                     candidate_count: 2,
@@ -3164,8 +3403,9 @@ mod tests {
                     assert!(params.symbol.is_empty());
                     params.target
                 }
-                other => panic!("unexpected target action: {}", other.tool_name()),
+                _ => None,
             };
+            assert!(copied.is_some(), "target action must use a supported tool");
             assert_eq!(copied, Some(target.clone()));
         }
     }

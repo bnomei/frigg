@@ -79,6 +79,13 @@ async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
             .all(|matched| matched.match_id.is_some()),
         "batch matches should expose match_ids"
     );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.target_ref.is_some()),
+        "every handle-bound batch row should publish its executable target_ref"
+    );
     assert_eq!(
         response.recovery.suggested_next,
         response
@@ -116,6 +123,60 @@ async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
         .read_match(Parameters(proof))
         .await
         .expect("batch proof action must replay through read_match");
+    assert!(
+        response
+            .probe_summary
+            .iter()
+            .filter(|summary| summary.hits != 0)
+            .all(|summary| summary.next_actions.is_empty()),
+        "successful probe summaries must not retain child-handle actions"
+    );
+    let top_target = response.matches[0]
+        .target_ref
+        .clone()
+        .expect("the top rebound batch row should expose a target");
+    let target_actions = response
+        .recovery
+        .next_actions
+        .iter()
+        .filter(|action| {
+            matches!(
+                action.target,
+                NextActionTarget::GoToDefinition(_)
+                    | NextActionTarget::FindReferences(_)
+                    | NextActionTarget::ImpactBundle(_)
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(target_actions.len(), 3);
+    for action in target_actions {
+        match action.target {
+            NextActionTarget::GoToDefinition(params) => {
+                assert_eq!(params.target.as_ref(), Some(&top_target));
+                server
+                    .go_to_definition(Parameters(params))
+                    .await
+                    .expect("batch definition action should replay unchanged");
+            }
+            NextActionTarget::FindReferences(params) => {
+                assert_eq!(params.target.as_ref(), Some(&top_target));
+                server
+                    .find_references(Parameters(params))
+                    .await
+                    .expect("batch references action should replay unchanged");
+            }
+            NextActionTarget::ImpactBundle(params) => {
+                assert_eq!(params.target.as_ref(), Some(&top_target));
+                assert!(params.symbol.is_empty());
+                server
+                    .impact_bundle(Parameters(params))
+                    .await
+                    .expect("batch impact action should replay unchanged");
+            }
+            _ => unreachable!(),
+        }
+    }
 
     cleanup_workspace_root(&workspace_root);
 }

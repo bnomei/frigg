@@ -9,8 +9,19 @@ use crate::mcp::types::ResultUnit;
 impl FriggMcpServer {
     pub(in crate::mcp::server) async fn find_implementations_impl(
         &self,
-        params: FindImplementationsParams,
+        mut params: FindImplementationsParams,
     ) -> Result<Json<FindImplementationsResponse>, ErrorData> {
+        Self::validate_navigation_target_inputs(
+            params.target.as_ref(),
+            params.symbol.as_deref(),
+            params.path.as_deref(),
+            params.line,
+            params.column,
+        )?;
+        params.repository_id = self.navigation_target_repository_hint(
+            params.target.as_ref(),
+            params.repository_id.as_deref(),
+        )?;
         self.find_implementations_for_resolved_target_impl(params, None)
             .await
     }
@@ -73,21 +84,25 @@ impl FriggMcpServer {
                     .map(|corpus| corpus.repository_id.clone())
                     .collect::<Vec<_>>();
 
-                let resolved_target = resolved_target_for_blocking.clone().unwrap_or(server.resolve_navigation_request(
-                    &corpora,
-                    params_for_blocking.target.as_ref(),
-                    params_for_blocking.symbol.as_deref(),
-                    params_for_blocking.path.as_deref(),
-                    params_for_blocking.line,
-                    params_for_blocking.column,
-                    params_for_blocking.repository_id.as_deref(),
-                )?);
+                let resolved_target = match resolved_target_for_blocking.clone() {
+                    Some(resolved_target) => resolved_target,
+                    None => server.resolve_navigation_request(
+                        &corpora,
+                        params_for_blocking.target.as_ref(),
+                        params_for_blocking.symbol.as_deref(),
+                        params_for_blocking.path.as_deref(),
+                        params_for_blocking.line,
+                        params_for_blocking.column,
+                        params_for_blocking.repository_id.as_deref(),
+                    )?,
+                };
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
                 let target_selection = Some(Self::navigation_target_selection_summary_for_selection(
                     &corpora,
                     &symbol_query,
                     &resolved_target.selection,
+                    resolved_target.resolution_source,
                 ));
                 let target_resolution = match resolved_target.selection {
                     NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
@@ -278,8 +293,19 @@ impl FriggMcpServer {
 
     pub(in crate::mcp::server) async fn incoming_calls_impl(
         &self,
-        params: IncomingCallsParams,
+        mut params: IncomingCallsParams,
     ) -> Result<Json<IncomingCallsResponse>, ErrorData> {
+        Self::validate_navigation_target_inputs(
+            params.target.as_ref(),
+            params.symbol.as_deref(),
+            params.path.as_deref(),
+            params.line,
+            params.column,
+        )?;
+        params.repository_id = self.navigation_target_repository_hint(
+            params.target.as_ref(),
+            params.repository_id.as_deref(),
+        )?;
         self.incoming_calls_for_resolved_target_impl(params, None)
             .await
     }
@@ -336,8 +362,9 @@ impl FriggMcpServer {
                     .map(|corpus| corpus.repository_id.clone())
                     .collect::<Vec<_>>();
 
-                let resolved_target = resolved_target_for_blocking.clone().unwrap_or(
-                    server.resolve_navigation_request(
+                let resolved_target = match resolved_target_for_blocking.clone() {
+                    Some(resolved_target) => resolved_target,
+                    None => server.resolve_navigation_request(
                         &corpora,
                         params_for_blocking.target.as_ref(),
                         params_for_blocking.symbol.as_deref(),
@@ -346,7 +373,7 @@ impl FriggMcpServer {
                         params_for_blocking.column,
                         params_for_blocking.repository_id.as_deref(),
                     )?,
-                );
+                };
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
                 let target_selection =
@@ -354,6 +381,7 @@ impl FriggMcpServer {
                         &corpora,
                         &symbol_query,
                         &resolved_target.selection,
+                        resolved_target.resolution_source,
                     ));
                 let target_resolution = match resolved_target.selection {
                     NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
@@ -584,32 +612,40 @@ impl FriggMcpServer {
                     .incoming_adjacency(&target.symbol.stable_id)
                     .into_iter()
                     .filter(|adjacent| Self::is_heuristic_call_relation(adjacent.relation))
-                    .map(|adjacent| CallHierarchyMatch {
-                        match_id: None,
-                        target_ref: None,
-                        source_stable_symbol_id: None,
-                        target_stable_symbol_id: Some(target.symbol.stable_id.clone()),
-                        source_symbol: adjacent.symbol.display_name,
-                        target_symbol: target.symbol.name.clone(),
-                        repository_id: target_corpus.repository_id.clone(),
-                        path: Self::canonicalize_navigation_path(
-                            &target.root,
-                            &adjacent.symbol.path,
-                        ),
-                        line: adjacent.symbol.line,
-                        column: 1,
-                        relation: adjacent.relation.as_str().to_owned(),
-                        source_container: None,
-                        target_container: target_container.clone(),
-                        source_signature: None,
-                        target_signature: target_signature.clone(),
-                        precision: Some("heuristic".to_owned()),
-                        call_path: None,
-                        call_line: None,
-                        call_column: None,
-                        call_end_line: None,
-                        call_end_column: None,
-                        follow_up_structural: Vec::new(),
+                    .map(|adjacent| {
+                        let source_stable_symbol_id = adjacent.symbol.symbol_id.clone();
+                        let column = target_corpus
+                            .symbol_index_by_stable_id
+                            .get(&source_stable_symbol_id)
+                            .map(|index| target_corpus.symbols[*index].span.start_column)
+                            .unwrap_or(1);
+                        CallHierarchyMatch {
+                            match_id: None,
+                            target_ref: None,
+                            source_stable_symbol_id: Some(source_stable_symbol_id),
+                            target_stable_symbol_id: Some(target.symbol.stable_id.clone()),
+                            source_symbol: adjacent.symbol.display_name,
+                            target_symbol: target.symbol.name.clone(),
+                            repository_id: target_corpus.repository_id.clone(),
+                            path: Self::canonicalize_navigation_path(
+                                &target.root,
+                                &adjacent.symbol.path,
+                            ),
+                            line: adjacent.symbol.line,
+                            column,
+                            relation: adjacent.relation.as_str().to_owned(),
+                            source_container: None,
+                            target_container: target_container.clone(),
+                            source_signature: None,
+                            target_signature: target_signature.clone(),
+                            precision: Some("heuristic".to_owned()),
+                            call_path: None,
+                            call_line: None,
+                            call_column: None,
+                            call_end_line: None,
+                            call_end_column: None,
+                            follow_up_structural: Vec::new(),
+                        }
                     })
                     .collect::<Vec<_>>();
                 Self::sort_call_hierarchy_matches(&mut matches);
@@ -705,8 +741,19 @@ impl FriggMcpServer {
 
     pub(in crate::mcp::server) async fn outgoing_calls_impl(
         &self,
-        params: OutgoingCallsParams,
+        mut params: OutgoingCallsParams,
     ) -> Result<Json<OutgoingCallsResponse>, ErrorData> {
+        Self::validate_navigation_target_inputs(
+            params.target.as_ref(),
+            params.symbol.as_deref(),
+            params.path.as_deref(),
+            params.line,
+            params.column,
+        )?;
+        params.repository_id = self.navigation_target_repository_hint(
+            params.target.as_ref(),
+            params.repository_id.as_deref(),
+        )?;
         let page_limit = self.navigation_page_limit(params.limit)?;
         let (resume_offset, continuation_binding) = self.navigation_continuation_context(
             "outgoing_calls",
@@ -768,6 +815,7 @@ impl FriggMcpServer {
                         &corpora,
                         &symbol_query,
                         &resolved_target.selection,
+                        resolved_target.resolution_source,
                     ));
                 let target_resolution = match resolved_target.selection {
                     NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
@@ -1013,32 +1061,40 @@ impl FriggMcpServer {
                                 &mut call_target_cache,
                             )
                     })
-                    .map(|adjacent| CallHierarchyMatch {
-                        match_id: None,
-                        target_ref: None,
-                        source_stable_symbol_id: Some(target.symbol.stable_id.clone()),
-                        target_stable_symbol_id: None,
-                        source_symbol: target.symbol.name.clone(),
-                        target_symbol: adjacent.symbol.display_name,
-                        repository_id: target_corpus.repository_id.clone(),
-                        path: Self::canonicalize_navigation_path(
-                            &target.root,
-                            &adjacent.symbol.path,
-                        ),
-                        line: adjacent.symbol.line,
-                        column: 1,
-                        relation: adjacent.relation.as_str().to_owned(),
-                        source_container: source_container.clone(),
-                        target_container: None,
-                        source_signature: source_signature.clone(),
-                        target_signature: None,
-                        precision: Some("heuristic".to_owned()),
-                        call_path: None,
-                        call_line: None,
-                        call_column: None,
-                        call_end_line: None,
-                        call_end_column: None,
-                        follow_up_structural: Vec::new(),
+                    .map(|adjacent| {
+                        let target_stable_symbol_id = adjacent.symbol.symbol_id.clone();
+                        let column = target_corpus
+                            .symbol_index_by_stable_id
+                            .get(&target_stable_symbol_id)
+                            .map(|index| target_corpus.symbols[*index].span.start_column)
+                            .unwrap_or(1);
+                        CallHierarchyMatch {
+                            match_id: None,
+                            target_ref: None,
+                            source_stable_symbol_id: Some(target.symbol.stable_id.clone()),
+                            target_stable_symbol_id: Some(target_stable_symbol_id),
+                            source_symbol: target.symbol.name.clone(),
+                            target_symbol: adjacent.symbol.display_name,
+                            repository_id: target_corpus.repository_id.clone(),
+                            path: Self::canonicalize_navigation_path(
+                                &target.root,
+                                &adjacent.symbol.path,
+                            ),
+                            line: adjacent.symbol.line,
+                            column,
+                            relation: adjacent.relation.as_str().to_owned(),
+                            source_container: source_container.clone(),
+                            target_container: None,
+                            source_signature: source_signature.clone(),
+                            target_signature: None,
+                            precision: Some("heuristic".to_owned()),
+                            call_path: None,
+                            call_line: None,
+                            call_column: None,
+                            call_end_line: None,
+                            call_end_column: None,
+                            follow_up_structural: Vec::new(),
+                        }
                     })
                     .collect::<Vec<_>>();
                 Self::sort_call_hierarchy_matches(&mut matches);

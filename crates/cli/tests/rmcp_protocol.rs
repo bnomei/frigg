@@ -103,7 +103,7 @@ fn canonical_fixture_actions() -> Vec<NextAction> {
         ("search_structural", json!({"query": "(function_item)"})),
         ("impact_bundle", json!({"symbol": "needle"})),
     ];
-    cases
+    let mut actions = cases
         .into_iter()
         .enumerate()
         .map(|(index, (tool, arguments))| {
@@ -121,7 +121,48 @@ fn canonical_fixture_actions() -> Vec<NextAction> {
                 reason: "protocol schema proof".to_owned(),
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let result_target = json!({
+        "kind": "result_match",
+        "result_handle": "result-1",
+        "match_id": "search:m1",
+        "target_scope": "018f0000000070008000000000000000",
+    });
+    let stable_target = json!({
+        "kind": "stable_symbol",
+        "repository_id": "repo-1",
+        "stable_symbol_id": "scip-rust pkg repo#src/lib.rs::needle",
+        "snapshot_token": "root-signature-1",
+    });
+    for target in [result_target, stable_target] {
+        for tool in [
+            "find_references",
+            "go_to_definition",
+            "find_declarations",
+            "find_implementations",
+            "incoming_calls",
+            "outgoing_calls",
+            "impact_bundle",
+        ] {
+            let typed_target: NextActionTarget = serde_json::from_value(json!({
+                "tool": tool,
+                "arguments": {"target": target.clone()},
+            }))
+            .unwrap_or_else(|error| {
+                panic!("{tool} target-bearing fixture must deserialize: {error}")
+            });
+            let index = actions.len();
+            actions.push(NextAction {
+                id: NextActionId(format!("protocol:{index}")),
+                role: NextActionRole::Retry,
+                order: 0,
+                dependencies: Vec::new(),
+                target: typed_target,
+                reason: "protocol target schema proof".to_owned(),
+            });
+        }
+    }
+    actions
 }
 
 fn assert_actions_validate_against_live_schemas(profile: ToolSurfaceProfile, tools: &[Tool]) {
@@ -137,8 +178,8 @@ fn assert_actions_validate_against_live_schemas(profile: ToolSurfaceProfile, too
     let actions = canonical_fixture_actions();
     assert_eq!(
         actions.len(),
-        19,
-        "every NextActionTarget variant needs a fixture"
+        33,
+        "every NextActionTarget variant plus both target-ref families need fixtures"
     );
     let active_names = manifest_for_tool_surface_profile(profile)
         .tool_names
@@ -182,6 +223,116 @@ async fn canonical_next_actions_validate_against_live_rmcp_schemas_on_all_profil
     for profile in ToolSurfaceProfile::ALL {
         let tools = tools_list_for_profile(profile).await;
         assert_actions_validate_against_live_schemas(profile, &tools);
+    }
+}
+
+#[tokio::test]
+async fn live_navigation_schemas_publish_closed_target_refs_and_impact_alternatives() {
+    let result_target = json!({
+        "kind": "result_match",
+        "result_handle": "result-1",
+        "match_id": "search:m1",
+        "target_scope": "018f0000000070008000000000000000",
+    });
+    let stable_target = json!({
+        "kind": "stable_symbol",
+        "repository_id": "repo-1",
+        "stable_symbol_id": "scip-rust pkg repo#src/lib.rs::needle",
+        "snapshot_token": "root-signature-1",
+    });
+
+    for profile in ToolSurfaceProfile::ALL {
+        let tools = tools_list_for_profile(profile).await;
+        let schemas = tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.name.to_string(),
+                    Value::Object(tool.input_schema.as_ref().clone()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for tool in [
+            "find_references",
+            "go_to_definition",
+            "find_declarations",
+            "find_implementations",
+            "incoming_calls",
+            "outgoing_calls",
+        ] {
+            let schema = schemas
+                .get(tool)
+                .unwrap_or_else(|| panic!("tools/list must expose {tool}"));
+            let validator = jsonschema::validator_for(schema)
+                .unwrap_or_else(|error| panic!("{tool} inputSchema must compile: {error}"));
+            for target in [&result_target, &stable_target] {
+                validator
+                    .validate(&json!({"target": target}))
+                    .unwrap_or_else(|error| {
+                        panic!("{tool} must accept a complete target_ref: {error}")
+                    });
+            }
+            for invalid_target in [
+                json!({
+                    "kind": "result_match",
+                    "result_handle": "result-1",
+                    "match_id": "search:m1",
+                    "target_scope": "scope",
+                    "unknown": true,
+                }),
+                json!({
+                    "kind": "stable_symbol",
+                    "repository_id": "repo-1",
+                    "stable_symbol_id": "symbol-1",
+                    "snapshot_token": "snapshot-1",
+                    "unknown": true,
+                }),
+                json!({"kind": "unknown_target", "identity": "x"}),
+                json!({
+                    "kind": "result_match",
+                    "result_handle": "",
+                    "match_id": "search:m1",
+                    "target_scope": "scope",
+                }),
+                json!({
+                    "kind": "stable_symbol",
+                    "repository_id": "repo-1",
+                    "stable_symbol_id": "",
+                    "snapshot_token": "snapshot-1",
+                }),
+            ] {
+                assert!(
+                    validator
+                        .validate(&json!({"target": invalid_target}))
+                        .is_err(),
+                    "{} {tool} target schema must reject {invalid_target}",
+                    profile.as_str()
+                );
+            }
+        }
+
+        let impact = schemas
+            .get("impact_bundle")
+            .expect("tools/list must expose impact_bundle");
+        let validator =
+            jsonschema::validator_for(impact).expect("impact_bundle inputSchema must compile");
+        validator
+            .validate(&json!({"target": result_target}))
+            .expect("impact_bundle must accept target-only requests");
+        validator
+            .validate(&json!({"symbol": "needle"}))
+            .expect("impact_bundle must preserve legacy symbol requests");
+        for invalid in [
+            json!({}),
+            json!({"symbol": ""}),
+            json!({"target": stable_target, "symbol": "needle"}),
+        ] {
+            assert!(
+                validator.validate(&invalid).is_err(),
+                "{} impact_bundle schema must reject {invalid}",
+                profile.as_str()
+            );
+        }
     }
 }
 

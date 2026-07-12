@@ -139,6 +139,9 @@ impl FriggMcpServer {
                         if existing.path_class.is_none() {
                             existing.path_class = row.path_class.take();
                         }
+                        if existing.stable_symbol_id.is_none() {
+                            existing.stable_symbol_id = row.stable_symbol_id.take();
+                        }
                     }
                 } else {
                     let idx = merged.len();
@@ -233,6 +236,15 @@ impl FriggMcpServer {
             response.handle_scope = Some("batch".to_owned());
             response.handle_expires = Some("session".to_owned());
         }
+        for summary in &mut response.probe_summary {
+            if summary.hits != 0 {
+                // Successful child responses are rebound into one aggregate batch handle below.
+                // Their child proof/target actions address private child handles and must not be
+                // copied into the public probe summary. The aggregate recovery is built from the
+                // final top-level row after rebinding.
+                summary.set_next_actions(Vec::new());
+            }
+        }
 
         let all_zero = response
             .probe_summary
@@ -287,6 +299,22 @@ impl FriggMcpServer {
                 }),
                 "bounded proof read of the strongest merged hit",
             ));
+            let next_order = actions
+                .iter()
+                .map(|action| action.order)
+                .max()
+                .map_or(0, |order| order.saturating_add(1));
+            let mut target_actions = top
+                .target_ref
+                .as_ref()
+                .filter(|target| self.target_is_semantically_resolvable(target))
+                .map_or_else(Vec::new, |target| {
+                    Self::target_follow_up_actions(Some(target))
+                });
+            for (offset, action) in target_actions.iter_mut().enumerate() {
+                action.order = next_order.saturating_add(offset as u16);
+            }
+            actions.extend(target_actions);
             response.recovery.set_next_actions(actions);
         }
         self.validate_recovery_actions(&mut response.recovery);
@@ -471,6 +499,7 @@ impl FriggMcpServer {
                     .map(|matched| SearchBatchMatch {
                         match_id: None,
                         target_ref: None,
+                        stable_symbol_id: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Text,
                         repository_id: matched.repository_id,
@@ -517,6 +546,7 @@ impl FriggMcpServer {
                     .map(|matched| SearchBatchMatch {
                         match_id: None,
                         target_ref: None,
+                        stable_symbol_id: matched.stable_symbol_id,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Symbol,
                         repository_id: matched.repository_id,
@@ -566,6 +596,7 @@ impl FriggMcpServer {
                     .map(|matched| SearchBatchMatch {
                         match_id: None,
                         target_ref: None,
+                        stable_symbol_id: None,
                         probe_ids: vec![probe.id.clone()],
                         kind: SearchBatchProbeKind::Hybrid,
                         repository_id: matched.repository_id,

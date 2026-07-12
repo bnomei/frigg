@@ -188,14 +188,13 @@ impl FriggMcpServer {
     /// and a soft warning; prefer `symbol=` (column only when the hit includes a real span).
     pub(in crate::mcp::server) async fn go_to_definition_impl(
         &self,
-        params: GoToDefinitionParams,
+        mut params: GoToDefinitionParams,
     ) -> Result<Json<GoToDefinitionResponse>, ErrorData> {
         struct GoToDefinitionExecution {
             result: Result<Json<GoToDefinitionResponse>, ErrorData>,
             provenance_result: Result<(), ErrorData>,
         }
 
-        let page_limit = self.navigation_page_limit(params.limit)?;
         let has_symbol = params
             .symbol
             .as_ref()
@@ -205,7 +204,19 @@ impl FriggMcpServer {
             .as_ref()
             .is_some_and(|path| !path.trim().is_empty())
             && params.line.is_some();
-        if !has_symbol && !has_location {
+        Self::validate_navigation_target_inputs(
+            params.target.as_ref(),
+            params.symbol.as_deref(),
+            params.path.as_deref(),
+            params.line,
+            params.column,
+        )?;
+        params.repository_id = self.navigation_target_repository_hint(
+            params.target.as_ref(),
+            params.repository_id.as_deref(),
+        )?;
+        let page_limit = self.navigation_page_limit(params.limit)?;
+        if params.target.is_none() && !has_symbol && !has_location {
             let response = GoToDefinitionResponse {
                 completeness: Self::navigation_completeness(
                     ResultUnit::Definition,
@@ -335,6 +346,13 @@ impl FriggMcpServer {
                                         );
                                         resolution_precision = Some(precision.to_owned());
                                         match_count = precise_matches.len();
+                                        let target_selection = Some(
+                                            Self::navigation_target_selection_summary_for_direct(
+                                                &token_hint.symbol_query,
+                                                selected_precise_symbol.clone(),
+                                                "location_token_php_helper",
+                                            ),
+                                        );
                                         let metadata = json!({
                                             "precision": precision,
                                             "heuristic": false,
@@ -369,7 +387,7 @@ impl FriggMcpServer {
                                             mode: FriggMcpServer::navigation_mode_from_precision_label(
                                                 Some(precision),
                                             ),
-                                            target_selection: None,
+                                            target_selection,
                                             metadata,
                                             note,
                     location_warning: None,
@@ -392,6 +410,13 @@ impl FriggMcpServer {
                                         );
                                         resolution_precision = Some("heuristic".to_owned());
                                         match_count = route_matches.len();
+                                        let target_selection = Some(
+                                            Self::navigation_target_selection_summary_for_direct(
+                                                &token_hint.symbol_query,
+                                                None,
+                                                "location_token_php_helper_route_source",
+                                            ),
+                                        );
                                         let metadata = json!({
                                             "precision": "heuristic",
                                             "heuristic": true,
@@ -420,7 +445,7 @@ impl FriggMcpServer {
                     handle_scope: None,
                     handle_expires: None,
                                             mode: NavigationMode::HeuristicNoPrecise,
-                                            target_selection: None,
+                                            target_selection,
                                             metadata,
                                             note,
                     location_warning: None,
@@ -431,7 +456,7 @@ impl FriggMcpServer {
                                 }
                             }
 
-                            if let Some((response, repository_id, precise_symbol, precision)) =
+                            if let Some((mut response, repository_id, precise_symbol, precision)) =
                                 server.try_precise_definition_fast_path(
                                     &corpora,
                                     params_for_blocking.repository_id.as_deref(),
@@ -444,6 +469,16 @@ impl FriggMcpServer {
                                 )?
                             {
                                 scoped_repository_ids = vec![repository_id];
+                                response.0.target_selection = Some(
+                                    Self::navigation_target_selection_summary_for_direct(
+                                        location_hint
+                                            .as_ref()
+                                            .map(|hint| hint.symbol_query.as_str())
+                                            .unwrap_or(precise_symbol.as_str()),
+                                        Some(precise_symbol.clone()),
+                                        "location_precise_cache",
+                                    ),
+                                );
                                 selected_precise_symbol = Some(precise_symbol);
                                 resolution_source = Some("location_precise_cache".to_owned());
                                 resolution_precision = Some(precision);
@@ -468,6 +503,7 @@ impl FriggMcpServer {
                                         &corpora,
                                         &symbol_query,
                                         &resolved_target.selection,
+                                        resolved_target.resolution_source,
                                     ),
                                 );
                                 let target_resolution = match resolved_target.selection {
@@ -605,6 +641,13 @@ impl FriggMcpServer {
                                         Self::precise_resolution_precision(precise_coverage);
                                     resolution_precision = Some(precision.to_owned());
                                     match_count = precise_matches.len();
+                                    let target_selection = Some(
+                                        Self::navigation_target_selection_summary_for_direct(
+                                            &symbol_query,
+                                            selected_precise_symbol.clone(),
+                                            "symbol_precise_direct",
+                                        ),
+                                    );
                                     let metadata = json!({
                                         "precision": precision,
                                         "heuristic": false,
@@ -758,6 +801,7 @@ impl FriggMcpServer {
                                     &corpora,
                                     &symbol_query,
                                     &resolved_target.selection,
+                                    resolved_target.resolution_source,
                                 ),
                             );
                             let target_resolution = match resolved_target.selection {
@@ -1049,6 +1093,7 @@ impl FriggMcpServer {
                                         &corpora,
                                         &symbol_query,
                                         &resolved_target.selection,
+                                        resolved_target.resolution_source,
                                     ),
                                 );
                                 let target_resolution = match resolved_target.selection {
@@ -1338,6 +1383,13 @@ impl FriggMcpServer {
                                     );
                                     resolution_precision = Some(precision.to_owned());
                                     match_count = precise_matches.len();
+                                    let target_selection = Some(
+                                        Self::navigation_target_selection_summary_for_direct(
+                                            &symbol_query,
+                                            selected_precise_symbol.clone(),
+                                            "symbol_precise_direct",
+                                        ),
+                                    );
                                     let metadata = json!({
                                         "precision": precision,
                                         "heuristic": false,
@@ -1367,7 +1419,7 @@ impl FriggMcpServer {
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
-                                        target_selection: None,
+                                        target_selection,
                                         metadata,
                                         note,
                     location_warning: None,
@@ -1549,8 +1601,19 @@ impl FriggMcpServer {
 
     pub(in crate::mcp::server) async fn find_declarations_impl(
         &self,
-        params: FindDeclarationsParams,
+        mut params: FindDeclarationsParams,
     ) -> Result<Json<FindDeclarationsResponse>, ErrorData> {
+        Self::validate_navigation_target_inputs(
+            params.target.as_ref(),
+            params.symbol.as_deref(),
+            params.path.as_deref(),
+            params.line,
+            params.column,
+        )?;
+        params.repository_id = self.navigation_target_repository_hint(
+            params.target.as_ref(),
+            params.repository_id.as_deref(),
+        )?;
         struct FindDeclarationsExecution {
             result: Result<Json<FindDeclarationsResponse>, ErrorData>,
             provenance_result: Result<(), ErrorData>,
@@ -1620,6 +1683,7 @@ impl FriggMcpServer {
                             &corpora,
                             &symbol_query,
                             &resolved_target.selection,
+                            resolved_target.resolution_source,
                         ));
                     let target_resolution = match resolved_target.selection {
                         NavigationTargetSelection::Resolved(target_resolution) => target_resolution,

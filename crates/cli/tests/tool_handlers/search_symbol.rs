@@ -68,6 +68,13 @@ async fn core_search_symbol_defaults_to_compact_with_handles() {
             .all(|matched| matched.match_id.is_some()),
         "compact search_symbol matches should expose match ids"
     );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.target_ref.is_some()),
+        "every handle-bound symbol row should publish its executable target_ref"
+    );
 }
 
 #[tokio::test]

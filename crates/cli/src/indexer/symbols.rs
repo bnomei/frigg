@@ -23,9 +23,14 @@ mod inspection;
 mod model;
 mod spans;
 
-pub(crate) use extraction::push_symbol_definition;
 pub use extraction::{
-    extract_symbols_for_paths, extract_symbols_from_file, extract_symbols_from_source,
+    STABLE_SYMBOL_ID_ALGORITHM_VERSION, extract_symbols_for_paths,
+    extract_symbols_for_paths_with_root, extract_symbols_from_file, extract_symbols_from_source,
+    extract_symbols_from_source_with_identity_path,
+};
+pub(crate) use extraction::{
+    assign_repository_relative_symbol_identities, assign_symbol_identity_path,
+    push_symbol_definition,
 };
 pub use heuristics::{HeuristicReferenceResolver, resolve_heuristic_references};
 pub use inspection::{

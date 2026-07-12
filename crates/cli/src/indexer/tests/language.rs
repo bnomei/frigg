@@ -2,6 +2,7 @@
 
 use crate::languages::resolve_php_target_evidence_edges;
 
+use super::super::extract_symbols_for_paths_with_root;
 use super::support::*;
 
 #[test]
@@ -1130,6 +1131,60 @@ fn symbols_supported_language_extraction_is_deterministic() -> FriggResult<()> {
     assert_eq!(thirteenth, fourteenth);
     assert_eq!(fifteenth, sixteenth);
     assert_eq!(seventeenth, eighteenth);
+    Ok(())
+}
+
+#[test]
+fn symbols_repository_relative_identity_is_root_independent_but_path_sensitive() -> FriggResult<()>
+{
+    let first_root = temp_workspace_root("symbols-relative-identity-first");
+    let second_root = temp_workspace_root("symbols-relative-identity-second");
+    let source = "pub fn shared() {}\n";
+    prepare_workspace(
+        &first_root,
+        &[("src/lib.rs", source), ("src/other.rs", source)],
+    )?;
+    prepare_workspace(&second_root, &[("src/lib.rs", source)])?;
+
+    let first = extract_symbols_for_paths_with_root(
+        &first_root,
+        &[
+            first_root.join("src/lib.rs"),
+            first_root.join("src/other.rs"),
+        ],
+    );
+    let second =
+        extract_symbols_for_paths_with_root(&second_root, &[second_root.join("src/lib.rs")]);
+    assert!(first.diagnostics.is_empty());
+    assert!(second.diagnostics.is_empty());
+
+    let first_lib = first
+        .symbols
+        .iter()
+        .find(|symbol| symbol.path == first_root.join("src/lib.rs"))
+        .expect("first repository lib symbol");
+    let first_other = first
+        .symbols
+        .iter()
+        .find(|symbol| symbol.path == first_root.join("src/other.rs"))
+        .expect("first repository other symbol");
+    let second_lib = second
+        .symbols
+        .first()
+        .expect("second repository lib symbol");
+
+    assert_ne!(first_lib.path, second_lib.path);
+    assert_eq!(
+        first_lib.stable_id, second_lib.stable_id,
+        "absolute repository roots must not participate in public symbol identity"
+    );
+    assert_ne!(
+        first_lib.stable_id, first_other.stable_id,
+        "different repository-relative paths must retain distinct identities"
+    );
+
+    cleanup_workspace(&first_root);
+    cleanup_workspace(&second_root);
     Ok(())
 }
 

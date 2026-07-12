@@ -3,19 +3,24 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Closed target identity contract. Unknown variants and fields are rejected by serde's strict
-/// tagged representation, while empty strings are rejected by the custom deserializer below.
+/// Closed target identity; unknown variants, fields, and empty identities are rejected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TargetRef {
     ResultMatch {
+        #[schemars(length(min = 1))]
         result_handle: String,
+        #[schemars(length(min = 1))]
         match_id: String,
+        #[schemars(length(min = 1))]
         target_scope: String,
     },
     StableSymbol {
+        #[schemars(length(min = 1))]
         repository_id: String,
+        #[schemars(length(min = 1))]
         stable_symbol_id: String,
+        #[schemars(length(min = 1))]
         snapshot_token: String,
     },
 }
@@ -117,14 +122,15 @@ mod tests {
 
     #[test]
     fn strict_variants_round_trip_and_reject_unknown_variant() {
-        let target = TargetRef::result_match("h".into(), "m".into(), "s".into()).unwrap();
-        let value = serde_json::to_value(&target).unwrap();
+        let target = TargetRef::result_match("h".into(), "m".into(), "s".into())
+            .expect("non-empty fixture target should validate");
+        let value = serde_json::to_value(&target).expect("fixture target should serialize");
         assert_eq!(value["kind"], "result_match");
         assert!(
-            serde_json::from_value::<TargetRef>(serde_json::json!({"type":"other","x":"y"}))
+            serde_json::from_value::<TargetRef>(serde_json::json!({"kind":"other","x":"y"}))
                 .is_err()
         );
-        assert!(serde_json::from_value::<TargetRef>(serde_json::json!({"type":"result_match","result_handle":"h","match_id":"m","target_scope":"s","extra":1})).is_err());
+        assert!(serde_json::from_value::<TargetRef>(serde_json::json!({"kind":"result_match","result_handle":"h","match_id":"m","target_scope":"s","extra":1})).is_err());
     }
 
     #[test]
@@ -135,6 +141,7 @@ mod tests {
             target_scope: "s".into(),
         };
         assert!(target.validate().is_err());
-        assert!(serde_json::from_value::<TargetRef>(serde_json::json!({"type":"result_match","result_handle":"","match_id":"m","target_scope":"s"})).is_err());
+        assert!(serde_json::from_value::<TargetRef>(serde_json::json!({"kind":"result_match","result_handle":"","match_id":"m","target_scope":"s"})).is_err());
+        assert!(serde_json::from_value::<TargetRef>(serde_json::json!({"kind":"stable_symbol","repository_id":"repo","stable_symbol_id":"","snapshot_token":"snapshot"})).is_err());
     }
 }

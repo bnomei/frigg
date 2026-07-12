@@ -6,6 +6,7 @@
 use super::*;
 use frigg::mcp::types::{
     NextAction, NextActionOrigin, NextActionTarget, ReadMatchResponse, ReplayOriginTarget,
+    TargetRef,
 };
 
 fn assert_handle_recovery_fields(error: &rmcp::ErrorData, expected_code: &str) {
@@ -297,4 +298,234 @@ async fn read_match_cross_search_handle_and_match_id_returns_mixed_handle() {
         .await
         .expect_err("inverse cross-paired handle/match_id should fail");
     assert_handle_recovery_fields(&mixed_inverse, "MIXED_HANDLE");
+}
+
+#[tokio::test]
+async fn result_targets_reject_equal_local_ids_from_another_session_before_lookup() {
+    let workspace_root = fresh_fixture_root("result-target-cross-session-equal-ids");
+    let server_a = server_for_workspace_root(&workspace_root).await;
+    let server_b = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server_a).await;
+
+    async fn issue_target(
+        server: &FriggMcpServer,
+        repository_id: &str,
+    ) -> (String, String, TargetRef) {
+        let response = server
+            .search_symbol(Parameters(SearchSymbolParams {
+                query: "greeting".to_owned(),
+                repository_id: Some(repository_id.to_owned()),
+                path_class: None,
+                path_regex: Some(r"^src/lib\.rs$".to_owned()),
+                limit: Some(5),
+                continuation: None,
+                response_mode: Some(ResponseMode::Compact),
+            }))
+            .await
+            .expect("each session should issue a symbol target")
+            .0;
+        let row = response
+            .matches
+            .first()
+            .expect("fixture should expose greeting");
+        (
+            response
+                .result_handle
+                .expect("symbol search should issue a handle"),
+            row.match_id
+                .clone()
+                .expect("symbol row should issue a match id"),
+            row.target_ref
+                .clone()
+                .expect("symbol row should issue a target ref"),
+        )
+    }
+
+    let (handle_a, match_a, target_a) = issue_target(&server_a, &repository_id).await;
+    let (handle_b, match_b, target_b) = issue_target(&server_b, &repository_id).await;
+    assert_eq!(
+        handle_a, handle_b,
+        "session-local handle counters must coincide"
+    );
+    assert_eq!(
+        match_a, match_b,
+        "session-local match counters must coincide"
+    );
+    assert_ne!(
+        target_a.target_scope(),
+        target_b.target_scope(),
+        "each MCP session must own a distinct opaque target scope"
+    );
+
+    let error = match server_b
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(target_a),
+            repository_id: Some(repository_id.clone()),
+            include_definition: Some(true),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a foreign target must fail before equal local IDs can rebind it"),
+    };
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("TARGET_SCOPE_MISMATCH"));
+    let data = error
+        .data
+        .expect("scope mismatch must include recovery data");
+    assert!(data["correction_hint"].is_string());
+    assert!(data["related_tools"].is_array());
+    assert_eq!(data["next_actions"], serde_json::json!([]));
+
+    server_b
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(target_b),
+            repository_id: Some(repository_id),
+            include_definition: Some(true),
+            limit: Some(5),
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("the same-session target should remain executable");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn result_targets_preserve_stale_mixed_and_capacity_expiry_failures() {
+    let workspace_root = fresh_fixture_root("result-target-handle-failures");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server).await;
+    let symbol = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "greeting".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("symbol search should issue a result target")
+        .0;
+    assert_eq!(symbol.handle_expires.as_deref(), Some("session"));
+    let target = symbol.matches[0]
+        .target_ref
+        .clone()
+        .expect("symbol match should carry a target");
+    let TargetRef::ResultMatch {
+        result_handle,
+        match_id,
+        target_scope,
+    } = target
+    else {
+        panic!("handle-bound symbols must issue result_match targets");
+    };
+
+    let stale = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(TargetRef::ResultMatch {
+                result_handle: "result-handle-not-present".to_owned(),
+                match_id: match_id.clone(),
+                target_scope: target_scope.clone(),
+            }),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("an absent target handle must remain STALE_HANDLE"),
+    };
+    assert_handle_recovery_fields(&stale, "STALE_HANDLE");
+
+    let text = server
+        .search_text(Parameters(SearchTextParams {
+            query: "hello from fixture".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id.clone()),
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("text search should issue a second target pair")
+        .0;
+    let TargetRef::ResultMatch {
+        match_id: text_match_id,
+        ..
+    } = text.matches[0]
+        .target_ref
+        .clone()
+        .expect("text match should carry a target")
+    else {
+        panic!("handle-bound text rows must issue result_match targets");
+    };
+    let mixed = match server
+        .find_references(Parameters(FindReferencesParams {
+            target: Some(TargetRef::ResultMatch {
+                result_handle,
+                match_id: text_match_id,
+                target_scope,
+            }),
+            include_definition: Some(true),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a cross-paired navigation target must remain MIXED_HANDLE"),
+    };
+    assert_handle_recovery_fields(&mixed, "MIXED_HANDLE");
+    cleanup_workspace_root(&workspace_root);
+
+    let capacity_root = fresh_fixture_root("result-target-capacity-expiry");
+    let capacity_server = server_for_workspace_root(&capacity_root).await;
+    let capacity_repository_id = public_repository_id(&capacity_server).await;
+    let first = capacity_server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "greeting".to_owned(),
+            repository_id: Some(capacity_repository_id.clone()),
+            path_class: None,
+            path_regex: Some(r"^src/lib\.rs$".to_owned()),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("capacity fixture should issue the oldest target")
+        .0;
+    let oldest_target = first.matches[0]
+        .target_ref
+        .clone()
+        .expect("capacity fixture should expose a target");
+    for _ in 0..64 {
+        capacity_server
+            .search_text(Parameters(SearchTextParams {
+                query: "hello from fixture".to_owned(),
+                pattern_type: Some(SearchPatternType::Literal),
+                repository_id: Some(capacity_repository_id.clone()),
+                path_regex: Some(r"^src/lib\.rs$".to_owned()),
+                limit: Some(5),
+                ..Default::default()
+            }))
+            .await
+            .expect("each capacity probe should issue a fresh handle");
+    }
+    let evicted = match capacity_server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            target: Some(oldest_target),
+            ..Default::default()
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("the oldest target must expire when the session cache reaches capacity"),
+    };
+    assert_handle_recovery_fields(&evicted, "STALE_HANDLE");
+    cleanup_workspace_root(&capacity_root);
 }
