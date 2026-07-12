@@ -540,18 +540,23 @@ pub struct InspectSyntaxTreeResponse {
 /// Parameters for optional `impact_bundle` convenience composition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImpactBundleParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetRef>,
     /// Legacy symbol name to resolve impact for. Either this non-empty value or `target` is
     /// required; both together are rejected so an issued target can never be overridden.
     #[serde(default)]
     pub symbol: String,
     /// Path class for the initial symbol lookup. Defaults to `runtime`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path_class: Option<crate::mcp::types::SearchSymbolPathClass>,
     /// Optional repository scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_id: Option<String>,
     /// Force include implementations even when kind is not trait/interface.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub include_implementations: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mode: Option<ResponseMode>,
 }
 

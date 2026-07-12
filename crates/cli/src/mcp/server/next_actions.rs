@@ -102,39 +102,53 @@ fn target_has_required_fields(target: &NextActionTarget) -> bool {
                     == params.probes.len()
         }
         NextActionTarget::FindReferences(params) => valid_navigation_target(
+            params.target.as_ref(),
             params.symbol.as_deref(),
             params.path.as_deref(),
             params.line,
+            params.column,
         ),
         NextActionTarget::GoToDefinition(params) => valid_navigation_target(
+            params.target.as_ref(),
             params.symbol.as_deref(),
             params.path.as_deref(),
             params.line,
+            params.column,
         ),
         NextActionTarget::FindDeclarations(params) => valid_navigation_target(
+            params.target.as_ref(),
             params.symbol.as_deref(),
             params.path.as_deref(),
             params.line,
+            params.column,
         ),
         NextActionTarget::FindImplementations(params) => valid_navigation_target(
+            params.target.as_ref(),
             params.symbol.as_deref(),
             params.path.as_deref(),
             params.line,
+            params.column,
         ),
         NextActionTarget::IncomingCalls(params) => valid_navigation_target(
+            params.target.as_ref(),
             params.symbol.as_deref(),
             params.path.as_deref(),
             params.line,
+            params.column,
         ),
         NextActionTarget::OutgoingCalls(params) => valid_navigation_target(
+            params.target.as_ref(),
             params.symbol.as_deref(),
             params.path.as_deref(),
             params.line,
+            params.column,
         ),
         NextActionTarget::DocumentSymbols(params) => non_empty(&params.path),
         NextActionTarget::InspectSyntaxTree(params) => non_empty(&params.path),
         NextActionTarget::SearchStructural(params) => non_empty(&params.query),
-        NextActionTarget::ImpactBundle(params) => non_empty(&params.symbol),
+        NextActionTarget::ImpactBundle(params) => {
+            params.target.is_some() || non_empty(&params.symbol)
+        }
     }
 }
 
@@ -156,7 +170,16 @@ fn valid_explore_anchor(anchor: Option<&crate::mcp::types::ExploreAnchor>) -> bo
         && anchor.end_column > 0
 }
 
-fn valid_navigation_target(symbol: Option<&str>, path: Option<&str>, line: Option<usize>) -> bool {
+fn valid_navigation_target(
+    target: Option<&crate::mcp::types::TargetRef>,
+    symbol: Option<&str>,
+    path: Option<&str>,
+    line: Option<usize>,
+    column: Option<usize>,
+) -> bool {
+    if target.is_some() {
+        return symbol.is_none() && path.is_none() && line.is_none() && column.is_none();
+    }
     match symbol {
         Some(symbol) => non_empty(symbol),
         None => path.is_some_and(non_empty) && line.is_some_and(|line| line > 0),
@@ -168,8 +191,8 @@ mod tests {
     use super::*;
     use crate::mcp::tool_surface::ToolSurfaceProfile;
     use crate::mcp::types::{
-        ExploreAnchor, NextActionDependency, NextActionDependencyMode, NextActionId,
-        NextActionRole, SearchTextParams,
+        ExploreAnchor, GoToDefinitionParams, ImpactBundleParams, NextActionDependency,
+        NextActionDependencyMode, NextActionId, NextActionRole, SearchTextParams, TargetRef,
     };
     use serde_json::json;
 
@@ -202,6 +225,60 @@ mod tests {
         let suppressed =
             validate_next_actions_for_router(&router, [action("text", text_target("needle"))]);
         assert!(suppressed.is_empty());
+    }
+
+    #[test]
+    fn target_bearing_navigation_actions_validate_without_reconstructed_inputs() {
+        let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Core);
+        let target = TargetRef::result_match(
+            "result-000001".to_owned(),
+            "search:m1".to_owned(),
+            "session-scope".to_owned(),
+        )
+        .expect("non-empty target");
+        let retained = validate_next_actions_for_router(
+            &router,
+            [
+                action(
+                    "definition",
+                    NextActionTarget::GoToDefinition(GoToDefinitionParams {
+                        target: Some(target.clone()),
+                        ..GoToDefinitionParams::default()
+                    }),
+                ),
+                action(
+                    "impact",
+                    NextActionTarget::ImpactBundle(ImpactBundleParams {
+                        target: Some(target),
+                        ..ImpactBundleParams::default()
+                    }),
+                ),
+            ],
+        );
+        assert_eq!(retained.len(), 2);
+    }
+
+    #[test]
+    fn target_bearing_navigation_actions_reject_legacy_columns() {
+        let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Core);
+        let target = TargetRef::result_match(
+            "result-000001".to_owned(),
+            "search:m1".to_owned(),
+            "session-scope".to_owned(),
+        )
+        .expect("non-empty target");
+        let retained = validate_next_actions_for_router(
+            &router,
+            [action(
+                "definition",
+                NextActionTarget::GoToDefinition(GoToDefinitionParams {
+                    target: Some(target),
+                    column: Some(1),
+                    ..GoToDefinitionParams::default()
+                }),
+            )],
+        );
+        assert!(retained.is_empty());
     }
 
     #[test]

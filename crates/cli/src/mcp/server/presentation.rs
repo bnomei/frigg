@@ -7,11 +7,12 @@ use super::*;
 use crate::domain::model::TextMatch;
 use crate::mcp::server_cache::{ContinuationBinding, SessionContinuationCache};
 use crate::mcp::types::{
-    ContinuationValidationError, DocumentSymbolItem, HybridPivotMatchSource, NextActionDependency,
-    NextActionDependencyMode, NextActionId, NextActionOrigin, NextActionRole, NextActionTarget,
-    ReadMatchParams, ReplayOriginTarget, ResultCompleteness, ResultIncompleteReason,
-    ResultTruncationReason, ResultUnit, SearchHybridDiagnosticsSummary, SearchHybridMatch,
-    SearchHybridMetadata, SearchHybridParams, SearchHybridRankReason, canonical_next_action,
+    ContinuationValidationError, DocumentSymbolItem, FindReferencesParams, GoToDefinitionParams,
+    HybridPivotMatchSource, ImpactBundleParams, NextActionDependency, NextActionDependencyMode,
+    NextActionId, NextActionOrigin, NextActionRole, NextActionTarget, ReadMatchParams,
+    ReplayOriginTarget, ResultCompleteness, ResultIncompleteReason, ResultTruncationReason,
+    ResultUnit, SearchHybridDiagnosticsSummary, SearchHybridMatch, SearchHybridMetadata,
+    SearchHybridParams, SearchHybridRankReason, canonical_next_action,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -33,6 +34,67 @@ pub(in crate::mcp::server) enum SessionResultHandleLookup {
 }
 
 impl FriggMcpServer {
+    /// Follow-up navigation actions must preserve the opaque target issued with the result row.
+    /// They intentionally carry no reconstructed symbol or coordinate fields: replaying these
+    /// params routes through the shared target resolver without falling back to name ranking.
+    pub(super) fn target_follow_up_actions(
+        target: Option<&crate::mcp::types::TargetRef>,
+    ) -> Vec<crate::mcp::types::NextAction> {
+        let Some(target) = target.cloned() else {
+            return Vec::new();
+        };
+        vec![
+            canonical_next_action(
+                "target-definition",
+                NextActionRole::ResolveTarget,
+                0,
+                NextActionTarget::GoToDefinition(GoToDefinitionParams {
+                    target: Some(target.clone()),
+                    ..GoToDefinitionParams::default()
+                }),
+                "resolve this issued result target to its definition",
+            ),
+            canonical_next_action(
+                "target-references",
+                NextActionRole::ResolveTarget,
+                1,
+                NextActionTarget::FindReferences(FindReferencesParams {
+                    target: Some(target.clone()),
+                    ..FindReferencesParams::default()
+                }),
+                "find references for this issued result target",
+            ),
+            canonical_next_action(
+                "target-impact",
+                NextActionRole::ResolveTarget,
+                2,
+                NextActionTarget::ImpactBundle(ImpactBundleParams {
+                    target: Some(target),
+                    ..ImpactBundleParams::default()
+                }),
+                "inspect the impact bundle for this issued result target",
+            ),
+        ]
+    }
+
+    fn append_target_follow_up_actions(
+        recovery: &mut RecoveryFields,
+        target: Option<&crate::mcp::types::TargetRef>,
+    ) {
+        let mut actions = std::mem::take(&mut recovery.next_actions);
+        let next_order = actions
+            .iter()
+            .map(|action| action.order)
+            .max()
+            .map_or(0, |order| order.saturating_add(1));
+        let mut target_actions = Self::target_follow_up_actions(target);
+        for (offset, action) in target_actions.iter_mut().enumerate() {
+            action.order = next_order.saturating_add(offset as u16);
+        }
+        actions.extend(target_actions);
+        recovery.set_next_actions(actions);
+    }
+
     /// Navigation continuations always need a positive page width. Returning a token from an
     /// empty explicit page would retain the same offset and create an infinite replay loop.
     pub(super) fn navigation_page_limit(
@@ -1141,6 +1203,13 @@ impl FriggMcpServer {
 
         response.result_handle =
             self.assign_result_handle_for_text_matches("search_text", &mut response.matches);
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
+        );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "search_text");
         response.handle_scope = handle_scope;
@@ -1395,6 +1464,13 @@ impl FriggMcpServer {
                 })
             });
         }
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
+        );
         self.validate_recovery_actions(&mut response.recovery);
         response
     }
@@ -1407,6 +1483,13 @@ impl FriggMcpServer {
     ) -> SearchSymbolResponse {
         response.result_handle =
             self.assign_result_handle_for_symbol_matches("search_symbol", &mut response.matches);
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
+        );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "search_symbol");
         response.handle_scope = handle_scope;
@@ -1522,6 +1605,13 @@ impl FriggMcpServer {
     ) -> FindReferencesResponse {
         response.result_handle = self
             .assign_result_handle_for_reference_matches("find_references", &mut response.matches);
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
+        );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "find_references");
         response.handle_scope = handle_scope;
@@ -1555,6 +1645,13 @@ impl FriggMcpServer {
         response.result_handle = self.assign_result_handle_for_navigation_locations(
             "go_to_definition",
             &mut response.matches,
+        );
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
         );
         let (handle_scope, handle_expires) =
             Self::attach_handle_metadata(&response.result_handle, "go_to_definition");
@@ -1590,6 +1687,13 @@ impl FriggMcpServer {
             "find_declarations",
             &mut response.matches,
         );
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
+        );
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
@@ -1619,6 +1723,13 @@ impl FriggMcpServer {
         response.result_handle = self.assign_result_handle_for_implementation_matches(
             "find_implementations",
             &mut response.matches,
+        );
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
         );
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
@@ -1650,6 +1761,13 @@ impl FriggMcpServer {
             "incoming_calls",
             &mut response.matches,
         );
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
+        );
         if response.matches.is_empty() {
             let index = self.zero_hit_index_for_repositories(&[]);
             if response.recovery.is_empty() {
@@ -1679,6 +1797,13 @@ impl FriggMcpServer {
         response.result_handle = self.assign_result_handle_for_call_hierarchy_matches(
             "outgoing_calls",
             &mut response.matches,
+        );
+        Self::append_target_follow_up_actions(
+            &mut response.recovery,
+            response
+                .matches
+                .first()
+                .and_then(|matched| matched.target_ref.as_ref()),
         );
         response = response.with_provisional_honesty();
         if response.matches.is_empty() {
@@ -3010,5 +3135,38 @@ mod tests {
             "disambiguation must not be presented as SCIP absence: {:?}",
             defs.recovery.correction_hint
         );
+    }
+
+    #[test]
+    fn target_follow_up_actions_replay_the_issued_target_unchanged() {
+        let target = crate::mcp::types::TargetRef::result_match(
+            "result-000001".to_owned(),
+            "search:m1".to_owned(),
+            "session-scope".to_owned(),
+        )
+        .expect("non-empty target");
+
+        let actions = FriggMcpServer::target_follow_up_actions(Some(&target));
+        assert_eq!(actions.len(), 3);
+        for action in actions {
+            let copied = match action.target {
+                NextActionTarget::GoToDefinition(params) => {
+                    assert!(params.symbol.is_none());
+                    assert!(params.path.is_none());
+                    params.target
+                }
+                NextActionTarget::FindReferences(params) => {
+                    assert!(params.symbol.is_none());
+                    assert!(params.path.is_none());
+                    params.target
+                }
+                NextActionTarget::ImpactBundle(params) => {
+                    assert!(params.symbol.is_empty());
+                    params.target
+                }
+                other => panic!("unexpected target action: {}", other.tool_name()),
+            };
+            assert_eq!(copied, Some(target.clone()));
+        }
     }
 }
