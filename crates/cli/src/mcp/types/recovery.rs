@@ -4,7 +4,11 @@
 //! get actionable next steps without requesting `response_mode=full`. Builders cover the common
 //! situations including structured zero-hit diagnostics.
 
-use super::NextAction;
+use super::{
+    FindReferencesParams, GoToDefinitionParams, IncomingCallsParams, ListFilesParams, NextAction,
+    NextActionId, NextActionRole, NextActionTarget, ReadFileParams, SearchPatternType,
+    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceParams,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +143,84 @@ impl SuggestedNext {
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
         self
+    }
+}
+
+/// Private builder input that is converted to a typed canonical action before serialization.
+/// It deliberately mirrors only the known recovery inputs; compatibility rows are generated
+/// later by [`RecoveryFields::set_next_actions`].
+#[derive(Default)]
+struct CanonicalActionDraft {
+    tool: String,
+    query: Option<String>,
+    pattern_type: Option<String>,
+    path_regex: Option<String>,
+    glob: Option<String>,
+    path_class: Option<String>,
+    symbol: Option<String>,
+    repository_id: Option<String>,
+    path: Option<String>,
+    reason: Option<String>,
+}
+
+impl CanonicalActionDraft {
+    fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = Some(query.into());
+        self
+    }
+
+    fn with_pattern_type(mut self, pattern_type: impl Into<String>) -> Self {
+        self.pattern_type = Some(pattern_type.into());
+        self
+    }
+
+    fn with_path_regex(mut self, path_regex: impl Into<String>) -> Self {
+        self.path_regex = Some(path_regex.into());
+        self
+    }
+
+    fn with_path_class(mut self, path_class: impl Into<String>) -> Self {
+        self.path_class = Some(path_class.into());
+        self
+    }
+
+    fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.symbol = Some(symbol.into());
+        self
+    }
+
+    fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+}
+
+impl From<SuggestedNext> for CanonicalActionDraft {
+    fn from(suggestion: SuggestedNext) -> Self {
+        Self {
+            tool: suggestion.tool,
+            query: suggestion.query,
+            pattern_type: suggestion.pattern_type,
+            path_regex: suggestion.path_regex,
+            glob: suggestion.glob,
+            path_class: suggestion.path_class,
+            symbol: suggestion.symbol,
+            repository_id: suggestion.repository_id,
+            path: suggestion.path,
+            reason: suggestion.reason,
+        }
+    }
+}
+
+fn legacy_suggestion(tool: impl Into<String>) -> CanonicalActionDraft {
+    CanonicalActionDraft {
+        tool: tool.into(),
+        ..CanonicalActionDraft::default()
     }
 }
 
@@ -352,13 +434,27 @@ impl RecoveryFields {
             format!("**/{glob}")
         };
         let query = query.trim();
-        self.suggested_next.insert(
+        let mut actions = std::mem::take(&mut self.next_actions);
+        actions.insert(
             0,
-            SuggestedNext::tool("search_text")
-                .with_query(query)
-                .with_glob(recursive.clone())
-                .with_reason("non-recursive glob zero; retry with recursive ** form"),
+            NextAction {
+                id: NextActionId("recovery-recursive-glob".to_owned()),
+                role: NextActionRole::Retry,
+                order: 0,
+                dependencies: Vec::new(),
+                target: NextActionTarget::SearchText(SearchTextParams {
+                    query: query.to_owned(),
+                    glob: Some(recursive.clone()),
+                    ..SearchTextParams::default()
+                }),
+                reason: "non-recursive glob zero; retry with recursive ** form".to_owned(),
+            },
         );
+        for (order, action) in actions.iter_mut().enumerate() {
+            action.order = order as u16;
+            action.dependencies.clear();
+        }
+        self.set_next_actions(actions);
         if self
             .correction_hint
             .as_ref()
@@ -521,31 +617,31 @@ impl RecoveryFields {
         let tool = tool.trim();
         let query_label = query.unwrap_or("<empty>");
         let mut suggested_next = vec![
-            SuggestedNext::tool("workspace")
+            legacy_suggestion("workspace")
                 .with_reason("confirm repository adoption and index freshness"),
         ];
         if let Some(query) = query {
             if tool == "search_symbol" {
                 suggested_next.push(
-                    SuggestedNext::tool("search_text")
+                    legacy_suggestion("search_text")
                         .with_query(query)
                         .with_reason("textual fallback after symbol zero"),
                 );
                 suggested_next.push(
-                    SuggestedNext::tool("search_symbol")
+                    legacy_suggestion("search_symbol")
                         .with_symbol(query)
                         .with_path_class("project")
                         .with_reason("broaden path_class after runtime-first zero"),
                 );
             } else if tool == "search_hybrid" {
                 suggested_next.push(
-                    SuggestedNext::tool("search_symbol")
+                    legacy_suggestion("search_symbol")
                         .with_query(query)
                         .with_path_class("runtime")
                         .with_reason("exact symbol pivot after hybrid zero"),
                 );
                 suggested_next.push(
-                    SuggestedNext::tool("search_text")
+                    legacy_suggestion("search_text")
                         .with_query(query)
                         .with_reason("exact text pivot after hybrid zero"),
                 );
@@ -554,25 +650,25 @@ impl RecoveryFields {
                 "find_references" | "go_to_definition" | "find_declarations"
             ) {
                 suggested_next.push(
-                    SuggestedNext::tool("search_symbol")
+                    legacy_suggestion("search_symbol")
                         .with_symbol(query)
                         .with_path_class("runtime")
                         .with_reason("resolve symbol before navigation retry"),
                 );
                 suggested_next.push(
-                    SuggestedNext::tool("search_text")
+                    legacy_suggestion("search_text")
                         .with_query(query)
                         .with_reason("textual fallback after navigation zero"),
                 );
             } else {
                 suggested_next.push(
-                    SuggestedNext::tool("search_text")
+                    legacy_suggestion("search_text")
                         .with_query(query)
                         .with_path_regex("^src/")
                         .with_reason("retry with an explicit runtime path_regex"),
                 );
                 suggested_next.push(
-                    SuggestedNext::tool("search_symbol")
+                    legacy_suggestion("search_symbol")
                         .with_query(query)
                         .with_path_class("runtime")
                         .with_reason("try symbol search if the query is a known name"),
@@ -580,11 +676,10 @@ impl RecoveryFields {
             }
         } else {
             suggested_next.push(
-                SuggestedNext::tool(tool).with_reason("retry with a more specific query or symbol"),
+                legacy_suggestion(tool).with_reason("retry with a more specific query or symbol"),
             );
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("ZERO_HIT".to_owned()),
             message: Some(format!(
                 "Indexed search via {tool} returned no matches for {query_label:?}."
@@ -599,11 +694,12 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "search_symbol".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::IndexedSearchComplete),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Generic query miss when a stronger diagnostic does not apply.
@@ -611,18 +707,17 @@ impl RecoveryFields {
         let tool = tool.trim();
         let query_label = query.unwrap_or("<empty>");
         let mut suggested_next = vec![
-            SuggestedNext::tool("workspace")
+            legacy_suggestion("workspace")
                 .with_reason("confirm repository and freshness if the miss is surprising"),
         ];
         if let Some(query) = query {
             suggested_next.push(
-                SuggestedNext::tool("search_text")
+                legacy_suggestion("search_text")
                     .with_query(query)
                     .with_reason("retry or rephrase as exact text"),
             );
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("QUERY_MISS".to_owned()),
             message: Some(format!(
                 "No matches for {query_label:?} via {tool}."
@@ -632,35 +727,35 @@ impl RecoveryFields {
                     .to_owned(),
             ),
             related_tools: vec![tool.to_owned(), "workspace".to_owned(), "search_text".to_owned()],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Precise graph / SCIP data is unavailable for navigation.
     pub fn precise_graph_unavailable(tool: &str, query: Option<&str>) -> Self {
         let tool = tool.trim();
         let mut suggested_next = vec![
-            SuggestedNext::tool("search_symbol")
+            legacy_suggestion("search_symbol")
                 .with_reason("heuristic symbol search when precise graph is absent"),
-            SuggestedNext::tool("search_text")
+            legacy_suggestion("search_text")
                 .with_reason("textual fallback when precise navigation is unavailable"),
-            SuggestedNext::tool("workspace")
+            legacy_suggestion("workspace")
                 .with_reason("check precise generation / index readiness"),
         ];
         if let Some(query) = query {
-            suggested_next[0] = SuggestedNext::tool("search_symbol")
+            suggested_next[0] = legacy_suggestion("search_symbol")
                 .with_symbol(query)
                 .with_path_class("runtime")
                 .with_reason("heuristic symbol search when precise graph is absent");
-            suggested_next[1] = SuggestedNext::tool("search_text")
+            suggested_next[1] = legacy_suggestion("search_text")
                 .with_query(query)
                 .with_reason("textual fallback when precise navigation is unavailable");
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("PRECISE_GRAPH_UNAVAILABLE".to_owned()),
             message: Some(format!(
                 "{tool} has no precise graph/SCIP data for this request."
@@ -675,11 +770,12 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "workspace".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::PreciseGraphUnavailable),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Requested path class is not covered by the index.
@@ -688,17 +784,16 @@ impl RecoveryFields {
             .and_then(|scope| scope.path_class.as_deref())
             .unwrap_or("requested");
         let mut suggested_next = vec![
-            SuggestedNext::tool("search_text")
+            legacy_suggestion("search_text")
                 .with_reason("search without path_class when class coverage is missing"),
-            SuggestedNext::tool("list_files").with_reason("verify which path classes are present"),
+            legacy_suggestion("list_files").with_reason("verify which path classes are present"),
         ];
         if let Some(query) = query {
-            suggested_next[0] = SuggestedNext::tool("search_text")
+            suggested_next[0] = legacy_suggestion("search_text")
                 .with_query(query)
                 .with_reason("search without path_class when class coverage is missing");
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("PATH_CLASS_NOT_INDEXED".to_owned()),
             message: Some(format!(
                 "Path class {path_class:?} is not covered by the index for this request."
@@ -712,18 +807,24 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "list_files".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::PathClassNotIndexed),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Literal query appears regex-shaped and returned zero hits.
     pub fn literal_looks_like_regex(query: &str) -> Self {
         let query = query.trim();
+        let suggested_next = vec![
+            legacy_suggestion("search_text")
+                .with_query(query)
+                .with_pattern_type("regex")
+                .with_reason("literal query contains regex metacharacters"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("QUERY_LOOKS_LIKE_REGEX".to_owned()),
             message: Some(format!(
                 "No literal matches for query that looks like a regular expression: {query:?}."
@@ -732,23 +833,27 @@ impl RecoveryFields {
                 "Retry search_text with pattern_type=regex (default is literal).".to_owned(),
             ),
             related_tools: vec!["search_text".to_owned()],
-            suggested_next: vec![
-                SuggestedNext::tool("search_text")
-                    .with_query(query)
-                    .with_pattern_type("regex")
-                    .with_reason("literal query contains regex metacharacters"),
-            ],
             zero_hit_reason: Some(ZeroHitReason::QueryLooksLikeRegex),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Runtime-scoped zero with a known name: broaden path_class or fall back to text.
     pub fn runtime_zero_name_known(name: &str) -> Self {
         let name = name.trim();
+        let suggested_next = vec![
+            legacy_suggestion("search_symbol")
+                .with_symbol(name)
+                .with_path_class("project")
+                .with_reason("broaden path_class after runtime zero"),
+            legacy_suggestion("search_text")
+                .with_query(name)
+                .with_reason("textual search when symbol class filter misses"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("ZERO_HIT_RUNTIME_SCOPE".to_owned()),
             message: Some(format!("No runtime-class hits for known name {name:?}.")),
             correction_hint: Some(
@@ -760,30 +865,23 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "list_files".to_owned(),
             ],
-            suggested_next: vec![
-                SuggestedNext::tool("search_symbol")
-                    .with_symbol(name)
-                    .with_path_class("project")
-                    .with_reason("broaden path_class after runtime zero"),
-                SuggestedNext::tool("search_text")
-                    .with_query(name)
-                    .with_reason("textual search when symbol class filter misses"),
-            ],
             zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Wrong repository may explain an empty result.
     pub fn wrong_repo_possible(path_hint: Option<&str>) -> Self {
-        let mut next = SuggestedNext::tool("workspace")
+        let mut next = legacy_suggestion("workspace")
             .with_reason("confirm adoption and session default repository");
         if let Some(path) = path_hint.filter(|value| !value.trim().is_empty()) {
             next = next.with_path(path);
         }
+        let suggested_next = vec![next];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("WRONG_REPOSITORY_POSSIBLE".to_owned()),
             message: Some(
                 "No matches; the session default or repository_id may not be the intended repo."
@@ -794,11 +892,12 @@ impl RecoveryFields {
                     .to_owned(),
             ),
             related_tools: vec!["workspace".to_owned(), "search_text".to_owned()],
-            suggested_next: vec![next],
             zero_hit_reason: Some(ZeroHitReason::WrongRepositoryPossible),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Dirty / stale index may explain a surprising zero.
@@ -820,17 +919,16 @@ impl RecoveryFields {
             }
         };
         let mut suggested_next = vec![
-            SuggestedNext::tool("workspace").with_reason("check dirty paths and index freshness"),
+            legacy_suggestion("workspace").with_reason("check dirty paths and index freshness"),
         ];
         if let Some(path) = changed_paths.first() {
             suggested_next.push(
-                SuggestedNext::tool("read_file")
+                legacy_suggestion("read_file")
                     .with_path(path.clone())
                     .with_reason("live-disk read of a touched path only"),
             );
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("INDEX_STALE_POSSIBLE".to_owned()),
             message: Some(format!("No matches; index may be stale ({summary}).")),
             correction_hint: Some(
@@ -842,20 +940,21 @@ impl RecoveryFields {
                 "read_file".to_owned(),
                 "search_text".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::IndexStalePossible),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Multi-hypothesis task should prefer batch or parallel exact probes.
     pub fn multi_hypothesis(probes: &[&str]) -> Self {
         let suggested_next = if probes.is_empty() {
             vec![
-                SuggestedNext::tool("search_batch")
+                legacy_suggestion("search_batch")
                     .with_reason("multi-hypothesis: batch probes when available"),
-                SuggestedNext::tool("search_text")
+                legacy_suggestion("search_text")
                     .with_reason("interim: same-turn parallel search_text probes"),
             ]
         } else {
@@ -863,14 +962,13 @@ impl RecoveryFields {
                 .iter()
                 .take(6)
                 .map(|probe| {
-                    SuggestedNext::tool("search_text")
+                    legacy_suggestion("search_text")
                         .with_query(*probe)
                         .with_reason("parallel exact probe for multi-hypothesis task")
                 })
                 .collect()
         };
         Self {
-            next_actions: Vec::new(),
             error_code: Some("MULTI_HYPOTHESIS".to_owned()),
             message: Some(
                 "Several plausible probes fit this task better than a single wide search."
@@ -885,32 +983,35 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "search_symbol".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// All `search_batch` probes returned zero hits after the batch already ran.
     pub fn batch_all_zero(
         strongest_reason: Option<ZeroHitReason>,
-        suggested_next: Vec<SuggestedNext>,
+        suggestions: Vec<SuggestedNext>,
     ) -> Self {
         let zero_hit_reason = strongest_reason.unwrap_or(ZeroHitReason::QueryMiss);
-        let suggested_next = if suggested_next.is_empty() {
+        let suggested_next = if suggestions.is_empty() {
             vec![
-                SuggestedNext::tool("workspace")
+                legacy_suggestion("workspace")
                     .with_reason("confirm adoption, dirty paths, and index freshness"),
-                SuggestedNext::tool("search_text").with_reason(
+                legacy_suggestion("search_text").with_reason(
                     "retry one exact probe with broader scope after reading probe_summary",
                 ),
             ]
         } else {
-            suggested_next
+            suggestions
+                .into_iter()
+                .map(CanonicalActionDraft::from)
+                .collect()
         };
         Self {
-            next_actions: Vec::new(),
             error_code: Some("BATCH_ALL_ZERO".to_owned()),
             message: Some(
                 "All search_batch probes returned zero hits; inspect probe_summary for per-probe diagnostics."
@@ -925,18 +1026,26 @@ impl RecoveryFields {
                 "search_symbol".to_owned(),
                 "workspace".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(zero_hit_reason),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// After a symbol hit, impact tools are the natural next step.
     pub fn impact_after_symbol(symbol: &str) -> Self {
         let symbol = symbol.trim();
+        let suggested_next = vec![
+            legacy_suggestion("find_references")
+                .with_symbol(symbol)
+                .with_reason("usages for impact analysis"),
+            legacy_suggestion("incoming_calls")
+                .with_symbol(symbol)
+                .with_reason("callers for blast radius"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("IMPACT_AFTER_SYMBOL".to_owned()),
             message: Some(format!(
                 "Symbol {symbol:?} is resolved; gather references and callers for impact."
@@ -951,18 +1060,12 @@ impl RecoveryFields {
                 "find_implementations".to_owned(),
                 "impact_bundle".to_owned(),
             ],
-            suggested_next: vec![
-                SuggestedNext::tool("find_references")
-                    .with_symbol(symbol)
-                    .with_reason("usages for impact analysis"),
-                SuggestedNext::tool("incoming_calls")
-                    .with_symbol(symbol)
-                    .with_reason("callers for blast radius"),
-            ],
             zero_hit_reason: None,
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Hybrid discovery should pivot to exact tools rather than proof-from-rank-1.
@@ -982,20 +1085,20 @@ impl RecoveryFields {
         let symbol_tokens: Vec<&String> = shaped_pivot_tokens(&tokens);
         if let Some(primary) = symbol_tokens.first() {
             suggested_next.push(
-                SuggestedNext::tool("search_symbol")
+                legacy_suggestion("search_symbol")
                     .with_query((*primary).clone())
                     .with_path_class("runtime")
                     .with_reason("exact symbol pivot after hybrid discovery"),
             );
             let text_query = tokens.get(1).cloned().unwrap_or_else(|| (*primary).clone());
             suggested_next.push(
-                SuggestedNext::tool("search_text")
+                legacy_suggestion("search_text")
                     .with_query(text_query)
                     .with_reason("exact text pivot after hybrid discovery"),
             );
         } else if let Some(primary) = tokens.first() {
             suggested_next.push(
-                SuggestedNext::tool("search_text")
+                legacy_suggestion("search_text")
                     .with_query(primary.clone())
                     .with_reason("exact text pivot after hybrid discovery"),
             );
@@ -1003,7 +1106,7 @@ impl RecoveryFields {
 
         if let Some(path) = pivot_path.filter(|value| !value.trim().is_empty()) {
             suggested_next.push(
-                SuggestedNext::tool("read_file")
+                legacy_suggestion("read_file")
                     .with_path(path)
                     .with_reason("inspect best hybrid pivot path after exact confirmation"),
             );
@@ -1011,14 +1114,13 @@ impl RecoveryFields {
 
         if suggested_next.is_empty() && !query.is_empty() {
             suggested_next.push(
-                SuggestedNext::tool("search_text")
+                legacy_suggestion("search_text")
                     .with_query(query)
                     .with_reason("exact text pivot after hybrid discovery"),
             );
         }
 
         Self {
-            next_actions: Vec::new(),
             error_code: Some("HYBRID_DISCOVERY_PIVOT".to_owned()),
             message: Some(
                 "Hybrid ranked candidates; pivot to exact search_symbol or search_text before proof."
@@ -1033,11 +1135,12 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "read_match".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: None,
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Scoped search returned zero; broaden path filters.
@@ -1057,25 +1160,24 @@ impl RecoveryFields {
         };
         let broader_path_regex = path_regex.and_then(broaden_path_regex_hint);
         let mut suggested_next = vec![
-            SuggestedNext::tool("search_text")
+            legacy_suggestion("search_text")
                 .with_query(query)
                 .with_reason("retry without tight scope filters"),
         ];
         if let Some(path_regex) = broader_path_regex {
             suggested_next.insert(
                 0,
-                SuggestedNext::tool("search_text")
+                legacy_suggestion("search_text")
                     .with_query(query)
                     .with_path_regex(path_regex)
                     .with_reason("broaden scope after scoped miss"),
             );
         }
         suggested_next.push(
-            SuggestedNext::tool("list_files")
+            legacy_suggestion("list_files")
                 .with_reason("verify the scoped path set still has files"),
         );
         Self {
-            next_actions: Vec::new(),
             error_code: Some("ZERO_HIT_SCOPE_TOO_TIGHT".to_owned()),
             message: Some(format!("No matches under {scope_desc}.")),
             correction_hint: Some(
@@ -1087,17 +1189,21 @@ impl RecoveryFields {
                 "search_text".to_owned(),
                 "list_files".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::ScopeExcludedAllCandidates),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// No attached workspace / detached session.
     pub fn detached_session() -> Self {
+        let suggested_next = vec![
+            legacy_suggestion("workspace")
+                .with_reason("attach or adopt a repository for this session"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("DETACHED_SESSION".to_owned()),
             message: Some(
                 "No repository is attached for this session; Frigg cannot search indexed source."
@@ -1108,21 +1214,24 @@ impl RecoveryFields {
                     .to_owned(),
             ),
             related_tools: vec!["workspace".to_owned()],
-            suggested_next: vec![
-                SuggestedNext::tool("workspace")
-                    .with_reason("attach or adopt a repository for this session"),
-            ],
             zero_hit_reason: Some(ZeroHitReason::NoIndexCoverage),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Tool missing from the live surface/profile.
     pub fn tool_unavailable(tool_name: &str) -> Self {
         let tool_name = tool_name.trim();
+        let suggested_next = vec![
+            legacy_suggestion("workspace")
+                .with_reason("confirm runtime profile and available tools"),
+            legacy_suggestion("search_text")
+                .with_reason("core exact search remains available on default surfaces"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("TOOL_UNAVAILABLE".to_owned()),
             message: Some(format!(
                 "Tool {tool_name:?} is unavailable on the current Frigg tool surface."
@@ -1132,22 +1241,23 @@ impl RecoveryFields {
                     .to_owned(),
             ),
             related_tools: vec!["workspace".to_owned(), "search_text".to_owned()],
-            suggested_next: vec![
-                SuggestedNext::tool("workspace")
-                    .with_reason("confirm runtime profile and available tools"),
-                SuggestedNext::tool("search_text")
-                    .with_reason("core exact search remains available on default surfaces"),
-            ],
             zero_hit_reason: Some(ZeroHitReason::ToolUnavailable),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Empty `go_to_definition({})` without a symbol or location anchor.
     pub fn empty_go_to_definition() -> Self {
+        let suggested_next = vec![
+            legacy_suggestion("search_symbol")
+                .with_path_class("runtime")
+                .with_reason("resolve a symbol name before go_to_definition"),
+            legacy_suggestion("go_to_definition").with_reason("retry with symbol=... or path+line"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("EMPTY_GO_TO_DEFINITION".to_owned()),
             message: Some(
                 "go_to_definition requires a symbol, or a path+line location with optional column."
@@ -1162,40 +1272,34 @@ impl RecoveryFields {
                 "search_symbol".to_owned(),
                 "document_symbols".to_owned(),
             ],
-            suggested_next: vec![
-                SuggestedNext::tool("search_symbol")
-                    .with_path_class("runtime")
-                    .with_reason("resolve a symbol name before go_to_definition"),
-                SuggestedNext::tool("go_to_definition")
-                    .with_reason("retry with symbol=... or path+line"),
-            ],
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Multiple same-rank definition candidates require a tighter anchor.
     pub fn disambiguation_required(query: Option<&str>) -> Self {
         let mut suggested_next = vec![
-            SuggestedNext::tool("go_to_definition")
+            legacy_suggestion("go_to_definition")
                 .with_reason("retry with path+line (and column) from target_selection.candidates"),
-            SuggestedNext::tool("search_symbol")
+            legacy_suggestion("search_symbol")
                 .with_path_class("runtime")
                 .with_reason("list candidate symbols before re-calling go_to_definition"),
-            SuggestedNext::tool("workspace")
+            legacy_suggestion("workspace")
                 .with_reason("if candidates span repos, adopt path or pass repository_id"),
         ];
         if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
             suggested_next.insert(
                 0,
-                SuggestedNext::tool("go_to_definition")
+                legacy_suggestion("go_to_definition")
                     .with_symbol(query)
                     .with_reason("disambiguate by re-calling with path+line or repository_id for this symbol"),
             );
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("DISAMBIGUATION_REQUIRED".to_owned()),
             message: Some(
                 "multiple same-rank candidates (possibly across attached repositories); pass path+line, stable_symbol_id, or repository_id."
@@ -1211,18 +1315,23 @@ impl RecoveryFields {
                 "document_symbols".to_owned(),
                 "workspace".to_owned(),
             ],
-            suggested_next,
             zero_hit_reason: Some(ZeroHitReason::QueryMiss),
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Syntax inspection missing required line/column pair.
     pub fn missing_line_column_pair(tool_name: &str) -> Self {
         let tool_name = tool_name.trim();
+        let suggested_next = vec![
+            legacy_suggestion(tool_name).with_reason("retry with line and column pair"),
+            legacy_suggestion("document_symbols")
+                .with_reason("obtain a concrete line/column anchor first"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("MISSING_LINE_COLUMN".to_owned()),
             message: Some(format!(
                 "{tool_name} requires both line and column (use column=1 if unknown)."
@@ -1236,24 +1345,24 @@ impl RecoveryFields {
                 "document_symbols".to_owned(),
                 "read_file".to_owned(),
             ],
-            suggested_next: vec![
-                SuggestedNext::tool(tool_name)
-                    .with_reason("retry with line and column pair"),
-                SuggestedNext::tool("document_symbols")
-                    .with_reason("obtain a concrete line/column anchor first"),
-            ],
             zero_hit_reason: None,
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// Stale result_handle / match_id after reindex or session expiry.
     pub fn stale_handle(result_handle: Option<&str>, match_id: Option<&str>) -> Self {
         let handle = result_handle.unwrap_or("<missing>");
         let match_id = match_id.unwrap_or("<missing>");
+        let suggested_next = vec![
+            legacy_suggestion("search_text").with_reason("refresh handles via a new search call"),
+            legacy_suggestion("read_file")
+                .with_reason("path-based read when the path is still known"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("STALE_HANDLE".to_owned()),
             message: Some(format!(
                 "Handle is no longer valid (result_handle={handle:?}, match_id={match_id:?})."
@@ -1267,16 +1376,12 @@ impl RecoveryFields {
                 "search_symbol".to_owned(),
                 "read_match".to_owned(),
             ],
-            suggested_next: vec![
-                SuggestedNext::tool("search_text")
-                    .with_reason("refresh handles via a new search call"),
-                SuggestedNext::tool("read_file")
-                    .with_reason("path-based read when the path is still known"),
-            ],
             zero_hit_reason: None,
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
     }
 
     /// A result handle remains valid, but its bound source revision can no longer be proved.
@@ -1308,7 +1413,6 @@ impl RecoveryFields {
             }
         }
         Self {
-            next_actions: Vec::new(),
             error_code: Some("STALE_PROOF_ANCHOR".to_owned()),
             message: Some(format!(
                 "Source proof for {repository_id}:{repository_path} changed or can no longer be verified (result_handle={result_handle:?}, match_id={match_id:?})."
@@ -1317,10 +1421,10 @@ impl RecoveryFields {
                 "Re-run {origin_tool} to obtain a fresh result_handle and match_id pair. read_file can read current live content, but cannot refresh this historical proof."
             )),
             related_tools,
-            suggested_next: Vec::new(),
             zero_hit_reason: None,
             scope: None,
             index: None,
+            ..Self::default()
         }
     }
 
@@ -1328,8 +1432,11 @@ impl RecoveryFields {
     pub fn mixed_handle(result_handle: Option<&str>, match_id: Option<&str>) -> Self {
         let handle = result_handle.unwrap_or("<missing>");
         let match_id = match_id.unwrap_or("<missing>");
+        let suggested_next = vec![
+            legacy_suggestion("search_text")
+                .with_reason("re-run search and use the paired handle + match_id"),
+        ];
         Self {
-            next_actions: Vec::new(),
             error_code: Some("MIXED_HANDLE".to_owned()),
             message: Some(format!(
                 "match_id {match_id:?} does not belong to result_handle {handle:?}."
@@ -1339,14 +1446,131 @@ impl RecoveryFields {
                     .to_owned(),
             ),
             related_tools: vec!["read_match".to_owned(), "search_text".to_owned()],
-            suggested_next: vec![
-                SuggestedNext::tool("search_text")
-                    .with_reason("re-run search and use the paired handle + match_id"),
-            ],
             zero_hit_reason: None,
             scope: None,
             index: None,
+            ..Self::default()
         }
+        .with_next_actions(legacy_actions(suggested_next))
+    }
+}
+
+fn legacy_role(target: &NextActionTarget) -> NextActionRole {
+    match target {
+        NextActionTarget::SearchText(_) | NextActionTarget::SearchSymbol(_) => {
+            NextActionRole::VerifyExact
+        }
+        NextActionTarget::ReadFile(_) | NextActionTarget::ListFiles(_) => NextActionRole::Inspect,
+        NextActionTarget::FindReferences(_)
+        | NextActionTarget::IncomingCalls(_)
+        | NextActionTarget::GoToDefinition(_) => NextActionRole::ResolveTarget,
+        NextActionTarget::Workspace(_) => NextActionRole::Diagnose,
+        _ => NextActionRole::Retry,
+    }
+}
+
+fn legacy_path_class(value: Option<&str>) -> Option<SearchSymbolPathClass> {
+    match value {
+        Some("runtime") => Some(SearchSymbolPathClass::Runtime),
+        Some("project") => Some(SearchSymbolPathClass::Project),
+        Some("support") => Some(SearchSymbolPathClass::Support),
+        Some("any") => Some(SearchSymbolPathClass::Any),
+        _ => None,
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// Converts transitional recovery drafts into canonical actions before a response is emitted.
+/// Rows that lack a required tool argument are deliberately omitted rather than guessed.
+fn legacy_actions(suggestions: impl IntoIterator<Item = CanonicalActionDraft>) -> Vec<NextAction> {
+    suggestions
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, suggestion)| {
+            let target = legacy_target(&suggestion)?;
+            Some(NextAction {
+                id: NextActionId(format!("recovery-{}", index + 1)),
+                role: legacy_role(&target),
+                order: index as u16,
+                dependencies: Vec::new(),
+                target,
+                reason: suggestion
+                    .reason
+                    .unwrap_or_else(|| "follow-up recovery action".to_owned()),
+            })
+        })
+        .collect()
+}
+
+/// Build a typed action only when the legacy compatibility row carries every required input.
+fn legacy_target(suggestion: &CanonicalActionDraft) -> Option<NextActionTarget> {
+    let repository_id = non_empty(suggestion.repository_id.as_deref());
+    match suggestion.tool.as_str() {
+        "workspace" => Some(NextActionTarget::Workspace(WorkspaceParams {
+            path: non_empty(suggestion.path.as_deref()),
+            repository_id,
+            set_default: None,
+            resolve_mode: None,
+        })),
+        "search_text" => Some(NextActionTarget::SearchText(SearchTextParams {
+            query: non_empty(suggestion.query.as_deref())?,
+            pattern_type: match suggestion.pattern_type.as_deref() {
+                Some("literal") => Some(SearchPatternType::Literal),
+                Some("regex") => Some(SearchPatternType::Regex),
+                _ => None,
+            },
+            repository_id,
+            path_regex: non_empty(suggestion.path_regex.as_deref()),
+            glob: non_empty(suggestion.glob.as_deref()),
+            ..SearchTextParams::default()
+        })),
+        "search_symbol" => Some(NextActionTarget::SearchSymbol(SearchSymbolParams {
+            query: non_empty(suggestion.symbol.as_deref())
+                .or_else(|| non_empty(suggestion.query.as_deref()))?,
+            repository_id,
+            path_class: legacy_path_class(suggestion.path_class.as_deref()),
+            path_regex: non_empty(suggestion.path_regex.as_deref()),
+            ..SearchSymbolParams::default()
+        })),
+        "read_file" => Some(NextActionTarget::ReadFile(ReadFileParams {
+            path: non_empty(suggestion.path.as_deref())?,
+            repository_id,
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })),
+        "list_files" => Some(NextActionTarget::ListFiles(ListFilesParams {
+            repository_id,
+            path_regex: non_empty(suggestion.path_regex.as_deref()),
+            glob: non_empty(suggestion.glob.as_deref()),
+            path_class: legacy_path_class(suggestion.path_class.as_deref()),
+            ..ListFilesParams::default()
+        })),
+        "find_references" => Some(NextActionTarget::FindReferences(FindReferencesParams {
+            symbol: non_empty(suggestion.symbol.as_deref()),
+            repository_id,
+            ..FindReferencesParams::default()
+        })).filter(|target| matches!(target, NextActionTarget::FindReferences(params) if params.symbol.is_some())),
+        "incoming_calls" => Some(NextActionTarget::IncomingCalls(IncomingCallsParams {
+            symbol: non_empty(suggestion.symbol.as_deref()),
+            repository_id,
+            ..IncomingCallsParams::default()
+        })).filter(|target| matches!(target, NextActionTarget::IncomingCalls(params) if params.symbol.is_some())),
+        "go_to_definition" => Some(NextActionTarget::GoToDefinition(GoToDefinitionParams {
+            symbol: non_empty(suggestion.symbol.as_deref()),
+            repository_id,
+            ..GoToDefinitionParams::default()
+        })).filter(|target| matches!(target, NextActionTarget::GoToDefinition(params) if params.symbol.is_some())),
+        _ => None,
     }
 }
 
@@ -1658,6 +1882,57 @@ mod tests {
                 "suggested_next.tool must be non-empty: {recovery:?}"
             );
         }
+        assert_eq!(
+            recovery.suggested_next.len(),
+            recovery.next_actions.len(),
+            "legacy rows must be generated from canonical actions: {recovery:?}"
+        );
+        for action in &recovery.next_actions {
+            assert!(
+                !action.id.0.trim().is_empty(),
+                "action ids are response-local"
+            );
+            assert!(
+                !action.reason.trim().is_empty(),
+                "action reasons are explicit"
+            );
+            match &action.target {
+                NextActionTarget::SearchText(params) => assert!(!params.query.trim().is_empty()),
+                NextActionTarget::SearchSymbol(params) => {
+                    assert!(!params.query.trim().is_empty())
+                }
+                NextActionTarget::ReadFile(params) => assert!(!params.path.trim().is_empty()),
+                NextActionTarget::FindReferences(params) => assert!(params.symbol.is_some()),
+                NextActionTarget::IncomingCalls(params) => assert!(params.symbol.is_some()),
+                NextActionTarget::GoToDefinition(params) => assert!(params.symbol.is_some()),
+                _ => {}
+            }
+        }
+    }
+
+    fn assert_recovery_descriptive_only(recovery: &RecoveryFields) {
+        assert!(
+            recovery
+                .message
+                .as_ref()
+                .is_some_and(|message| !message.trim().is_empty()),
+            "message must be non-empty: {recovery:?}"
+        );
+        assert!(
+            recovery
+                .correction_hint
+                .as_ref()
+                .is_some_and(|hint| !hint.trim().is_empty()),
+            "correction_hint must be non-empty: {recovery:?}"
+        );
+        assert!(
+            recovery.next_actions.is_empty(),
+            "unknown inputs must not guess an action"
+        );
+        assert!(
+            recovery.suggested_next.is_empty(),
+            "legacy projection follows canonical actions"
+        );
     }
 
     #[test]
@@ -2020,9 +2295,9 @@ mod tests {
     }
 
     #[test]
-    fn recovery_empty_go_to_definition_builder_is_actionable() {
+    fn recovery_empty_go_to_definition_omits_unknown_target_action() {
         let recovery = RecoveryFields::empty_go_to_definition();
-        assert_recovery_actionable(&recovery);
+        assert_recovery_descriptive_only(&recovery);
         assert_eq!(
             recovery.error_code.as_deref(),
             Some("EMPTY_GO_TO_DEFINITION")
@@ -2047,9 +2322,9 @@ mod tests {
     }
 
     #[test]
-    fn recovery_missing_line_column_pair_builder_is_actionable() {
+    fn recovery_missing_line_column_pair_omits_unknown_target_action() {
         let recovery = RecoveryFields::missing_line_column_pair("inspect_syntax_tree");
-        assert_recovery_actionable(&recovery);
+        assert_recovery_descriptive_only(&recovery);
         assert!(
             recovery
                 .message
@@ -2059,16 +2334,16 @@ mod tests {
     }
 
     #[test]
-    fn recovery_stale_handle_builder_is_actionable() {
+    fn recovery_stale_handle_without_origin_is_descriptive_only() {
         let recovery = RecoveryFields::stale_handle(Some("result-000001"), Some("m1"));
-        assert_recovery_actionable(&recovery);
+        assert_recovery_descriptive_only(&recovery);
         assert_eq!(recovery.error_code.as_deref(), Some("STALE_HANDLE"));
     }
 
     #[test]
-    fn recovery_mixed_handle_builder_is_actionable() {
+    fn recovery_mixed_handle_without_origin_is_descriptive_only() {
         let recovery = RecoveryFields::mixed_handle(Some("result-000001"), Some("m9"));
-        assert_recovery_actionable(&recovery);
+        assert_recovery_descriptive_only(&recovery);
         assert_eq!(recovery.error_code.as_deref(), Some("MIXED_HANDLE"));
     }
 

@@ -168,7 +168,58 @@ pub struct NextAction {
 impl NextAction {
     /// One-way, lossy compatibility projection. Canonical actions always remain authoritative.
     pub fn to_legacy_suggestion(&self) -> SuggestedNext {
-        SuggestedNext::tool(self.target.tool_name()).with_reason(&self.reason)
+        let mut suggestion = SuggestedNext::tool(self.target.tool_name()).with_reason(&self.reason);
+        match &self.target {
+            NextActionTarget::Workspace(params) => {
+                suggestion.path = params.path.clone();
+                suggestion.repository_id = params.repository_id.clone();
+            }
+            NextActionTarget::ListFiles(params) => {
+                suggestion.repository_id = params.repository_id.clone();
+                suggestion.path_regex = params.path_regex.clone();
+                suggestion.glob = params.glob.clone();
+                suggestion.path_class = params.path_class.map(|value| value.as_str().to_owned());
+            }
+            NextActionTarget::ReadFile(params) => {
+                suggestion.path = Some(params.path.clone());
+                suggestion.repository_id = params.repository_id.clone();
+            }
+            NextActionTarget::SearchText(params) => {
+                suggestion.query = Some(params.query.clone());
+                suggestion.repository_id = params.repository_id.clone();
+                suggestion.path_regex = params.path_regex.clone();
+                suggestion.glob = params.glob.clone();
+                suggestion.pattern_type =
+                    params.pattern_type.as_ref().map(|pattern| match pattern {
+                        super::SearchPatternType::Literal => "literal".to_owned(),
+                        super::SearchPatternType::Regex => "regex".to_owned(),
+                    });
+            }
+            NextActionTarget::SearchSymbol(params) => {
+                suggestion.query = Some(params.query.clone());
+                suggestion.symbol = Some(params.query.clone());
+                suggestion.repository_id = params.repository_id.clone();
+                suggestion.path_regex = params.path_regex.clone();
+                suggestion.path_class = params.path_class.map(|value| value.as_str().to_owned());
+            }
+            NextActionTarget::FindReferences(params) => {
+                suggestion.symbol = params.symbol.clone();
+                suggestion.repository_id = params.repository_id.clone();
+                suggestion.path = params.path.clone();
+            }
+            NextActionTarget::GoToDefinition(params) => {
+                suggestion.symbol = params.symbol.clone();
+                suggestion.repository_id = params.repository_id.clone();
+                suggestion.path = params.path.clone();
+            }
+            NextActionTarget::IncomingCalls(params) => {
+                suggestion.symbol = params.symbol.clone();
+                suggestion.repository_id = params.repository_id.clone();
+                suggestion.path = params.path.clone();
+            }
+            _ => {}
+        }
+        suggestion
     }
 
     fn target_key(&self) -> Option<String> {
