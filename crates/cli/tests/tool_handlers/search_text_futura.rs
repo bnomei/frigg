@@ -236,3 +236,61 @@ async fn search_hybrid_compact_includes_discovery_pivots() {
 
     cleanup_workspace_root(&workspace_root);
 }
+
+#[tokio::test]
+async fn search_hybrid_compact_and_full_keep_canonical_actions_identical() {
+    let workspace_root = fresh_fixture_root("tool-handlers-search-hybrid-action-parity");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let params = SearchHybridParams {
+        query: "where is greeting defined".to_owned(),
+        repository_id: None,
+        language: None,
+        limit: Some(10),
+        weights: None,
+        semantic: Some(false),
+        response_mode: Some(ResponseMode::Compact),
+        include_context_efficiency: None,
+    };
+    let compact = server
+        .search_hybrid(Parameters(params.clone()))
+        .await
+        .expect("compact search_hybrid should succeed")
+        .0;
+    let full = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            response_mode: Some(ResponseMode::Full),
+            ..params
+        }))
+        .await
+        .expect("full search_hybrid should succeed")
+        .0;
+
+    assert_eq!(
+        serde_json::to_value(&compact.recovery.next_actions)
+            .expect("compact canonical actions serialize"),
+        serde_json::to_value(&full.recovery.next_actions)
+            .expect("full canonical actions serialize"),
+        "response detail must not change executable action ids, roles, targets, or dependencies"
+    );
+    assert_eq!(
+        compact.recovery.suggested_next,
+        compact
+            .recovery
+            .next_actions
+            .iter()
+            .map(|action| action.to_legacy_suggestion())
+            .collect::<Vec<_>>(),
+        "compact legacy suggestions are generated from canonical actions"
+    );
+    assert_eq!(
+        full.recovery.suggested_next,
+        full.recovery
+            .next_actions
+            .iter()
+            .map(|action| action.to_legacy_suggestion())
+            .collect::<Vec<_>>(),
+        "full legacy suggestions are generated from canonical actions"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}

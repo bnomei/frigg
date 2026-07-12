@@ -2,7 +2,13 @@
 
 //! Integration smoke tests for RMCP's service/protocol layer around Frigg's server handler.
 
-use frigg::mcp::FriggMcpServer;
+use std::collections::{BTreeSet, HashMap};
+
+use frigg::mcp::{
+    FriggMcpServer,
+    tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile},
+    types::{NextAction, NextActionId, NextActionRole, NextActionTarget},
+};
 use frigg::settings::FriggConfig;
 use rmcp::{
     ClientHandler, ServiceError, ServiceExt,
@@ -11,7 +17,7 @@ use rmcp::{
         ReadResourceRequestParams, ResourceContents, Tool,
     },
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-matrix.json";
 const SEMANTIC_MODELS_RESOURCE_URI: &str = "frigg://policy/semantic-models.json";
@@ -31,6 +37,151 @@ impl ClientHandler for VersionedClient {
         let mut info = ClientInfo::default();
         info.protocol_version = self.protocol_version.clone();
         info
+    }
+}
+
+async fn tools_list_for_profile(profile: ToolSurfaceProfile) -> Vec<Tool> {
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config must be valid");
+    let server = FriggMcpServer::new_with_runtime_options(
+        config,
+        matches!(profile, ToolSurfaceProfile::Extended),
+    );
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+    let server_handle = tokio::spawn(async move {
+        let service = server
+            .serve(server_transport)
+            .await
+            .expect("server should initialize over duplex transport");
+        service
+            .waiting()
+            .await
+            .expect("server service should finish cleanly");
+    });
+    let client = ().serve(client_transport).await.expect("client should initialize");
+    let tools = client
+        .list_tools(None)
+        .await
+        .expect("tools/list should route through RMCP")
+        .tools;
+    client.cancel().await.expect("client should cancel");
+    server_handle.await.expect("server task should join");
+    tools
+}
+
+fn canonical_fixture_actions() -> Vec<NextAction> {
+    let cases = [
+        ("workspace", json!({})),
+        ("list_files", json!({})),
+        ("read_file", json!({"path": "src/lib.rs"})),
+        (
+            "read_match",
+            json!({"result_handle": "result-1", "match_id": "search:m1"}),
+        ),
+        (
+            "explore",
+            json!({"path": "src/lib.rs", "operation": "probe"}),
+        ),
+        ("search_text", json!({"query": "needle"})),
+        ("search_hybrid", json!({"query": "needle"})),
+        ("search_symbol", json!({"query": "needle"})),
+        (
+            "search_batch",
+            json!({"probes": [
+                {"id": "text", "kind": "text", "query": "needle"},
+                {"id": "symbol", "kind": "symbol", "query": "needle"}
+            ]}),
+        ),
+        ("find_references", json!({})),
+        ("go_to_definition", json!({})),
+        ("find_declarations", json!({})),
+        ("find_implementations", json!({})),
+        ("incoming_calls", json!({})),
+        ("outgoing_calls", json!({})),
+        ("document_symbols", json!({"path": "src/lib.rs"})),
+        ("inspect_syntax_tree", json!({"path": "src/lib.rs"})),
+        ("search_structural", json!({"query": "(function_item)"})),
+        ("impact_bundle", json!({"symbol": "needle"})),
+    ];
+    cases
+        .into_iter()
+        .enumerate()
+        .map(|(index, (tool, arguments))| {
+            let target: NextActionTarget = serde_json::from_value(json!({
+                "tool": tool,
+                "arguments": arguments,
+            }))
+            .unwrap_or_else(|error| panic!("{tool} canonical fixture must deserialize: {error}"));
+            NextAction {
+                id: NextActionId(format!("protocol:{index}")),
+                role: NextActionRole::Retry,
+                order: 0,
+                dependencies: Vec::new(),
+                target,
+                reason: "protocol schema proof".to_owned(),
+            }
+        })
+        .collect()
+}
+
+fn assert_actions_validate_against_live_schemas(profile: ToolSurfaceProfile, tools: &[Tool]) {
+    let schemas = tools
+        .iter()
+        .map(|tool| {
+            (
+                tool.name.to_string(),
+                Value::Object(tool.input_schema.as_ref().clone()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let actions = canonical_fixture_actions();
+    assert_eq!(
+        actions.len(),
+        19,
+        "every NextActionTarget variant needs a fixture"
+    );
+    let active_names = manifest_for_tool_surface_profile(profile)
+        .tool_names
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    for action in actions {
+        let serialized = serde_json::to_value(&action).expect("canonical action serializes");
+        let tool = serialized["tool"]
+            .as_str()
+            .expect("canonical action tool is a string");
+        assert!(
+            !tool.starts_with("playbook_"),
+            "{} canonical actions must never target playbook tools",
+            profile.as_str()
+        );
+        assert!(
+            active_names.contains(tool),
+            "{} active surface must expose canonical target {tool}",
+            profile.as_str()
+        );
+        let schema = schemas
+            .get(tool)
+            .unwrap_or_else(|| panic!("tools/list must expose canonical target {tool}"));
+        let validator = jsonschema::validator_for(schema)
+            .unwrap_or_else(|error| panic!("{tool} inputSchema must compile: {error}"));
+        let arguments = serialized
+            .get("arguments")
+            .expect("canonical action serializes arguments");
+        if let Err(error) = validator.validate(arguments) {
+            panic!(
+                "{} canonical {tool} arguments violate live inputSchema: {error}",
+                profile.as_str()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn canonical_next_actions_validate_against_live_rmcp_schemas_on_all_profiles() {
+    for profile in ToolSurfaceProfile::ALL {
+        let tools = tools_list_for_profile(profile).await;
+        assert_actions_validate_against_live_schemas(profile, &tools);
     }
 }
 

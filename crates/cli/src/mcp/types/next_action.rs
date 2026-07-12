@@ -322,6 +322,8 @@ pub fn normalize_next_actions(actions: impl IntoIterator<Item = NextAction>) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
     use serde_json::json;
 
@@ -345,22 +347,23 @@ mod tests {
     }
 
     #[test]
-    fn serializes_target_as_tagged_exact_arguments() {
-        let value = serde_json::to_value(action("next:1", 0, target("needle"))).unwrap();
+    fn serializes_target_as_tagged_exact_arguments() -> serde_json::Result<()> {
+        let value = serde_json::to_value(action("next:1", 0, target("needle")))?;
         assert_eq!(value["tool"], "search_text");
         assert_eq!(value["arguments"]["query"], "needle");
+        Ok(())
     }
 
     #[test]
-    fn origin_is_tagged_and_non_recursive() {
+    fn origin_is_tagged_and_non_recursive() -> serde_json::Result<()> {
         let params = SearchTextParams {
             query: "needle".into(),
             ..SearchTextParams::default()
         };
-        let value =
-            serde_json::to_value(NextActionOrigin(ReplayOriginTarget::SearchText(params))).unwrap();
+        let value = serde_json::to_value(NextActionOrigin(ReplayOriginTarget::SearchText(params)))?;
         assert_eq!(value["tool"], "search_text");
         assert!(value.get("origin").is_none());
+        Ok(())
     }
 
     #[test]
@@ -426,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn every_core_target_uses_the_tagged_tool_arguments_wire_shape() {
+    fn every_core_target_uses_the_tagged_tool_arguments_wire_shape() -> serde_json::Result<()> {
         let cases = [
             ("workspace", json!({})),
             ("list_files", json!({})),
@@ -459,16 +462,16 @@ mod tests {
             let target: NextActionTarget = serde_json::from_value(json!({
                 "tool": tool,
                 "arguments": arguments,
-            }))
-            .unwrap_or_else(|error| panic!("{tool} target must deserialize: {error}"));
-            let encoded = serde_json::to_value(target).unwrap();
+            }))?;
+            let encoded = serde_json::to_value(target)?;
             assert_eq!(encoded["tool"], tool);
             assert!(encoded["arguments"].is_object());
         }
+        Ok(())
     }
 
     #[test]
-    fn every_origin_target_is_typed_and_excludes_read_match() {
+    fn every_origin_target_is_typed_and_excludes_read_match() -> serde_json::Result<()> {
         let cases = [
             (
                 "explore",
@@ -494,9 +497,8 @@ mod tests {
             let origin: ReplayOriginTarget = serde_json::from_value(json!({
                 "tool": tool,
                 "arguments": arguments,
-            }))
-            .unwrap_or_else(|error| panic!("{tool} origin must deserialize: {error}"));
-            assert_eq!(serde_json::to_value(origin).unwrap()["tool"], tool);
+            }))?;
+            assert_eq!(serde_json::to_value(origin)?["tool"], tool);
         }
         assert!(
             serde_json::from_value::<ReplayOriginTarget>(json!({
@@ -505,5 +507,54 @@ mod tests {
             }))
             .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn production_legacy_suggestion_authoring_is_confined_to_compatibility_projectors() {
+        fn rust_files(root: &Path, files: &mut Vec<std::path::PathBuf>) {
+            for entry in fs::read_dir(root).expect("MCP source directory must be readable") {
+                let entry = entry.expect("MCP source entry must be readable");
+                let path = entry.path();
+                if path.is_dir() {
+                    rust_files(&path, files);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp");
+        let mut files = Vec::new();
+        rust_files(&source_root, &mut files);
+        let allowed_projectors = ["next_action.rs", "recovery.rs", "search.rs"];
+
+        for path in files {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("Rust source path must have a UTF-8 filename");
+            let source = fs::read_to_string(&path).expect("MCP source file must be readable");
+            let mut test_only = false;
+            for (line_number, line) in source.lines().enumerate() {
+                if line.trim_start().starts_with("#[cfg(test)]") {
+                    test_only = true;
+                }
+                if test_only {
+                    continue;
+                }
+                let direct_legacy_authoring = line.contains("SuggestedNext::tool")
+                    || line.contains("suggested_next:")
+                    || line.contains(".suggested_next =");
+                if direct_legacy_authoring {
+                    assert!(
+                        allowed_projectors.contains(&file_name),
+                        "{}:{} authors legacy suggested_next outside the compatibility projector",
+                        path.display(),
+                        line_number + 1
+                    );
+                }
+            }
+        }
     }
 }

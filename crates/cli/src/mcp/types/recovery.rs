@@ -1460,9 +1460,11 @@ impl RecoveryFields {
         path: &str,
     ) -> Self {
         let origin_tool = origin_tool.trim();
-        let origin_tool = (!origin_tool.is_empty())
-            .then_some(origin_tool)
-            .unwrap_or("search_text");
+        let origin_tool = if origin_tool.is_empty() {
+            "search_text"
+        } else {
+            origin_tool
+        };
         let path = std::path::Path::new(path);
         let repository_path = if path.is_absolute()
             || path
@@ -1942,9 +1944,7 @@ fn extract_code_like_tokens(excerpt: &str) -> Vec<String> {
     };
 
     for ch in excerpt.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            current.push(ch);
-        } else if ch == ':' {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':') {
             current.push(ch);
         } else {
             flush(&mut current, &mut tokens);
@@ -2403,10 +2403,23 @@ mod tests {
     #[test]
     fn recovery_empty_go_to_definition_omits_unknown_target_action() {
         let recovery = RecoveryFields::empty_go_to_definition();
-        assert_recovery_descriptive_only(&recovery);
+        assert_recovery_actionable(&recovery);
         assert_eq!(
             recovery.error_code.as_deref(),
             Some("EMPTY_GO_TO_DEFINITION")
+        );
+        assert!(
+            recovery.next_actions.iter().all(|action| {
+                matches!(
+                    action.target,
+                    NextActionTarget::Workspace(WorkspaceParams {
+                        path: None,
+                        repository_id: None,
+                        ..
+                    })
+                )
+            }),
+            "unknown definition inputs may diagnose the workspace but must not fabricate a query/path retry"
         );
     }
 
@@ -2539,5 +2552,53 @@ mod tests {
         let parsed: ZeroHitReason =
             serde_json::from_value(json!("wrong_repository_possible")).expect("parse enum");
         assert_eq!(parsed, ZeroHitReason::WrongRepositoryPossible);
+    }
+
+    #[test]
+    fn compatibility_projection_stays_aligned_after_invalid_filtering_and_cap() {
+        let mut recovery = RecoveryFields::default();
+        let valid_actions = (0..10).map(|index| {
+            canonical_next_action(
+                format!("action:{index}"),
+                NextActionRole::Retry,
+                index,
+                NextActionTarget::SearchText(SearchTextParams {
+                    query: format!("needle-{index}"),
+                    ..SearchTextParams::default()
+                }),
+                "retry exact search",
+            )
+        });
+        let invalid = NextAction {
+            id: NextActionId("invalid".to_owned()),
+            role: NextActionRole::Retry,
+            order: 0,
+            dependencies: Vec::new(),
+            target: NextActionTarget::SearchText(SearchTextParams::default()),
+            reason: String::new(),
+        };
+        recovery.set_next_actions(valid_actions.chain([invalid]));
+
+        assert_eq!(
+            recovery.next_actions.len(),
+            8,
+            "canonical action cap applies first"
+        );
+        assert_eq!(
+            recovery.suggested_next,
+            recovery
+                .next_actions
+                .iter()
+                .map(NextAction::to_legacy_suggestion)
+                .collect::<Vec<_>>(),
+            "legacy compatibility rows must exactly project retained canonical actions"
+        );
+        assert!(
+            recovery
+                .next_actions
+                .iter()
+                .all(|action| action.id.0 != "invalid"),
+            "invalid canonical actions must not leak into either response channel"
+        );
     }
 }

@@ -2,45 +2,47 @@
 
 use super::*;
 use frigg::mcp::types::{
-    SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind, SearchBatchResponse,
+    NextActionOrigin, NextActionTarget, ReplayOriginTarget, SearchBatchParams, SearchBatchProbe,
+    SearchBatchProbeKind, SearchBatchResponse,
 };
 
 #[tokio::test]
 async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
     let workspace_root = fresh_fixture_root("tool-handlers-search-batch-merge");
     let server = server_for_workspace_root(&workspace_root).await;
+    let params = SearchBatchParams {
+        probes: vec![
+            SearchBatchProbe {
+                id: "text-greeting".to_owned(),
+                kind: SearchBatchProbeKind::Text,
+                query: "greeting".to_owned(),
+                repository_id: None,
+                path_regex: Some("^src/".to_owned()),
+                glob: None,
+                path_class: None,
+                pattern_type: Some(SearchPatternType::Literal),
+            },
+            SearchBatchProbe {
+                id: "symbol-greeting".to_owned(),
+                kind: SearchBatchProbeKind::Symbol,
+                query: "greeting".to_owned(),
+                repository_id: None,
+                path_regex: Some("^src/".to_owned()),
+                glob: None,
+                path_class: Some(SearchSymbolPathClass::Runtime),
+                pattern_type: None,
+            },
+        ],
+        merge: None,
+        limit: Some(20),
+        repository_id: None,
+        response_mode: Some(ResponseMode::Compact),
+        resume_from: None,
+        continuation: None,
+    };
 
     let response = server
-        .search_batch(Parameters(SearchBatchParams {
-            probes: vec![
-                SearchBatchProbe {
-                    id: "text-greeting".to_owned(),
-                    kind: SearchBatchProbeKind::Text,
-                    query: "greeting".to_owned(),
-                    repository_id: None,
-                    path_regex: Some("^src/".to_owned()),
-                    glob: None,
-                    path_class: None,
-                    pattern_type: Some(SearchPatternType::Literal),
-                },
-                SearchBatchProbe {
-                    id: "symbol-greeting".to_owned(),
-                    kind: SearchBatchProbeKind::Symbol,
-                    query: "greeting".to_owned(),
-                    repository_id: None,
-                    path_regex: Some("^src/".to_owned()),
-                    glob: None,
-                    path_class: Some(SearchSymbolPathClass::Runtime),
-                    pattern_type: None,
-                },
-            ],
-            merge: None,
-            limit: Some(20),
-            repository_id: None,
-            response_mode: Some(ResponseMode::Compact),
-            resume_from: None,
-            continuation: None,
-        }))
+        .search_batch(Parameters(params.clone()))
         .await
         .expect("search_batch should succeed")
         .0;
@@ -77,6 +79,43 @@ async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
             .all(|matched| matched.match_id.is_some()),
         "batch matches should expose match_ids"
     );
+    assert_eq!(
+        response.recovery.suggested_next,
+        response
+            .recovery
+            .next_actions
+            .iter()
+            .map(|action| action.to_legacy_suggestion())
+            .collect::<Vec<_>>(),
+        "legacy rows are a projection of canonical batch actions"
+    );
+    let proof = response
+        .recovery
+        .next_actions
+        .iter()
+        .find_map(|action| match &action.target {
+            NextActionTarget::ReadMatch(params) => Some(params.clone()),
+            _ => None,
+        })
+        .expect("batch success must expose an exact proof-read action");
+    assert_eq!(proof.result_handle, response.result_handle.clone().unwrap());
+    assert_eq!(
+        proof.match_id,
+        response.matches[0].match_id.clone().unwrap(),
+        "batch proof action must select the top merged row"
+    );
+    assert_eq!(
+        serde_json::to_value(proof.origin.clone()).expect("proof origin serializes"),
+        serde_json::to_value(Some(NextActionOrigin(ReplayOriginTarget::SearchBatch(
+            params.clone()
+        ))))
+        .expect("expected batch origin serializes"),
+        "batch proof action must carry the exact producer request"
+    );
+    server
+        .read_match(Parameters(proof))
+        .await
+        .expect("batch proof action must replay through read_match");
 
     cleanup_workspace_root(&workspace_root);
 }

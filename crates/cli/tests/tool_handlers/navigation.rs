@@ -2,6 +2,7 @@
 
 use super::*;
 use frigg::mcp::types::{MetadataObject, NavigationTargetSelectionStatus};
+use frigg::mcp::types::{NextActionOrigin, NextActionTarget, ReplayOriginTarget};
 
 fn assert_response_metadata_has_freshness(metadata: &Option<MetadataObject>, tool_name: &str) {
     let metadata = metadata
@@ -3380,6 +3381,54 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         "suggested_next should include proof/tests guidance: {:?}",
         response.recovery.suggested_next
     );
+    assert_eq!(
+        response.recovery.suggested_next,
+        response
+            .recovery
+            .next_actions
+            .iter()
+            .map(|action| action.to_legacy_suggestion())
+            .collect::<Vec<_>>(),
+        "impact legacy suggestions are generated only from canonical actions"
+    );
+    let proof = response
+        .recovery
+        .next_actions
+        .iter()
+        .find_map(|action| match &action.target {
+            NextActionTarget::ReadMatch(params) => Some(params.clone()),
+            _ => None,
+        })
+        .expect("impact success must offer a replayable proof-read action");
+    assert!(
+        [
+            response.symbols_result_handle.as_ref(),
+            response.references_result_handle.as_ref(),
+            response.incoming_calls_result_handle.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|handle| handle == &proof.result_handle),
+        "impact proof action must bind one concrete section handle"
+    );
+    assert_eq!(
+        serde_json::to_value(proof.origin.clone()).expect("impact origin serializes"),
+        serde_json::to_value(Some(NextActionOrigin(ReplayOriginTarget::ImpactBundle(
+            ImpactBundleParams {
+                symbol: "target".to_owned(),
+                path_class: None,
+                repository_id: Some("repo-001".to_owned()),
+                include_implementations: None,
+                response_mode: Some(ResponseMode::Compact),
+            },
+        ))))
+        .expect("expected impact origin serializes"),
+        "impact proof action must preserve the exact producer request"
+    );
+    server
+        .read_match(Parameters(proof))
+        .await
+        .expect("impact proof action must replay through read_match");
     cleanup_workspace_root(&workspace_root);
 }
 
