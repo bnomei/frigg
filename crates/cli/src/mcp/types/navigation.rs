@@ -569,6 +569,10 @@ pub struct ImpactBundleParams {
     /// Force include implementations even when kind is not trait/interface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_implementations: Option<bool>,
+    /// Include exact literal mentions under `test` and `tests` directories. Omit or pass `false`
+    /// to keep test evidence out of the impact bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_test_mentions: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mode: Option<ResponseMode>,
@@ -596,6 +600,7 @@ impl JsonSchema for ImpactBundleParams {
                 "path_class": path_class,
                 "repository_id": { "type": "string" },
                 "include_implementations": { "type": "boolean" },
+                "include_test_mentions": { "type": "boolean", "default": false },
                 "response_mode": response_mode
             },
             "oneOf": [
@@ -604,6 +609,318 @@ impl JsonSchema for ImpactBundleParams {
             ]
         }))
         .expect("impact bundle schema must be valid")
+    }
+}
+
+impl ImpactBundleParams {
+    /// Whether the opt-in test-mention section should execute.
+    pub fn includes_test_mentions(&self) -> bool {
+        self.include_test_mentions.unwrap_or(false)
+    }
+}
+
+/// Closed evidence section vocabulary for `impact_bundle`.
+///
+/// Outgoing calls are intentionally not an impact section.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ImpactSection {
+    Symbol,
+    Reference,
+    IncomingCall,
+    Implementation,
+    TestMention,
+}
+
+/// Whether an impact section ran, was intentionally omitted, or could not run because target
+/// resolution failed. This is independent from pagination completeness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImpactSectionExecution {
+    Included,
+    OmittedByPolicy,
+    NotRunTargetUnresolved,
+}
+
+/// Semantic trust for an impact section. It deliberately does not encode pagination or coverage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ImpactSectionTrust {
+    ResolvedTarget {
+        resolution_source: NavigationResolutionSource,
+    },
+    ExactLiteralText,
+    Navigation {
+        mode: NavigationMode,
+    },
+}
+
+/// The concrete rows owned by one `impact_bundle` section.
+///
+/// The tag makes a section envelope self-describing while the enclosing
+/// [`ImpactSectionResult`] verifies that the row vocabulary agrees with its section.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "row_kind",
+    content = "rows",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ImpactSectionRows {
+    Symbol(Vec<crate::domain::model::SymbolMatch>),
+    Reference(Vec<crate::domain::model::ReferenceMatch>),
+    IncomingCall(Vec<CallHierarchyMatch>),
+    Implementation(Vec<ImplementationMatch>),
+    TestMention(Vec<crate::domain::model::TextMatch>),
+}
+
+impl ImpactSectionRows {
+    fn section(&self) -> ImpactSection {
+        match self {
+            Self::Symbol(_) => ImpactSection::Symbol,
+            Self::Reference(_) => ImpactSection::Reference,
+            Self::IncomingCall(_) => ImpactSection::IncomingCall,
+            Self::Implementation(_) => ImpactSection::Implementation,
+            Self::TestMention(_) => ImpactSection::TestMention,
+        }
+    }
+
+    fn has_bound_row(&self, target: &ImpactProofRowTarget) -> bool {
+        let target_ref = target.as_target_ref();
+        let matches = |match_id: &Option<String>, row_target: &Option<TargetRef>| {
+            match_id.as_deref() == Some(target.match_id.as_str())
+                && row_target.as_ref() == Some(&target_ref)
+        };
+        match self {
+            Self::Symbol(rows) => rows
+                .iter()
+                .any(|row| matches(&row.match_id, &row.target_ref)),
+            Self::Reference(rows) => rows
+                .iter()
+                .any(|row| matches(&row.match_id, &row.target_ref)),
+            Self::IncomingCall(rows) => rows
+                .iter()
+                .any(|row| matches(&row.match_id, &row.target_ref)),
+            Self::Implementation(rows) => rows
+                .iter()
+                .any(|row| matches(&row.match_id, &row.target_ref)),
+            Self::TestMention(rows) => rows
+                .iter()
+                .any(|row| matches(&row.match_id, &row.target_ref)),
+        }
+    }
+}
+
+/// Authoritative result envelope for one closed `impact_bundle` section.
+///
+/// Legacy arrays remain compatibility projections, but this type owns the section's execution
+/// state, trust, rows, result handle, completeness, and any proof targets. Omitted and unresolved
+/// sections cannot fabricate coverage, rows, handles, or proofs.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ImpactSectionResult {
+    pub section: ImpactSection,
+    pub execution: ImpactSectionExecution,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust: Option<ImpactSectionTrust>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completeness: Option<ResultCompleteness>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
+    pub rows: ImpactSectionRows,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_targets: Vec<ImpactProofTarget>,
+}
+
+impl ImpactSectionResult {
+    /// Build a section result only when its execution state and evidence agree.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        section: ImpactSection,
+        execution: ImpactSectionExecution,
+        trust: Option<ImpactSectionTrust>,
+        completeness: Option<ResultCompleteness>,
+        result_handle: Option<String>,
+        rows: ImpactSectionRows,
+        proof_targets: Vec<ImpactProofTarget>,
+    ) -> Option<Self> {
+        let result = Self {
+            section,
+            execution,
+            trust,
+            completeness,
+            result_handle,
+            rows,
+            proof_targets,
+        };
+        result.is_valid().then_some(result)
+    }
+
+    fn is_valid(&self) -> bool {
+        if self.rows.section() != self.section {
+            return false;
+        }
+        match self.execution {
+            ImpactSectionExecution::Included => {
+                if self.trust.is_none()
+                    || self.completeness.is_none()
+                    || self.result_handle.as_deref().is_none_or(str::is_empty)
+                {
+                    return false;
+                }
+                self.proof_targets.iter().all(|proof| {
+                    proof.section == self.section
+                        && self.result_handle.as_deref()
+                            == Some(proof.target.result_handle.as_str())
+                        && self.rows.has_bound_row(&proof.target)
+                })
+            }
+            ImpactSectionExecution::OmittedByPolicy
+            | ImpactSectionExecution::NotRunTargetUnresolved => {
+                self.trust.is_none()
+                    && self.completeness.is_none()
+                    && self.result_handle.is_none()
+                    && self.proof_targets.is_empty()
+                    && match &self.rows {
+                        ImpactSectionRows::Symbol(rows) => rows.is_empty(),
+                        ImpactSectionRows::Reference(rows) => rows.is_empty(),
+                        ImpactSectionRows::IncomingCall(rows) => rows.is_empty(),
+                        ImpactSectionRows::Implementation(rows) => rows.is_empty(),
+                        ImpactSectionRows::TestMention(rows) => rows.is_empty(),
+                    }
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ImpactSectionResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            section: ImpactSection,
+            execution: ImpactSectionExecution,
+            trust: Option<ImpactSectionTrust>,
+            completeness: Option<ResultCompleteness>,
+            result_handle: Option<String>,
+            rows: ImpactSectionRows,
+            #[serde(default)]
+            proof_targets: Vec<ImpactProofTarget>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(
+            raw.section,
+            raw.execution,
+            raw.trust,
+            raw.completeness,
+            raw.result_handle,
+            raw.rows,
+            raw.proof_targets,
+        )
+        .ok_or_else(|| serde::de::Error::custom("invalid impact section result state"))
+    }
+}
+
+/// The only result-row identity an impact proof may address.
+///
+/// This mirrors the `TargetRef::ResultMatch` contract while preventing a proof from naming a
+/// stable symbol, a guessed coordinate, or a row from another result handle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImpactProofRowTarget {
+    #[schemars(length(min = 1))]
+    pub result_handle: String,
+    #[schemars(length(min = 1))]
+    pub match_id: String,
+    #[schemars(length(min = 1))]
+    pub target_scope: String,
+}
+
+impl<'de> Deserialize<'de> for ImpactProofRowTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            result_handle: String,
+            match_id: String,
+            target_scope: String,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Self::new(raw.result_handle, raw.match_id, raw.target_scope).ok_or_else(|| {
+            serde::de::Error::custom("impact proof row target fields must not be empty")
+        })
+    }
+}
+
+impl ImpactProofRowTarget {
+    /// Construct an exact, non-empty result-row target.
+    pub fn new(result_handle: String, match_id: String, target_scope: String) -> Option<Self> {
+        (!result_handle.is_empty() && !match_id.is_empty() && !target_scope.is_empty()).then_some(
+            Self {
+                result_handle,
+                match_id,
+                target_scope,
+            },
+        )
+    }
+
+    /// Convert this proof-only identity back to the shared spec-011 target type.
+    pub fn as_target_ref(&self) -> TargetRef {
+        TargetRef::ResultMatch {
+            result_handle: self.result_handle.clone(),
+            match_id: self.match_id.clone(),
+            target_scope: self.target_scope.clone(),
+        }
+    }
+}
+
+/// Deterministic proof target for one returned row in one impact section.
+///
+/// The action id names the canonical typed action that reads this exact handle-bound row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImpactProofTarget {
+    pub section: ImpactSection,
+    pub target: ImpactProofRowTarget,
+    pub action_id: super::NextActionId,
+}
+
+impl<'de> Deserialize<'de> for ImpactProofTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            section: ImpactSection,
+            target: ImpactProofRowTarget,
+            action_id: super::NextActionId,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        (!raw.action_id.0.trim().is_empty())
+            .then_some(Self {
+                section: raw.section,
+                target: raw.target,
+                action_id: raw.action_id,
+            })
+            .ok_or_else(|| serde::de::Error::custom("impact proof action_id must not be empty"))
+    }
+}
+
+impl ImpactProofTarget {
+    /// Construct a proof target only for one exact bound row and one canonical action id.
+    pub fn new(
+        section: ImpactSection,
+        target: ImpactProofRowTarget,
+        action_id: super::NextActionId,
+    ) -> Option<Self> {
+        (!action_id.0.trim().is_empty()).then_some(Self {
+            section,
+            target,
+            action_id,
+        })
     }
 }
 

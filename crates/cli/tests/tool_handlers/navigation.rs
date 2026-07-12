@@ -2,7 +2,10 @@
 
 use super::*;
 use frigg::mcp::types::{
-    MetadataObject, NavigationResolutionSource, NavigationTargetSelectionStatus, TargetRef,
+    ImpactBundleParams, ImpactProofRowTarget, ImpactProofTarget, ImpactSection,
+    ImpactSectionExecution, ImpactSectionResult, ImpactSectionRows, ImpactSectionTrust,
+    MetadataObject, NavigationMode, NavigationResolutionSource, NavigationTargetSelectionStatus,
+    NextActionId, ResultCompleteness, ResultUnit, TargetRef,
 };
 use frigg::mcp::types::{NextActionOrigin, NextActionTarget, ReplayOriginTarget};
 
@@ -319,6 +322,7 @@ async fn assert_target_routes_through_every_consumer(
             path_class: None,
             repository_id: None,
             include_implementations: Some(true),
+            include_test_mentions: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -4443,6 +4447,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
             path_class: None,
             repository_id: Some("repo-001".to_owned()),
             include_implementations: None,
+            include_test_mentions: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -4626,6 +4631,7 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
                 path_class: None,
                 repository_id: Some("repo-001".to_owned()),
                 include_implementations: None,
+                include_test_mentions: None,
                 response_mode: Some(ResponseMode::Compact),
             },
         ))))
@@ -4701,6 +4707,7 @@ async fn impact_bundle_same_rank_legacy_symbol_requires_disambiguation() {
             path_class: Some(SearchSymbolPathClass::Runtime),
             repository_id: Some("repo-001".to_owned()),
             include_implementations: None,
+            include_test_mentions: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -4793,6 +4800,7 @@ async fn impact_bundle_legacy_path_class_constrains_target_selection() {
             path_class: Some(SearchSymbolPathClass::Support),
             repository_id: Some("repo-001".to_owned()),
             include_implementations: Some(false),
+            include_test_mentions: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
@@ -4867,6 +4875,7 @@ async fn impact_bundle_unknown_symbol_returns_recovery() {
             path_class: None,
             repository_id: Some("repo-001".to_owned()),
             include_implementations: None,
+            include_test_mentions: None,
             response_mode: None,
         }))
         .await
@@ -4877,5 +4886,133 @@ async fn impact_bundle_unknown_symbol_returns_recovery() {
     assert!(
         !response.recovery.is_empty(),
         "unknown symbol must surface recovery/suggested_next: {response:?}"
+    );
+}
+
+#[test]
+fn impact_bundle_section_types_are_closed_and_proof_targets_are_exact() {
+    let params: ImpactBundleParams = serde_json::from_value(serde_json::json!({
+        "symbol": "target"
+    }))
+    .expect("legacy impact request should retain the opt-in default");
+    assert!(!params.includes_test_mentions());
+
+    let schema = serde_json::to_value(schemars::schema_for!(ImpactBundleParams))
+        .expect("impact params schema should serialize");
+    assert_eq!(
+        schema["properties"]["include_test_mentions"]["default"],
+        serde_json::json!(false)
+    );
+
+    let proof = ImpactProofTarget::new(
+        ImpactSection::Reference,
+        ImpactProofRowTarget::new(
+            "impact-handle".into(),
+            "reference:m1".into(),
+            "scope".into(),
+        )
+        .expect("non-empty bound row target"),
+        NextActionId::new("impact-reference-proof").expect("non-empty canonical action id"),
+    )
+    .expect("proof target must retain section, exact row, and action id");
+    let proof_json = serde_json::to_value(&proof).expect("proof target should serialize");
+    assert_eq!(proof_json["section"], "reference");
+    assert_eq!(proof_json["target"]["result_handle"], "impact-handle");
+    assert_eq!(proof_json["target"]["match_id"], "reference:m1");
+    assert_eq!(proof_json["action_id"], "impact-reference-proof");
+    assert!(
+        serde_json::from_value::<ImpactProofTarget>(serde_json::json!({
+            "section": "outgoing_call",
+            "target": {"result_handle": "h", "match_id": "m", "target_scope": "s"},
+            "action_id": "proof"
+        }))
+        .is_err()
+    );
+    assert!(serde_json::from_value::<ImpactProofTarget>(serde_json::json!({
+        "section": "reference",
+        "target": {"repository_id": "repo", "stable_symbol_id": "symbol", "snapshot_token": "snapshot"},
+        "action_id": "proof"
+    }))
+    .is_err());
+    assert!(
+        serde_json::from_value::<ImpactSectionTrust>(serde_json::json!({
+            "kind": "navigation",
+            "mode": "precise",
+            "extra": true
+        }))
+        .is_err()
+    );
+    assert!(matches!(
+        serde_json::from_value::<ImpactSectionTrust>(serde_json::json!({
+            "kind": "navigation",
+            "mode": "precise_partial"
+        }))
+        .expect("known trust variant should deserialize"),
+        ImpactSectionTrust::Navigation {
+            mode: NavigationMode::PrecisePartial
+        }
+    ));
+}
+
+#[test]
+fn impact_section_result_owns_rows_completeness_and_execution_truth() {
+    let included = ImpactSectionResult::new(
+        ImpactSection::TestMention,
+        ImpactSectionExecution::Included,
+        Some(ImpactSectionTrust::ExactLiteralText),
+        Some(
+            ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                .expect("empty included test section is complete"),
+        ),
+        Some("impact-test-mentions-handle".into()),
+        ImpactSectionRows::TestMention(Vec::new()),
+        Vec::new(),
+    )
+    .expect("included empty section retains its own coverage truth");
+    let included_json = serde_json::to_value(&included).expect("section envelope serializes");
+    assert_eq!(included_json["execution"], "included");
+    assert_eq!(included_json["rows"]["row_kind"], "test_mention");
+    assert_eq!(included_json["completeness"]["total"], 0);
+    assert_eq!(
+        included_json["result_handle"],
+        "impact-test-mentions-handle"
+    );
+
+    assert!(
+        ImpactSectionResult::new(
+            ImpactSection::TestMention,
+            ImpactSectionExecution::Included,
+            Some(ImpactSectionTrust::ExactLiteralText),
+            Some(ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0).unwrap()),
+            None,
+            ImpactSectionRows::TestMention(Vec::new()),
+            Vec::new(),
+        )
+        .is_none()
+    );
+
+    assert!(
+        ImpactSectionResult::new(
+            ImpactSection::Implementation,
+            ImpactSectionExecution::OmittedByPolicy,
+            None,
+            Some(ResultCompleteness::complete(ResultUnit::Implementation, 0, 0).unwrap()),
+            None,
+            ImpactSectionRows::Implementation(Vec::new()),
+            Vec::new(),
+        )
+        .is_none()
+    );
+    assert!(
+        ImpactSectionResult::new(
+            ImpactSection::Reference,
+            ImpactSectionExecution::NotRunTargetUnresolved,
+            None,
+            None,
+            None,
+            ImpactSectionRows::Symbol(Vec::new()),
+            Vec::new(),
+        )
+        .is_none()
     );
 }

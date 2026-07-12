@@ -519,6 +519,7 @@ async fn proof_handle_producers_reject_mutated_source_before_invalidation() {
             path_class: None,
             repository_id: Some("repo-001".to_owned()),
             include_implementations: Some(true),
+            include_test_mentions: None,
             response_mode: Some(ResponseMode::Compact),
         }))
         .await
