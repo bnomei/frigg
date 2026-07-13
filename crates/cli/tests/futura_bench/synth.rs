@@ -304,13 +304,15 @@ async fn run_post_edit_dirty_gate(report: &Mutex<harness::BenchReport>, fixture:
                 response.recommended_action
             ),
         )?;
-        // Path-scoped only: never interpret gate as repo-wide shell grep license.
+        // The compatibility projection retains fully-fresh live capabilities even while the
+        // snapshot-backed search surface is stale. Do not treat this as a repo-wide indexed
+        // search license; `tool_capabilities` carries the authoritative scope per tool.
         if let Some(fresh) = response.fresh_enough_for.as_ref() {
             require(
                 fresh
                     .iter()
-                    .all(|t| t == "read_file" || t == "read_match" || t == "search_text"),
-                format!("fresh_enough_for should stay path-scoped tools: {fresh:?}"),
+                    .all(|t| t == "explore" || t == "list_files" || t == "read_file"),
+                format!("fresh_enough_for should retain only live-source tools: {fresh:?}"),
             )?;
         }
         Ok(())

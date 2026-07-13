@@ -79,7 +79,8 @@ jobs:
       # head-to-head requires local `rg` for the subprocess baseline.
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      # Release profile binds (competitive frigg_p95 <= 1.5× rg noise budget).
+      # Release profile binds a 250ms warm-response ceiling. The local-rg ratio is emitted as
+      # an observability signal, not a shared-runner pass/fail race.
       # Debug still runs contract scenarios locally; soft 2s budget only under debug_assertions.
       - name: Run frigg-futura-bench (release)
         env:

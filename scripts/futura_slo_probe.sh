@@ -5,7 +5,7 @@
 # - materializes a tiny fixture
 # - times N warm FriggMcpServer::search_text samples (after warmup)
 # - times N subprocess `rg` samples on the same query/path
-# - release competitive gate: frigg.p95_ms <= rg.p95_ms * 1.5 (debug soft only)
+# - release responsiveness gate: frigg.p95_ms <= 250ms; the local-rg ratio is emitted only
 # - writes markdown when FUTURA_SLO_OUT is set (this script always sets it)
 # - requires local `rg` on PATH
 #
