@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-07-13
+
+- Fixed live-watch filtering to honor nested `.gitignore` and `.ignore` rules, preventing
+  generated files such as Laravel compiled views from triggering unnecessary refreshes.
+
 ## 0.9.0 - 2026-07-13
 
 - Workspace freshness now adds authoritative `snapshot`, `continuous`, `post_edit`, dirty-scope,
