@@ -358,6 +358,34 @@ async fn assert_target_routes_through_every_consumer(
         impact.symbols[0].match_id.as_deref(),
         impact.symbols[0].target_ref.as_ref(),
     );
+    let symbol_section = impact
+        .sections
+        .iter()
+        .find(|section| section.section == ImpactSection::Symbol)
+        .expect("target-mode impact should retain the resolved symbol section");
+    assert_eq!(symbol_section.execution, ImpactSectionExecution::Included);
+    assert_eq!(
+        symbol_section.result_handle.as_deref(),
+        impact.symbols_result_handle.as_deref(),
+        "the authoritative symbol section must keep the legacy handle projection"
+    );
+    assert_eq!(symbol_section.proof_targets.len(), 1);
+    let symbol_proof = &symbol_section.proof_targets[0];
+    assert!(impact.proof_targets.contains(symbol_proof));
+    assert_eq!(
+        symbol_proof.target.result_handle.as_str(),
+        impact
+            .symbols_result_handle
+            .as_deref()
+            .expect("target-mode impact symbol should issue a handle")
+    );
+    assert_eq!(
+        symbol_proof.target.match_id.as_str(),
+        impact.symbols[0]
+            .match_id
+            .as_deref()
+            .expect("target-mode impact symbol should issue a match id")
+    );
     let issued_symbol_target = impact.symbols[0]
         .target_ref
         .clone()
@@ -4432,12 +4460,19 @@ async fn navigation_go_to_definition_path_line_without_symbol_sets_location_warn
 async fn impact_bundle_composes_symbol_refs_and_callers() {
     let workspace_root = temp_workspace_root("impact-bundle-compose");
     let src_root = workspace_root.join("src");
+    let tests_root = workspace_root.join("tests");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::create_dir_all(&tests_root).expect("failed to create temporary test fixture");
     fs::write(
         src_root.join("lib.rs"),
         "pub fn target() {}\npub fn caller() { target(); }\n",
     )
     .expect("failed to seed temporary fixture source");
+    fs::write(
+        tests_root.join("target_mentions.rs"),
+        "use crate::target;\nfn checks_target() { target(); }\n",
+    )
+    .expect("failed to seed exact test mention fixture");
     let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
@@ -4496,6 +4531,27 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         response.summary.incoming_calls_mode,
         response.incoming_calls_mode
     );
+    assert_eq!(
+        response.sections.len(),
+        5,
+        "every closed impact section is present"
+    );
+    for section in &response.sections {
+        match section.section {
+            ImpactSection::Implementation | ImpactSection::TestMention => {
+                assert_eq!(section.execution, ImpactSectionExecution::OmittedByPolicy);
+                assert!(section.trust.is_none());
+                assert!(section.completeness.is_none());
+                assert!(section.result_handle.is_none());
+                assert!(section.proof_targets.is_empty());
+            }
+            ImpactSection::Symbol | ImpactSection::Reference | ImpactSection::IncomingCall => {
+                assert_eq!(section.execution, ImpactSectionExecution::Included);
+                assert!(section.trust.is_some());
+                assert!(section.completeness.is_some());
+            }
+        }
+    }
     assert!(
         !response.summary.top_paths.is_empty(),
         "non-empty impact should populate top_paths: {:?}",
@@ -4579,7 +4635,15 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
 
     assert!(
         !response.recovery.suggested_next.is_empty(),
-        "impact_bundle should suggest tests pass + proof reads"
+        "impact_bundle should expose canonical implementation/proof follow-ups"
+    );
+    assert!(
+        response
+            .recovery
+            .next_actions
+            .iter()
+            .all(|action| !matches!(action.target, NextActionTarget::SearchText(_))),
+        "default impact requests must not search or claim test evidence"
     );
     assert!(
         response
@@ -4642,6 +4706,253 @@ async fn impact_bundle_composes_symbol_refs_and_callers() {
         .read_match(Parameters(proof))
         .await
         .expect("impact proof action must replay through read_match");
+    for proof_target in &response.proof_targets {
+        let section = response
+            .sections
+            .iter()
+            .find(|section| section.section == proof_target.section)
+            .expect("every bundle proof has its section envelope");
+        assert!(section.proof_targets.contains(proof_target));
+        let action = response
+            .recovery
+            .next_actions
+            .iter()
+            .find(|action| action.id == proof_target.action_id)
+            .expect("every proof target has one canonical action");
+        let NextActionTarget::ReadMatch(params) = &action.target else {
+            panic!("impact proof actions must use read_match");
+        };
+        assert_eq!(params.result_handle, proof_target.target.result_handle);
+        assert_eq!(params.match_id, proof_target.target.match_id);
+        server
+            .read_match(Parameters(params.clone()))
+            .await
+            .expect("every section-qualified proof action must replay");
+    }
+
+    let opted_in = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
+            symbol: "target".to_owned(),
+            path_class: None,
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: None,
+            include_test_mentions: Some(true),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("opted-in impact should search exact test mentions")
+        .0;
+    let test_section = opted_in
+        .sections
+        .iter()
+        .find(|section| section.section == ImpactSection::TestMention)
+        .expect("opted-in impact must retain the test section");
+    let test_rows = match &test_section.rows {
+        ImpactSectionRows::TestMention(rows) => rows,
+        _ => panic!("test section must contain only text rows"),
+    };
+    assert_eq!(test_section.execution, ImpactSectionExecution::Included);
+    assert_eq!(
+        test_section.trust,
+        Some(ImpactSectionTrust::ExactLiteralText)
+    );
+    assert_eq!(
+        test_section
+            .completeness
+            .as_ref()
+            .map(|completeness| completeness.returned),
+        Some(test_rows.len()),
+        "test section completeness must describe the returned exact rows"
+    );
+    assert!(
+        !test_rows.is_empty() && test_section.proof_targets.len() == test_rows.len(),
+        "each opted-in test row must carry one section-qualified proof"
+    );
+    assert!(test_section.proof_targets.iter().all(|proof| {
+        opted_in.proof_targets.contains(proof)
+            && opted_in
+                .recovery
+                .next_actions
+                .iter()
+                .any(|action| action.id == proof.action_id)
+    }));
+
+    let full = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
+            symbol: "target".to_owned(),
+            path_class: None,
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: None,
+            include_test_mentions: Some(true),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("full impact should preserve the same contract")
+        .0;
+    assert_eq!(opted_in.target_selection, full.target_selection);
+    let section_shape = |section: &ImpactSectionResult| {
+        let row_count = match &section.rows {
+            ImpactSectionRows::Symbol(rows) => rows.len(),
+            ImpactSectionRows::Reference(rows) => rows.len(),
+            ImpactSectionRows::IncomingCall(rows) => rows.len(),
+            ImpactSectionRows::Implementation(rows) => rows.len(),
+            ImpactSectionRows::TestMention(rows) => rows.len(),
+        };
+        (
+            section.section,
+            section.execution,
+            section.trust.clone(),
+            section.completeness.clone(),
+            row_count,
+            section.proof_targets.len(),
+        )
+    };
+    assert_eq!(
+        opted_in
+            .sections
+            .iter()
+            .map(section_shape)
+            .collect::<Vec<_>>(),
+        full.sections.iter().map(section_shape).collect::<Vec<_>>(),
+        "response detail must preserve section execution, trust, completeness, rows, and proofs"
+    );
+    assert_eq!(
+        opted_in
+            .proof_targets
+            .iter()
+            .map(|proof| proof.section)
+            .collect::<Vec<_>>(),
+        full.proof_targets
+            .iter()
+            .map(|proof| proof.section)
+            .collect::<Vec<_>>(),
+        "response detail must preserve each proof-bearing section"
+    );
+    assert_eq!(opted_in.completeness, full.completeness);
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_stale_target_fails_closed_before_child_execution() {
+    let workspace_root = temp_workspace_root("impact-bundle-stale-target");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create stale-target fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\npub fn caller() { target(); }\n",
+    )
+    .expect("failed to seed stale-target fixture source");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server).await;
+    let symbol = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            path_class: Some(SearchSymbolPathClass::Runtime),
+            limit: Some(5),
+            continuation: None,
+            response_mode: Some(ResponseMode::Compact),
+            ..Default::default()
+        }))
+        .await
+        .expect("fixture symbol should be indexed")
+        .0;
+    let stable_symbol_id = symbol.matches[0]
+        .stable_symbol_id
+        .clone()
+        .expect("fixture symbol should expose a stable identity");
+
+    let stale = match server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: Some(TargetRef::StableSymbol {
+                repository_id,
+                stable_symbol_id,
+                snapshot_token: "stale-snapshot-token".to_owned(),
+            }),
+            symbol: String::new(),
+            path_class: None,
+            repository_id: None,
+            include_implementations: None,
+            include_test_mentions: Some(true),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("a stale impact target must fail before running children"),
+    };
+    assert_target_error_contract(&stale, "STALE_TARGET_SNAPSHOT", &workspace_root);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_opted_in_test_mentions_keeps_an_honest_zero_section() {
+    let workspace_root = temp_workspace_root("impact-bundle-test-mentions-zero");
+    let src_root = workspace_root.join("src");
+    let tests_root = workspace_root.join("tests");
+    fs::create_dir_all(&src_root).expect("failed to create source fixture");
+    fs::create_dir_all(&tests_root).expect("failed to create test fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\npub fn caller() { target(); }\n",
+    )
+    .expect("failed to seed source fixture");
+    fs::write(tests_root.join("unrelated.rs"), "fn unrelated() {}\n")
+        .expect("failed to seed unrelated test fixture");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
+            symbol: "target".to_owned(),
+            path_class: None,
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: None,
+            include_test_mentions: Some(true),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("opted-in impact should retain an exact test zero")
+        .0;
+    let test_section = response
+        .sections
+        .iter()
+        .find(|section| section.section == ImpactSection::TestMention)
+        .expect("opted-in impact must retain the test section");
+    assert_eq!(test_section.execution, ImpactSectionExecution::Included);
+    assert_eq!(
+        test_section.trust,
+        Some(ImpactSectionTrust::ExactLiteralText)
+    );
+    assert!(matches!(&test_section.rows, ImpactSectionRows::TestMention(rows) if rows.is_empty()));
+    assert_eq!(
+        test_section
+            .completeness
+            .as_ref()
+            .map(|completeness| completeness.returned),
+        Some(0),
+        "the opted-in exact search must report its actual zero"
+    );
+    assert!(test_section.result_handle.is_none());
+    assert!(test_section.proof_targets.is_empty());
+    assert!(
+        response
+            .proof_targets
+            .iter()
+            .all(|proof| proof.section != ImpactSection::TestMention)
+    );
+    assert!(
+        response
+            .recovery
+            .next_actions
+            .iter()
+            .all(|action| !action.id.0.contains("test-mention")),
+        "an exact zero must not fabricate a test-mention proof action"
+    );
+
     cleanup_workspace_root(&workspace_root);
 }
 
@@ -4740,6 +5051,22 @@ async fn impact_bundle_same_rank_legacy_symbol_requires_disambiguation() {
         response.incoming_calls.is_empty(),
         "must not choose a target for incoming calls"
     );
+    assert!(response.proof_targets.is_empty());
+    assert!(response.recovery.next_actions.is_empty());
+    assert!(response.sections.iter().all(|section| {
+        section.execution == ImpactSectionExecution::NotRunTargetUnresolved
+            && section.trust.is_none()
+            && section.completeness.is_none()
+            && section.result_handle.is_none()
+            && section.proof_targets.is_empty()
+            && match &section.rows {
+                ImpactSectionRows::Symbol(rows) => rows.is_empty(),
+                ImpactSectionRows::Reference(rows) => rows.is_empty(),
+                ImpactSectionRows::IncomingCall(rows) => rows.is_empty(),
+                ImpactSectionRows::Implementation(rows) => rows.is_empty(),
+                ImpactSectionRows::TestMention(rows) => rows.is_empty(),
+            }
+    }));
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -4988,7 +5315,8 @@ fn impact_section_result_owns_rows_completeness_and_execution_truth() {
             ImpactSectionRows::TestMention(Vec::new()),
             Vec::new(),
         )
-        .is_none()
+        .is_some(),
+        "an exact zero section has no proofable row and therefore no result handle"
     );
 
     assert!(

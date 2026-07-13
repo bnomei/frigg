@@ -5,10 +5,12 @@
 use super::*;
 use crate::mcp::types::{
     FindImplementationsParams, FindReferencesParams, ImpactBundleParams, ImpactBundleResponse,
-    IncomingCallsParams, NextActionOrigin, NextActionRole, NextActionTarget, ReadFileParams,
-    ReadMatchParams, ReplayOriginTarget, ResultCompleteness, ResultIncompleteReason, ResultUnit,
-    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
-    WorkspaceParams, canonical_next_action,
+    ImpactProofRowTarget, ImpactProofTarget, ImpactSection, ImpactSectionExecution,
+    ImpactSectionResult, ImpactSectionRows, ImpactSectionTrust, IncomingCallsParams,
+    NextActionOrigin, NextActionRole, NextActionTarget, ReadMatchParams, ReplayOriginTarget,
+    ResultCompleteness, ResultIncompleteReason, ResultUnit, SearchPatternType, SearchSymbolParams,
+    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, WorkspaceParams,
+    canonical_next_action,
 };
 
 fn unavailable_section(unit: ResultUnit) -> ResultCompleteness {
@@ -23,6 +25,44 @@ fn unavailable_section(unit: ResultUnit) -> ResultCompleteness {
         None,
     )
     .expect("unavailable impact section completeness is valid")
+}
+
+/// Fail-closed impact replies keep every downstream section visible without pretending that an
+/// omitted child is a zero result or incomplete coverage.
+fn unresolved_impact_sections() -> Vec<ImpactSectionResult> {
+    [
+        (ImpactSection::Symbol, ImpactSectionRows::Symbol(Vec::new())),
+        (
+            ImpactSection::Reference,
+            ImpactSectionRows::Reference(Vec::new()),
+        ),
+        (
+            ImpactSection::IncomingCall,
+            ImpactSectionRows::IncomingCall(Vec::new()),
+        ),
+        (
+            ImpactSection::Implementation,
+            ImpactSectionRows::Implementation(Vec::new()),
+        ),
+        (
+            ImpactSection::TestMention,
+            ImpactSectionRows::TestMention(Vec::new()),
+        ),
+    ]
+    .into_iter()
+    .map(|(section, rows)| {
+        ImpactSectionResult::new(
+            section,
+            ImpactSectionExecution::NotRunTargetUnresolved,
+            None,
+            None,
+            None,
+            rows,
+            Vec::new(),
+        )
+        .expect("unresolved impact section is internally consistent")
+    })
+    .collect()
 }
 
 impl FriggMcpServer {
@@ -111,6 +151,8 @@ impl FriggMcpServer {
                         None,
                         false,
                     ),
+                    sections: unresolved_impact_sections(),
+                    proof_targets: Vec::new(),
                     symbols: Vec::new(),
                     symbols_completeness: unavailable_section(ResultUnit::Symbol),
                     symbols_result_handle: None,
@@ -293,6 +335,8 @@ impl FriggMcpServer {
                     None,
                     false,
                 ),
+                sections: unresolved_impact_sections(),
+                proof_targets: Vec::new(),
                 symbols: Vec::new(),
                 symbols_completeness: symbols_response.completeness.clone(),
                 symbols_result_handle: symbols_response.result_handle,
@@ -370,6 +414,8 @@ impl FriggMcpServer {
                         None,
                         false,
                     ),
+                    sections: unresolved_impact_sections(),
+                    proof_targets: Vec::new(),
                     symbols: symbols_response.matches,
                     symbols_completeness: symbols_response.completeness,
                     symbols_result_handle: symbols_response.result_handle,
@@ -511,18 +557,24 @@ impl FriggMcpServer {
             (Vec::new(), None, None, None)
         };
 
-        let mut actions = vec![canonical_next_action(
-            "impact-tests",
-            NextActionRole::VerifyExact,
-            0,
-            NextActionTarget::SearchText(SearchTextParams {
-                query: symbol.clone(),
-                repository_id: params.repository_id.clone(),
-                path_regex: Some("^tests/".to_owned()),
-                ..SearchTextParams::default()
-            }),
-            "optional exact tests pass for the selected impact symbol",
-        )];
+        let test_response = if params.includes_test_mentions() {
+            Some(
+                self.search_text_impl(SearchTextParams {
+                    query: symbol.clone(),
+                    repository_id: selected_repository_id.clone(),
+                    path_regex: Some("(?:^|/)(?:test|tests)/".to_owned()),
+                    pattern_type: Some(SearchPatternType::Literal),
+                    response_mode: params.response_mode,
+                    ..SearchTextParams::default()
+                })
+                .await?
+                .0,
+            )
+        } else {
+            None
+        };
+
+        let mut actions = Vec::new();
         if !include_implementations {
             let implementation_params = match selected_symbol.target_ref.clone() {
                 Some(target) => FindImplementationsParams {
@@ -543,103 +595,125 @@ impl FriggMcpServer {
                     response_mode: params.response_mode,
                 },
             };
-            actions.insert(
+            actions.push(canonical_next_action(
+                "impact-implementations",
+                NextActionRole::ResolveTarget,
                 0,
-                canonical_next_action(
-                    "impact-implementations",
-                    NextActionRole::ResolveTarget,
-                    0,
-                    NextActionTarget::FindImplementations(implementation_params),
-                    "include implementations for the exact selected impact target",
-                ),
-            );
+                NextActionTarget::FindImplementations(implementation_params),
+                "include implementations for the exact selected impact target",
+            ));
         }
-        let proof = references_response
-            .matches
-            .first()
-            .and_then(|matched| {
-                references_response
-                    .result_handle
-                    .as_ref()
-                    .zip(matched.match_id.as_ref())
-                    .map(|(result_handle, match_id)| {
-                        (
-                            result_handle.clone(),
-                            match_id.clone(),
-                            matched.path.clone(),
-                            matched.repository_id.clone(),
-                            matched.line,
-                        )
-                    })
+        let mut add_proofs = |section: ImpactSection,
+                              handle: Option<&String>,
+                              rows: Vec<(Option<String>, Option<crate::mcp::types::TargetRef>)>,
+                              label: &str| {
+            let mut proofs = Vec::new();
+            for (index, (match_id, target_ref)) in rows.into_iter().enumerate() {
+                let (
+                    Some(result_handle),
+                    Some(match_id),
+                    Some(crate::mcp::types::TargetRef::ResultMatch {
+                        result_handle: target_handle,
+                        match_id: target_match_id,
+                        target_scope,
+                    }),
+                ) = (handle, match_id, target_ref)
+                else {
+                    continue;
+                };
+                if result_handle != &target_handle || match_id != target_match_id {
+                    continue;
+                }
+                let action = canonical_next_action(
+                    format!("impact-{label}-proof-{index}"),
+                    NextActionRole::ProofRead,
+                    (actions.len() + 1) as u16,
+                    NextActionTarget::ReadMatch(ReadMatchParams {
+                        result_handle: result_handle.clone(),
+                        match_id: match_id.clone(),
+                        before: None,
+                        after: None,
+                        presentation_mode: None,
+                        include_context_efficiency: None,
+                        origin: Some(NextActionOrigin(ReplayOriginTarget::ImpactBundle(
+                            params.clone(),
+                        ))),
+                    }),
+                    format!("proof-read this exact {label} row from the impact bundle"),
+                );
+                let proof = ImpactProofTarget::new(
+                    section,
+                    ImpactProofRowTarget::new(result_handle.clone(), match_id, target_scope)
+                        .expect("bound result-match identities are non-empty"),
+                    action.id.clone(),
+                )
+                .expect("canonical proof actions have ids");
+                actions.push(action);
+                proofs.push(proof);
+            }
+            proofs
+        };
+        let symbol_proofs = add_proofs(
+            ImpactSection::Symbol,
+            symbols_response.result_handle.as_ref(),
+            symbols_response
+                .matches
+                .iter()
+                .map(|row| (row.match_id.clone(), row.target_ref.clone()))
+                .collect(),
+            "symbol",
+        );
+        let reference_proofs = add_proofs(
+            ImpactSection::Reference,
+            references_response.result_handle.as_ref(),
+            references_response
+                .matches
+                .iter()
+                .map(|row| (row.match_id.clone(), row.target_ref.clone()))
+                .collect(),
+            "reference",
+        );
+        let incoming_proofs = add_proofs(
+            ImpactSection::IncomingCall,
+            incoming_response.result_handle.as_ref(),
+            incoming_response
+                .matches
+                .iter()
+                .map(|row| (row.match_id.clone(), row.target_ref.clone()))
+                .collect(),
+            "incoming-call",
+        );
+        let implementation_proofs = add_proofs(
+            ImpactSection::Implementation,
+            implementations_result_handle.as_ref(),
+            implementations
+                .iter()
+                .map(|row| (row.match_id.clone(), row.target_ref.clone()))
+                .collect(),
+            "implementation",
+        );
+        let test_proofs = test_response
+            .as_ref()
+            .map(|response| {
+                add_proofs(
+                    ImpactSection::TestMention,
+                    response.result_handle.as_ref(),
+                    response
+                        .matches
+                        .iter()
+                        .map(|row| (row.match_id.clone(), row.target_ref.clone()))
+                        .collect(),
+                    "test-mention",
+                )
             })
-            .or_else(|| {
-                incoming_response.matches.first().and_then(|matched| {
-                    incoming_response
-                        .result_handle
-                        .as_ref()
-                        .zip(matched.match_id.as_ref())
-                        .map(|(result_handle, match_id)| {
-                            (
-                                result_handle.clone(),
-                                match_id.clone(),
-                                matched.path.clone(),
-                                matched.repository_id.clone(),
-                                matched.line,
-                            )
-                        })
-                })
-            });
-        if let Some((result_handle, match_id, path, repository_id, line)) = proof {
-            actions.push(canonical_next_action(
-                "impact-proof",
-                NextActionRole::ProofRead,
-                2,
-                NextActionTarget::ReadMatch(ReadMatchParams {
-                    result_handle,
-                    match_id,
-                    before: None,
-                    after: None,
-                    presentation_mode: None,
-                    include_context_efficiency: None,
-                    origin: Some(NextActionOrigin(ReplayOriginTarget::ImpactBundle(
-                        params.clone(),
-                    ))),
-                }),
-                "proof-read a concrete reference or incoming-call row from this bundle",
-            ));
-            actions.push(canonical_next_action(
-                "impact-file",
-                NextActionRole::Inspect,
-                3,
-                NextActionTarget::ReadFile(ReadFileParams {
-                    path,
-                    repository_id: Some(repository_id),
-                    max_bytes: None,
-                    start_line: Some(line),
-                    end_line: None,
-                    line_count: None,
-                    presentation_mode: None,
-                    include_context_efficiency: None,
-                }),
-                "read the concrete source row selected for impact proof",
-            ));
-        }
+            .unwrap_or_default();
         let mut recovery = RecoveryFields::default();
         recovery.set_next_actions(actions);
         self.validate_recovery_actions(&mut recovery);
 
-        let mut sections = vec![
-            &symbols_response.completeness,
-            &references_response.completeness,
-            &incoming_response.completeness,
-        ];
-        if let Some(implementations_completeness) = implementations_completeness.as_ref() {
-            sections.push(implementations_completeness);
-        }
         let symbols_completeness = symbols_response.completeness.clone();
         let references_completeness = references_response.completeness.clone();
         let incoming_calls_completeness = incoming_response.completeness.clone();
-        let completeness = ImpactBundleResponse::aggregate_completeness(&sections);
         let target_selection = if let Some(resolved_target) = resolved_target.as_ref() {
             let NavigationTargetSelection::Resolved(target) = &resolved_target.selection else {
                 return Err(Self::target_invalid_params(
@@ -663,6 +737,116 @@ impl FriggMcpServer {
                 )
             })
         };
+        let resolution_source = target_selection
+            .as_ref()
+            .expect("selected impact target has selection evidence")
+            .resolution_source;
+        let test_mentions = test_response
+            .as_ref()
+            .map(|response| response.matches.clone())
+            .unwrap_or_default();
+        let test_mentions_completeness = test_response
+            .as_ref()
+            .map(|response| response.completeness.clone());
+        let test_mentions_result_handle = test_response
+            .as_ref()
+            .and_then(|response| response.result_handle.clone());
+        let mut impact_sections = vec![
+            ImpactSectionResult::new(
+                ImpactSection::Symbol,
+                ImpactSectionExecution::Included,
+                Some(ImpactSectionTrust::ResolvedTarget { resolution_source }),
+                Some(symbols_completeness.clone()),
+                symbols_response.result_handle.clone(),
+                ImpactSectionRows::Symbol(symbols_response.matches.clone()),
+                symbol_proofs,
+            )
+            .expect("resolved symbol section is internally consistent"),
+            ImpactSectionResult::new(
+                ImpactSection::Reference,
+                ImpactSectionExecution::Included,
+                Some(ImpactSectionTrust::Navigation {
+                    mode: references_response.mode,
+                }),
+                Some(references_completeness.clone()),
+                references_response.result_handle.clone(),
+                ImpactSectionRows::Reference(references_response.matches.clone()),
+                reference_proofs,
+            )
+            .expect("reference section is internally consistent"),
+            ImpactSectionResult::new(
+                ImpactSection::IncomingCall,
+                ImpactSectionExecution::Included,
+                Some(ImpactSectionTrust::Navigation {
+                    mode: incoming_response.mode,
+                }),
+                Some(incoming_calls_completeness.clone()),
+                incoming_response.result_handle.clone(),
+                ImpactSectionRows::IncomingCall(incoming_response.matches.clone()),
+                incoming_proofs,
+            )
+            .expect("incoming-call section is internally consistent"),
+        ];
+        impact_sections.push(if include_implementations {
+            ImpactSectionResult::new(
+                ImpactSection::Implementation,
+                ImpactSectionExecution::Included,
+                Some(ImpactSectionTrust::Navigation {
+                    mode: implementations_mode.expect("included implementations have a mode"),
+                }),
+                implementations_completeness.clone(),
+                implementations_result_handle.clone(),
+                ImpactSectionRows::Implementation(implementations.clone()),
+                implementation_proofs,
+            )
+            .expect("implementation section is internally consistent")
+        } else {
+            ImpactSectionResult::new(
+                ImpactSection::Implementation,
+                ImpactSectionExecution::OmittedByPolicy,
+                None,
+                None,
+                None,
+                ImpactSectionRows::Implementation(Vec::new()),
+                Vec::new(),
+            )
+            .expect("omitted implementation section is internally consistent")
+        });
+        impact_sections.push(
+            if let Some(completeness) = test_mentions_completeness.clone() {
+                ImpactSectionResult::new(
+                    ImpactSection::TestMention,
+                    ImpactSectionExecution::Included,
+                    Some(ImpactSectionTrust::ExactLiteralText),
+                    Some(completeness),
+                    test_mentions_result_handle.clone(),
+                    ImpactSectionRows::TestMention(test_mentions),
+                    test_proofs,
+                )
+                .expect("test-mention section is internally consistent")
+            } else {
+                ImpactSectionResult::new(
+                    ImpactSection::TestMention,
+                    ImpactSectionExecution::OmittedByPolicy,
+                    None,
+                    None,
+                    None,
+                    ImpactSectionRows::TestMention(Vec::new()),
+                    Vec::new(),
+                )
+                .expect("omitted test section is internally consistent")
+            },
+        );
+        let included_completeness = impact_sections
+            .iter()
+            .filter(|section| section.execution == ImpactSectionExecution::Included)
+            .filter_map(|section| section.completeness.as_ref())
+            .collect::<Vec<_>>();
+        let completeness = ImpactBundleResponse::aggregate_completeness(&included_completeness);
+        let proof_targets = impact_sections
+            .iter()
+            .flat_map(|section| section.proof_targets.clone())
+            .collect::<Vec<_>>();
         let response = ImpactBundleResponse {
             symbol: symbol.clone(),
             path_class: path_class_label,
@@ -677,6 +861,8 @@ impl FriggMcpServer {
                 implementations_mode,
                 include_implementations,
             ),
+            sections: impact_sections,
+            proof_targets,
             symbols: symbols_response.matches,
             symbols_completeness,
             symbols_result_handle: symbols_response.result_handle,

@@ -59,7 +59,7 @@ pub enum NavigationResolutionSource {
 }
 
 /// Target-resolution summary shared by navigation tool responses.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NavigationTargetSelectionSummary {
     pub status: NavigationTargetSelectionStatus,
     pub resolution_source: NavigationResolutionSource,
@@ -763,9 +763,20 @@ impl ImpactSectionResult {
         }
         match self.execution {
             ImpactSectionExecution::Included => {
-                if self.trust.is_none()
-                    || self.completeness.is_none()
-                    || self.result_handle.as_deref().is_none_or(str::is_empty)
+                if self.trust.is_none() || self.completeness.is_none() {
+                    return false;
+                }
+                // Empty child responses legitimately have no result handle. They cannot carry a
+                // proof target; non-empty/proofable sections must remain handle-bound.
+                let has_rows = match &self.rows {
+                    ImpactSectionRows::Symbol(rows) => !rows.is_empty(),
+                    ImpactSectionRows::Reference(rows) => !rows.is_empty(),
+                    ImpactSectionRows::IncomingCall(rows) => !rows.is_empty(),
+                    ImpactSectionRows::Implementation(rows) => !rows.is_empty(),
+                    ImpactSectionRows::TestMention(rows) => !rows.is_empty(),
+                };
+                if (has_rows || !self.proof_targets.is_empty())
+                    && self.result_handle.as_deref().is_none_or(str::is_empty)
                 {
                     return false;
                 }
@@ -986,6 +997,13 @@ pub struct ImpactBundleResponse {
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     /// Always-on plan-friendly counts / modes / top paths (EXP-nav-impact-shape B).
     pub summary: ImpactBundleSummary,
+    /// Authoritative execution/trust/coverage envelope for every impact section. Legacy arrays
+    /// below are compatibility projections of these section results.
+    #[serde(default)]
+    pub sections: Vec<ImpactSectionResult>,
+    /// Deterministic index of every proofable returned row, qualified by its section.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_targets: Vec<ImpactProofTarget>,
     pub symbols: Vec<crate::domain::model::SymbolMatch>,
     /// Cardinality and coverage for the symbol lookup section.
     pub symbols_completeness: ResultCompleteness,
@@ -1359,6 +1377,8 @@ mod tests {
             path_class: "runtime".to_owned(),
             target_selection: None,
             summary: empty_impact_summary(NavigationMode::Precise, NavigationMode::Precise),
+            sections: Vec::new(),
+            proof_targets: Vec::new(),
             symbols: Vec::new(),
             symbols_completeness: ResultCompleteness::complete(ResultUnit::Symbol, 0, 0)
                 .expect("empty symbols fixture is complete"),
@@ -1420,6 +1440,8 @@ mod tests {
                 NavigationMode::UnavailableNoPrecise,
                 NavigationMode::UnavailableNoPrecise,
             ),
+            sections: Vec::new(),
+            proof_targets: Vec::new(),
             symbols: Vec::new(),
             symbols_completeness: ResultCompleteness::try_new(
                 ResultUnit::Symbol,
