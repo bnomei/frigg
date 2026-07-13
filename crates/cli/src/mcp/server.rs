@@ -784,6 +784,11 @@ impl FriggMcpServer {
             })
             .unwrap_or_else(|| workspaces[0].clone());
 
+        // Capture this once and reuse the workspace transition table rather than attempting to
+        // re-derive stale/readiness semantics for zero-hit diagnostics.
+        let runtime = self.runtime_status_summary();
+        let freshness = self.workspace_freshness_summary(Some(&primary), &runtime);
+
         let storage = Self::workspace_storage_summary(&primary);
         let index_state =
             Some(Self::workspace_storage_index_state_label(storage.index_state).to_owned());
@@ -834,6 +839,7 @@ impl FriggMcpServer {
             working_tree_dirty: Some(working_tree_dirty),
             changed_paths_since_snapshot: changed_paths,
             stale_warning,
+            freshness: Some(freshness),
         };
         (!index.is_empty()).then_some(index)
     }

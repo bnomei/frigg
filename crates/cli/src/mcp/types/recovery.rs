@@ -8,7 +8,7 @@ use super::{
     FindReferencesParams, GoToDefinitionParams, IncomingCallsParams, ListFilesParams, NextAction,
     NextActionId, NextActionOrigin, NextActionRole, NextActionTarget, ReadFileParams,
     SearchPatternType, SearchSymbolParams, SearchSymbolPathClass, SearchTextParams,
-    WorkspaceParams,
+    WorkspaceDirtyScope, WorkspaceFreshnessSummary, WorkspaceParams, WorkspacePostEditStrategy,
 };
 
 /// Canonical producer builder. Compatibility suggestions are generated only by the response
@@ -54,6 +54,8 @@ pub enum ZeroHitReason {
     PreciseGraphUnavailable,
     /// No index coverage for the adopted repository or path set.
     NoIndexCoverage,
+    /// The snapshot is not ready, so a zero cannot be treated as a complete indexed miss.
+    IndexNotReady,
     /// Query simply did not match; no stronger diagnostic applies yet.
     QueryMiss,
 }
@@ -320,6 +322,9 @@ pub struct ZeroHitIndex {
     pub changed_paths_since_snapshot: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stale_warning: Option<String>,
+    /// Authoritative workspace freshness projected from the same captured server state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<WorkspaceFreshnessSummary>,
 }
 
 impl ZeroHitIndex {
@@ -330,6 +335,7 @@ impl ZeroHitIndex {
             && self.working_tree_dirty.is_none()
             && self.changed_paths_since_snapshot.is_empty()
             && self.stale_warning.is_none()
+            && self.freshness.is_none()
     }
 }
 
@@ -557,6 +563,30 @@ impl RecoveryFields {
             input.tool.trim()
         };
 
+        if let Some(freshness) = index.as_ref().and_then(|index| index.freshness.as_ref()) {
+            match freshness.post_edit.strategy {
+                WorkspacePostEditStrategy::AdoptRepo => {
+                    return Self::detached_session().attach_scope_index(scope, index);
+                }
+                WorkspacePostEditStrategy::RunCliIndex => {
+                    return Self::index_not_ready().attach_scope_index(scope, index);
+                }
+                WorkspacePostEditStrategy::FriggUnavailable => {
+                    return Self::frigg_unavailable(tool).attach_scope_index(scope, index);
+                }
+                WorkspacePostEditStrategy::WaitForRefresh
+                | WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles
+                    if freshness.dirty_scope != WorkspaceDirtyScope::Clean =>
+                {
+                    return Self::stale_dirty_paths(&freshness.changed_paths_since_snapshot)
+                        .attach_scope_index(scope, index);
+                }
+                WorkspacePostEditStrategy::UseSnapshot
+                | WorkspacePostEditStrategy::WaitForRefresh
+                | WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles => {}
+            }
+        }
+
         if let Some(reason) = input.reason_override {
             return Self::for_zero_hit_reason(tool, query, reason, scope, index);
         }
@@ -621,6 +651,7 @@ impl RecoveryFields {
             }
             ZeroHitReason::WrongRepositoryPossible => Self::wrong_repo_possible(None),
             ZeroHitReason::NoIndexCoverage => Self::detached_session(),
+            ZeroHitReason::IndexNotReady => Self::index_not_ready(),
             ZeroHitReason::ToolUnavailable => Self::tool_unavailable(tool),
             ZeroHitReason::PreciseGraphUnavailable => Self::precise_graph_unavailable(tool, query),
             ZeroHitReason::PathClassNotIndexed => {
@@ -966,6 +997,47 @@ impl RecoveryFields {
             ..Self::default()
         }
         .with_next_actions(legacy_actions(suggested_next))
+    }
+
+    /// The index snapshot is absent or failed, so a zero cannot prove a complete miss.
+    pub fn index_not_ready() -> Self {
+        let suggested_next = vec![
+            legacy_suggestion("workspace")
+                .with_reason("recheck repository state after CLI/operator index repair"),
+        ];
+        Self {
+            error_code: Some("INDEX_NOT_READY".to_owned()),
+            message: Some("No matches cannot be classified because the index snapshot is not ready.".to_owned()),
+            correction_hint: Some(
+                "Run CLI `frigg index` (or the operator lifecycle) to repair the snapshot; there is no public MCP reindex tool."
+                    .to_owned(),
+            ),
+            related_tools: vec!["workspace".to_owned()],
+            zero_hit_reason: Some(ZeroHitReason::IndexNotReady),
+            scope: None,
+            index: None,
+            ..Self::default()
+        }
+        .with_next_actions(legacy_actions(suggested_next))
+    }
+
+    /// Frigg cannot serve a reliable recovery action while its runtime is unavailable.
+    pub fn frigg_unavailable(tool_name: &str) -> Self {
+        Self {
+            error_code: Some("FRIGG_UNAVAILABLE".to_owned()),
+            message: Some(format!(
+                "Tool {tool_name:?} cannot classify this zero because Frigg is unavailable."
+            )),
+            correction_hint: Some(
+                "Restore the Frigg runtime before retrying; no MCP recovery action is available."
+                    .to_owned(),
+            ),
+            related_tools: Vec::new(),
+            zero_hit_reason: Some(ZeroHitReason::ToolUnavailable),
+            scope: None,
+            index: None,
+            ..Self::default()
+        }
     }
 
     /// Multi-hypothesis task should prefer batch or parallel exact probes.
@@ -1957,6 +2029,10 @@ fn extract_code_like_tokens(excerpt: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::types::{
+        WorkspaceContinuousFreshnessState, WorkspaceContinuousFreshnessSummary,
+        WorkspacePostEditSummary, WorkspaceSnapshotFreshnessState, WorkspaceSnapshotSummary,
+    };
     use serde_json::json;
 
     fn assert_recovery_actionable(recovery: &RecoveryFields) {
@@ -2120,6 +2196,7 @@ mod tests {
                 working_tree_dirty: Some(false),
                 changed_paths_since_snapshot: Vec::new(),
                 stale_warning: None,
+                freshness: None,
             }),
             reason_override: None,
         });
@@ -2155,6 +2232,75 @@ mod tests {
             value["suggested_next"]
                 .as_array()
                 .is_some_and(|v| !v.is_empty())
+        );
+    }
+
+    #[test]
+    fn zero_hit_uses_authoritative_freshness_for_stale_and_repair_recovery() {
+        let stale_freshness = WorkspaceFreshnessSummary {
+            snapshot: WorkspaceSnapshotSummary {
+                state: WorkspaceSnapshotFreshnessState::Ready,
+                storage_available: Some(true),
+            },
+            continuous: WorkspaceContinuousFreshnessSummary {
+                state: WorkspaceContinuousFreshnessState::ModeOff,
+                can_converge_by_waiting: false,
+            },
+            post_edit: WorkspacePostEditSummary {
+                strategy: WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles,
+            },
+            dirty_scope: WorkspaceDirtyScope::KnownChangedPaths,
+            changed_paths_since_snapshot: vec!["src/changed.rs".to_owned()],
+            tool_capabilities: Vec::new(),
+        };
+        let stale = RecoveryFields::for_zero_hit(ZeroHitInput {
+            tool: "search_text",
+            query: Some("needle"),
+            index: Some(ZeroHitIndex {
+                freshness: Some(stale_freshness),
+                ..ZeroHitIndex::default()
+            }),
+            ..ZeroHitInput::default()
+        });
+        assert_eq!(
+            stale.zero_hit_reason,
+            Some(ZeroHitReason::IndexStalePossible)
+        );
+        assert!(stale.next_actions.iter().any(|action| matches!(
+            action.target,
+            NextActionTarget::ReadFile(ref params) if params.path == "src/changed.rs"
+        )));
+
+        let repair = RecoveryFields::for_zero_hit(ZeroHitInput {
+            tool: "search_text",
+            query: Some("needle"),
+            index: Some(ZeroHitIndex {
+                freshness: Some(WorkspaceFreshnessSummary {
+                    post_edit: WorkspacePostEditSummary {
+                        strategy: WorkspacePostEditStrategy::RunCliIndex,
+                    },
+                    ..stale
+                        .index
+                        .expect("stale response preserves freshness")
+                        .freshness
+                        .expect("freshness")
+                }),
+                ..ZeroHitIndex::default()
+            }),
+            ..ZeroHitInput::default()
+        });
+        assert_eq!(repair.zero_hit_reason, Some(ZeroHitReason::IndexNotReady));
+        assert!(
+            repair
+                .correction_hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("frigg index"))
+        );
+        assert!(
+            repair
+                .next_actions
+                .iter()
+                .all(|action| !matches!(action.target, NextActionTarget::ReadFile(_)))
         );
     }
 
