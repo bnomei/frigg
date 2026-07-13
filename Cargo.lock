@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "frigg"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aho-corasick",
  "async-trait",
