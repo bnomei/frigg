@@ -8,7 +8,8 @@ use crate::mcp::types::{
     WatchStatusReason, WatchStatusSummary, WorkspaceContinuousFreshnessState,
     WorkspaceContinuousFreshnessSummary, WorkspaceDirtyScope, WorkspaceFreshnessSummary,
     WorkspacePostEditStrategy, WorkspacePostEditSummary, WorkspaceSnapshotFreshnessState,
-    WorkspaceSnapshotSummary,
+    WorkspaceSnapshotSummary, WorkspaceToolFreshnessAvailability, WorkspaceToolFreshnessCapability,
+    WorkspaceToolFreshnessPathScope, WorkspaceToolFreshnessSourceBasis,
 };
 use crate::settings::{RuntimeProfile, RuntimeTransportKind, WatchMode};
 
@@ -87,7 +88,231 @@ pub(crate) fn derive_workspace_freshness(
         post_edit: WorkspacePostEditSummary { strategy },
         dirty_scope: input.dirty_scope,
         changed_paths_since_snapshot,
-        tool_capabilities: Vec::new(),
+        tool_capabilities: derive_tool_capabilities(input),
+    }
+}
+
+/// Classifies the source consulted by each public tool. Keep this registry keyed by tool name:
+/// response rows are intentionally driven by the live router, never by this table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolFreshnessClass {
+    SnapshotIndex,
+    LiveManifest,
+    LiveFile,
+    HandleBoundLiveContent,
+    Mixed,
+    NotApplicable,
+}
+
+const UNKNOWN_TOOL_NAME_DIAGNOSTIC_MAX_CHARS: usize = 128;
+
+fn bounded_unknown_tool_name(tool_name: &str) -> String {
+    tool_name
+        .chars()
+        .take(UNKNOWN_TOOL_NAME_DIAGNOSTIC_MAX_CHARS)
+        .collect()
+}
+
+fn classify_tool(tool_name: &str) -> Option<ToolFreshnessClass> {
+    Some(match tool_name {
+        // `workspace` reports current control-plane state rather than source evidence.
+        "workspace" | "playbook_run" | "playbook_replay" | "playbook_compose_citations" => {
+            ToolFreshnessClass::NotApplicable
+        }
+        "list_files" => ToolFreshnessClass::LiveManifest,
+        "read_file" | "explore" => ToolFreshnessClass::LiveFile,
+        "read_match" => ToolFreshnessClass::HandleBoundLiveContent,
+        // These paths combine source parsing with index-backed resolution; report the more
+        // conservative mixed basis rather than claiming an index-only or live-only guarantee.
+        "document_symbols" | "inspect_syntax_tree" | "search_structural" | "impact_bundle" => {
+            ToolFreshnessClass::Mixed
+        }
+        "search_text"
+        | "search_hybrid"
+        | "search_symbol"
+        | "search_batch"
+        | "find_references"
+        | "go_to_definition"
+        | "find_declarations"
+        | "find_implementations"
+        | "incoming_calls"
+        | "outgoing_calls" => ToolFreshnessClass::SnapshotIndex,
+        _ => return None,
+    })
+}
+
+fn derive_tool_capabilities(
+    input: &WorkspaceFreshnessInput,
+) -> Vec<WorkspaceToolFreshnessCapability> {
+    let mut tool_names = input.live_tool_names.clone();
+    tool_names.sort();
+    tool_names.dedup();
+
+    tool_names
+        .into_iter()
+        .map(|tool_name| capability_for_tool(input, tool_name))
+        .collect()
+}
+
+fn capability_for_tool(
+    input: &WorkspaceFreshnessInput,
+    tool_name: String,
+) -> WorkspaceToolFreshnessCapability {
+    let Some(class) = classify_tool(&tool_name) else {
+        // A router/registry mismatch must not silently make a new tool look trustworthy.
+        tracing::warn!(
+            tool_name = %bounded_unknown_tool_name(&tool_name),
+            "workspace freshness registry has no classification for a live tool; failing closed"
+        );
+        return unavailable_capability(
+            tool_name,
+            WorkspaceToolFreshnessSourceBasis::Mixed,
+            WorkspaceToolFreshnessPathScope::RepositoryWide,
+            recovery_for(input.snapshot_state),
+        );
+    };
+
+    if class == ToolFreshnessClass::NotApplicable {
+        return WorkspaceToolFreshnessCapability {
+            tool_name,
+            source_basis: WorkspaceToolFreshnessSourceBasis::NotApplicable,
+            availability: WorkspaceToolFreshnessAvailability::NotApplicable,
+            path_scope: WorkspaceToolFreshnessPathScope::NotApplicable,
+            required_recovery: None,
+        };
+    }
+
+    let source_basis = match class {
+        ToolFreshnessClass::SnapshotIndex => WorkspaceToolFreshnessSourceBasis::SnapshotIndex,
+        ToolFreshnessClass::LiveManifest => WorkspaceToolFreshnessSourceBasis::LiveManifest,
+        ToolFreshnessClass::LiveFile => WorkspaceToolFreshnessSourceBasis::LiveFile,
+        ToolFreshnessClass::HandleBoundLiveContent => {
+            WorkspaceToolFreshnessSourceBasis::HandleBoundLiveContent
+        }
+        ToolFreshnessClass::Mixed => WorkspaceToolFreshnessSourceBasis::Mixed,
+        ToolFreshnessClass::NotApplicable => unreachable!("handled above"),
+    };
+
+    if matches!(
+        input.snapshot_state,
+        WorkspaceSnapshotFreshnessState::Detached | WorkspaceSnapshotFreshnessState::Unavailable
+    ) {
+        return unavailable_capability(
+            tool_name,
+            source_basis,
+            WorkspaceToolFreshnessPathScope::RepositoryWide,
+            recovery_for(input.snapshot_state),
+        );
+    }
+
+    if matches!(
+        class,
+        ToolFreshnessClass::SnapshotIndex | ToolFreshnessClass::Mixed
+    ) && input.snapshot_state != WorkspaceSnapshotFreshnessState::Ready
+    {
+        return unavailable_capability(
+            tool_name,
+            source_basis,
+            WorkspaceToolFreshnessPathScope::RepositoryWide,
+            recovery_for(input.snapshot_state),
+        );
+    }
+
+    match class {
+        ToolFreshnessClass::LiveManifest | ToolFreshnessClass::LiveFile => fully_fresh_capability(
+            tool_name,
+            source_basis,
+            WorkspaceToolFreshnessPathScope::RepositoryWide,
+        ),
+        ToolFreshnessClass::HandleBoundLiveContent => WorkspaceToolFreshnessCapability {
+            tool_name,
+            source_basis,
+            // The bytes are read live, but the anchor belongs to a previous producer result.
+            // Never let the legacy full-fresh projection include this replay-sensitive tool.
+            availability: WorkspaceToolFreshnessAvailability::StalePossible,
+            path_scope: WorkspaceToolFreshnessPathScope::HandleGenerationBound,
+            required_recovery: (input.dirty_scope != WorkspaceDirtyScope::Clean)
+                .then_some(WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles),
+        },
+        ToolFreshnessClass::SnapshotIndex | ToolFreshnessClass::Mixed => match input.dirty_scope {
+            WorkspaceDirtyScope::Clean => fully_fresh_capability(
+                tool_name,
+                source_basis,
+                WorkspaceToolFreshnessPathScope::RepositoryWide,
+            ),
+            WorkspaceDirtyScope::KnownChangedPaths => WorkspaceToolFreshnessCapability {
+                tool_name,
+                source_basis,
+                availability: WorkspaceToolFreshnessAvailability::StalePossible,
+                path_scope: WorkspaceToolFreshnessPathScope::TouchedPaths,
+                required_recovery: Some(input_recovery(input)),
+            },
+            WorkspaceDirtyScope::UnknownRepositoryDirtiness => WorkspaceToolFreshnessCapability {
+                tool_name,
+                source_basis,
+                availability: WorkspaceToolFreshnessAvailability::StalePossible,
+                path_scope: WorkspaceToolFreshnessPathScope::RepositoryWide,
+                required_recovery: Some(input_recovery(input)),
+            },
+        },
+        ToolFreshnessClass::NotApplicable => unreachable!("handled above"),
+    }
+}
+
+fn fully_fresh_capability(
+    tool_name: String,
+    source_basis: WorkspaceToolFreshnessSourceBasis,
+    path_scope: WorkspaceToolFreshnessPathScope,
+) -> WorkspaceToolFreshnessCapability {
+    WorkspaceToolFreshnessCapability {
+        tool_name,
+        source_basis,
+        availability: WorkspaceToolFreshnessAvailability::FullyFresh,
+        path_scope,
+        required_recovery: None,
+    }
+}
+
+fn unavailable_capability(
+    tool_name: String,
+    source_basis: WorkspaceToolFreshnessSourceBasis,
+    path_scope: WorkspaceToolFreshnessPathScope,
+    required_recovery: Option<WorkspacePostEditStrategy>,
+) -> WorkspaceToolFreshnessCapability {
+    WorkspaceToolFreshnessCapability {
+        tool_name,
+        source_basis,
+        availability: WorkspaceToolFreshnessAvailability::Unavailable,
+        path_scope,
+        required_recovery,
+    }
+}
+
+const fn recovery_for(
+    snapshot_state: WorkspaceSnapshotFreshnessState,
+) -> Option<WorkspacePostEditStrategy> {
+    match snapshot_state {
+        WorkspaceSnapshotFreshnessState::Detached => Some(WorkspacePostEditStrategy::AdoptRepo),
+        WorkspaceSnapshotFreshnessState::Missing
+        | WorkspaceSnapshotFreshnessState::Uninitialized
+        | WorkspaceSnapshotFreshnessState::Error => Some(WorkspacePostEditStrategy::RunCliIndex),
+        WorkspaceSnapshotFreshnessState::Unavailable => {
+            Some(WorkspacePostEditStrategy::FriggUnavailable)
+        }
+        WorkspaceSnapshotFreshnessState::Ready => None,
+    }
+}
+
+fn input_recovery(input: &WorkspaceFreshnessInput) -> WorkspacePostEditStrategy {
+    match input.snapshot_state {
+        WorkspaceSnapshotFreshnessState::Ready => (input.watch_status.lease_count > 0
+            && matches!(
+                input.watch_status.reason,
+                WatchStatusReason::Debouncing | WatchStatusReason::Refreshing
+            ))
+        .then_some(WorkspacePostEditStrategy::WaitForRefresh)
+        .unwrap_or(WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles),
+        state => recovery_for(state).expect("non-ready snapshot has a recovery"),
     }
 }
 
@@ -327,5 +552,130 @@ mod tests {
             1,
         ));
         assert!(unknown.changed_paths_since_snapshot.is_empty());
+    }
+
+    #[test]
+    fn capability_rows_follow_live_router_names_and_fail_closed() {
+        let mut captured = input(
+            WorkspaceSnapshotFreshnessState::Ready,
+            WorkspaceDirtyScope::KnownChangedPaths,
+            RuntimeTransportKind::LoopbackHttp,
+            RuntimeProfile::HttpLoopbackService,
+            WatchMode::On,
+            WatchStatusReason::Active,
+            1,
+        );
+        captured.live_tool_names = vec![
+            "unknown_live_tool".to_owned(),
+            "read_match".to_owned(),
+            "read_file".to_owned(),
+            "search_text".to_owned(),
+            "list_files".to_owned(),
+        ];
+
+        let capabilities = derive_workspace_freshness(&captured).tool_capabilities;
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|capability| capability.tool_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "list_files",
+                "read_file",
+                "read_match",
+                "search_text",
+                "unknown_live_tool"
+            ]
+        );
+
+        let read_file = capabilities
+            .iter()
+            .find(|capability| capability.tool_name == "read_file")
+            .expect("read_file row");
+        assert_eq!(
+            read_file.source_basis,
+            WorkspaceToolFreshnessSourceBasis::LiveFile
+        );
+        assert_eq!(
+            read_file.availability,
+            WorkspaceToolFreshnessAvailability::FullyFresh
+        );
+
+        let read_match = capabilities
+            .iter()
+            .find(|capability| capability.tool_name == "read_match")
+            .expect("read_match row");
+        assert_eq!(
+            read_match.source_basis,
+            WorkspaceToolFreshnessSourceBasis::HandleBoundLiveContent
+        );
+        assert_eq!(
+            read_match.availability,
+            WorkspaceToolFreshnessAvailability::StalePossible
+        );
+        assert_eq!(
+            read_match.path_scope,
+            WorkspaceToolFreshnessPathScope::HandleGenerationBound
+        );
+
+        let unknown = capabilities
+            .iter()
+            .find(|capability| capability.tool_name == "unknown_live_tool")
+            .expect("unknown row");
+        assert_eq!(
+            unknown.availability,
+            WorkspaceToolFreshnessAvailability::Unavailable
+        );
+        assert!(unknown.required_recovery.is_none());
+    }
+
+    #[test]
+    fn registry_covers_every_public_core_and_extended_tool() {
+        for manifest in crate::mcp::tool_surface::tool_surface_profile_manifests() {
+            for tool_name in manifest.tool_names {
+                assert!(
+                    classify_tool(&tool_name).is_some(),
+                    "{} profile is missing a freshness classification for {tool_name}",
+                    manifest.profile.as_str(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn playbook_tools_are_not_applicable_when_compiled_and_exposed() {
+        #[cfg(feature = "playbook")]
+        for tool_name in [
+            "playbook_run",
+            "playbook_replay",
+            "playbook_compose_citations",
+        ] {
+            let capability = capability_for_tool(
+                &input(
+                    WorkspaceSnapshotFreshnessState::Ready,
+                    WorkspaceDirtyScope::Clean,
+                    RuntimeTransportKind::LoopbackHttp,
+                    RuntimeProfile::HttpLoopbackService,
+                    WatchMode::On,
+                    WatchStatusReason::Active,
+                    1,
+                ),
+                tool_name.to_owned(),
+            );
+            assert_eq!(
+                capability.availability,
+                WorkspaceToolFreshnessAvailability::NotApplicable
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_tool_diagnostics_bound_untrusted_router_names() {
+        let long_name = "x".repeat(UNKNOWN_TOOL_NAME_DIAGNOSTIC_MAX_CHARS + 1);
+        assert_eq!(
+            bounded_unknown_tool_name(&long_name).chars().count(),
+            UNKNOWN_TOOL_NAME_DIAGNOSTIC_MAX_CHARS
+        );
+        assert_eq!(bounded_unknown_tool_name("known_tool"), "known_tool");
     }
 }
