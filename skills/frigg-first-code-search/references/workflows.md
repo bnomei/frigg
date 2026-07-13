@@ -30,9 +30,12 @@ Do not use shell `rg` as a "throwaway check" on indexed source while Frigg is at
 5. `incoming_calls(target=...)` for caller graph; treat `outgoing_calls` as provisional until body proof
 6. `read_match` / `read_file` on each cluster before editing
 7. Optional `search_text` with `path_regex='^tests/'` for an explicit test pass
-8. Prefer `impact_bundle(target=...)` when available; individual tools remain source of truth
-9. Never shell `rg` for throwaway indexed-source checks — use scoped `search_text`
-10. Do not expect other scenario “bundle” tools — composition beyond impact is skill-side
+8. Prefer `impact_bundle(target=...)` when available; read `sections[]` for execution, trust,
+   and completeness, then use a section `proof_targets[].action_id` through `next_actions[]`
+9. Set `include_test_mentions=true` only for explicit exact test evidence; outgoing calls remain
+   a separate provisional navigation pass
+10. Never shell `rg` for throwaway indexed-source checks — use scoped `search_text`
+11. Do not expect other scenario “bundle” tools — composition beyond impact is skill-side
 
 ## Technical Review
 

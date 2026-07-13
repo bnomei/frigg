@@ -39,6 +39,17 @@ When you would fire 3–6 shell greps in one turn:
 
 After multi-probe discovery, proof still goes through `read_match` / `read_file` (or navigation), never hybrid rank-1 alone.
 
+Batch merge is not selectable. The response always reports
+`merge_strategy="reciprocal_rank_fusion"` and `merge_algorithm_version`. Each merged row exposes
+one evidence record per contributing probe (`evidence` with id/kind/one-based rank),
+`consensus_count`, `rrf_score`, and derived `match_strength`; ordering is consensus first,
+equal-weight RRF second, then strength and stable coordinates. Do not compare raw scores across
+text, symbol, and hybrid probes. Read `probe_summary[].trust` independently from its
+`completeness`, and read aggregate completeness before calling a merged page exhaustive. Batch
+`continuation` is opaque and bound to the ordered normalized probes, scope, snapshots, and merge
+version. `merge="rank_by_probe_hit_strength"` remains a two-minor compatibility input only;
+new calls omit it and legacy normalization is visible as `compatibility_note`.
+
 ## Target-first navigation
 
 When a search row has `target_ref`, copy that opaque value unchanged into a navigation tool's

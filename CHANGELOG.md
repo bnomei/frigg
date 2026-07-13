@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Trust-preserving composers: `search_batch` now exposes fixed
+  `merge_strategy=reciprocal_rank_fusion`, `merge_algorithm_version`, per-row evidence,
+  consensus, RRF, and derived strength instead of implying cross-kind raw-score comparison.
+  Its opaque continuation binds the normalized probes, scope, snapshots, and merge version.
+  The historical `merge="rank_by_probe_hit_strength"` input remains accepted only for two minor
+  releases, normalizes to RRF, and returns a compatibility note; the canonical schema no longer
+  presents merge as a choice.
+
+- Fail-closed impact composition: `impact_bundle` now resolves copied `target_ref` values once,
+  reports legacy same-rank ambiguity without running children, and exposes section execution,
+  trust, completeness, and section-qualified proof targets. Test mentions are explicit via
+  `include_test_mentions=true`; outgoing calls remain outside the bundle. These additive fields
+  preserve direct symbol compatibility and do not require persisted migration or backfill.
+
 - Stable result targets: search and navigation rows now add optional `target_ref`; navigation
   parameters add optional `target`; and `impact_bundle` accepts exactly one of `target` or legacy
   non-empty `symbol`. Result-match targets are session/source scoped, stable-symbol targets are

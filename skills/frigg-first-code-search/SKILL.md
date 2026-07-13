@@ -240,7 +240,7 @@ Each card: **Trigger / Habit / Frigg path / Fallback / Proof / Done / Product su
 | **Fallback** | Shell only if Frigg unregistered or path unindexed |
 | **Proof** | `read_match` on best merged hit |
 | **Done** | Multi-hypothesis answer cites Frigg proof; no parallel shell on indexed source |
-| **Product support** | 2–8 probes, each a full search; `probe_summary` per probe; path:line dedupe; handles / authoritative `next_actions` (with deprecated lossy `suggested_next` compatibility projection). **Not** a single shared multi-query walk or early-exit fusion. |
+| **Product support** | 2–8 probes, each a full search; `probe_summary` per probe; coordinate dedupe; fixed `merge_strategy=reciprocal_rank_fusion`; per-row `evidence`, `consensus_count`, `rrf_score`, and derived `match_strength`; handles / authoritative `next_actions` (with deprecated lossy `suggested_next` compatibility projection). **Not** a selectable merge, shared multi-query walk, or early-exit fusion. |
 
 ```text
 PREFERRED: search_batch([
@@ -250,6 +250,11 @@ PREFERRED: search_batch([
 
 Mental model: same as parallel Frigg searches in one call — not one fused rg with many patterns.
 Prefer text+symbol probes for multi-guess; use hybrid probes sparingly (vague only); still proof via read_match.
+Read child `probe_summary[].trust` and `probe_summary[].completeness` independently, then aggregate
+`completeness`: consensus precedes equal-weight RRF, and derived strength is only a tie-breaker.
+Replay batch `continuation` only with the same normalized probes, scopes, and snapshots. The old
+`merge="rank_by_probe_hit_strength"` spelling is a two-minor compatibility input only; omit
+`merge` from new requests and inspect `compatibility_note` if a legacy caller used it.
 
 ELSE — only if tools/list lacks search_batch:
   search_text(probe_1, path_regex=^src/)
@@ -365,18 +370,20 @@ GOOD: treat NavigationMode heuristic as valid Frigg; precise is an upgrade when 
 | --- | --- |
 | **Trigger** | Usages, callers, callees, trait impls for a known anchor |
 | **Habit** | Whole-repo `rg -n symbol`, manual dedupe |
-| **Frigg path** | Prefer `impact_bundle(symbol)`; or sequential symbol → refs → callers → impls |
+| **Frigg path** | Prefer `impact_bundle(target)` with a copied `target_ref`; or sequential symbol → target → refs → callers → impls |
 | **Fallback** | Scoped `search_text` may supplement tests; shell `rg` is not the main reference pass |
-| **Proof** | Read clusters; confirm `outgoing_calls` with body reads |
+| **Proof** | Read section-qualified proof targets; confirm separate `outgoing_calls` with body reads |
 | **Done** | Navigation evidence before edit or impact claim |
-| **Product support** | `summary` counts/top_paths, mode flags; **public thin composers** are `impact_bundle` (nav) and `search_batch` (multi-probe) — no further scenario bundles |
+| **Product support** | `sections[]` separates execution/trust/completeness, plus section-qualified `proof_targets` and canonical `next_actions`; `summary` counts/top_paths remain a compact projection. Test mentions require `include_test_mentions=true`; outgoing calls are not bundled. **Public thin composers** are `impact_bundle` (nav) and `search_batch` (multi-probe) — no further scenario bundles |
 
 ```text
-PREFERRED: impact_bundle(symbol, path_class=runtime)
-  → read summary first (counts / modes / top_paths) for plan
-  → then proof via handles/lists; authoritative `next_actions` for tests pass + `read_match` (legacy `suggested_next` is compatibility-only)
-  // full response_mode only forwards diagnostics to child nav/search — not a second next-step list
-  // default bundle omits outgoing_calls (provisional) and does not embed tests (use canonical next_actions)
+PREFERRED: impact_bundle(target=<copied target_ref>, path_class=runtime)
+  → if legacy symbol is ambiguous, select a target; no child section ran
+  → read sections[] first: execution is distinct from completeness and trust/mode
+  → follow a section proof_targets[].action_id through canonical next_actions[] + read_match
+  → include_test_mentions=true only for an exact test-path mention pass; zero is still an included section
+  // full response_mode preserves the same sections/actions truth
+  // outgoing_calls remain separate/provisional and require body confirmation
 
 OR sequential:
 search_symbol(anchor, path_class=runtime)
@@ -624,20 +631,25 @@ Heuristic nav is **valid product behavior** — precise SCIP is optional acceler
 | --- | --- |
 | **Trigger** | Will change API/type/behavior; need blast radius before edit |
 | **Habit** | Whole-repo `rg` + manual sort |
-| **Frigg path** | Prefer `impact_bundle(api)`; or runtime symbol → refs → impls → callers → optional tests pass |
+| **Frigg path** | Search a runtime symbol, copy its `target_ref`, then prefer `impact_bundle(target)`; or use sequential refs → impls → callers → optional test pass |
 | **Fallback** | No throwaway shell `rg` on indexed source; use scoped `search_text` for extra textual passes |
-| **Proof** | `read_match` each cluster before editing |
-| **Done** | Navigation-first blast radius with source witnesses |
-| **Product support** | Ref filters, path-class filters, `impact_bundle` |
+| **Proof** | Read section-qualified proof targets, then replay their canonical `next_actions` before editing |
+| **Done** | Target-first blast radius with section-qualified source witnesses |
+| **Product support** | `sections[]` keeps execution, trust, and completeness distinct; exact test evidence is opt-in; outgoing calls stay separate/provisional |
 
 ```text
-PREFERRED: impact_bundle(api, path_class=runtime) → summary then read_match clusters
+PREFERRED:
+1. search_symbol(api, path_class=runtime)
+2. copy the selected row's target_ref unchanged
+3. impact_bundle(target=<copied target_ref>, path_class=runtime)
+4. read sections[] for execution, trust, and completeness before summary counts
+5. use section-qualified proof_targets with canonical next_actions; add include_test_mentions=true only when test evidence is needed
 OR:
 1. search_symbol(api, path_class=runtime)
 2. find_references(symbol, include_definition=false)
 3. find_implementations if trait/interface
 4. incoming_calls for caller graph
-5. search_text(symbol, path_regex='^tests/') when tests matter
+5. search_text(symbol, path_regex='(?:^|/)(?:test|tests)/') when tests matter
 6. read_match on each cluster
 ```
 

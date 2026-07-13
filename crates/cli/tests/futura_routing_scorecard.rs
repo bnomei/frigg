@@ -190,3 +190,33 @@ fn futura_routing_scorecard_first_route_tools_subset_of_public_names() {
         assert!(public.contains(required), "`{required}` must remain public");
     }
 }
+
+#[test]
+fn composer_guidance_rejects_phantom_and_overclaiming_workflows() {
+    let skill = production_skill_markdown();
+    let guidance = include_str!("../src/mcp/guidance.rs");
+    let readme = include_str!("../../../README.md");
+    let discovery = include_str!(
+        "../../../skills/frigg-first-code-search/references/discovery-and-evidence.md"
+    );
+    let navigation = include_str!(
+        "../../../skills/frigg-first-code-search/references/navigation-and-structure.md"
+    );
+
+    for document in [skill.as_str(), guidance, readme, discovery] {
+        assert!(document.contains("reciprocal_rank_fusion"));
+        assert!(document.contains("consensus"));
+        assert!(document.contains("continuation"));
+    }
+    for document in [skill.as_str(), guidance, readme, navigation] {
+        assert!(document.contains("target_ref"));
+        assert!(document.contains("include_test_mentions"));
+        assert!(document.contains("next_actions"));
+    }
+
+    assert!(navigation.contains("not_run_target_unresolved"));
+    assert!(navigation.contains("proof_targets"));
+    assert!(!skill.contains("impact_bundle(symbol, path_class=runtime)"));
+    assert!(!skill.contains("default bundle omits outgoing_calls"));
+    assert!(!discovery.contains("selectable merge strategy"));
+}

@@ -429,6 +429,29 @@ Use `search_batch` when several independent hypotheses should run together. It a
 }
 ```
 
+Batch merge is fixed: responses report `merge_strategy="reciprocal_rank_fusion"` and
+`merge_algorithm_version`; there is no selectable merge strategy in the public schema. Every
+merged row carries `evidence` (probe id, kind, and one-based child rank), `consensus_count`,
+`rrf_score`, and derived `match_strength`. Read that evidence rather than comparing raw scores
+from different search kinds: rows order by consensus, then equal-weight reciprocal-rank fusion,
+then derived text/symbol/hybrid strength and stable coordinates. `probe_summary[].trust` labels
+the child substrate independently of `probe_summary[].completeness`; aggregate `completeness`
+also preserves child and merge-page omissions. Reuse an opaque batch `continuation` only with the
+same normalized request and snapshots. The old `merge="rank_by_probe_hit_strength"` spelling is
+accepted only as a two-minor-release compatibility input, normalizes to RRF, and emits a
+`compatibility_note`; new requests must omit it.
+
+`impact_bundle` is target-first. Prefer a copied `target_ref`; legacy common-name `symbol`
+requests can return structured ambiguity and then run no child section. Read `sections[]` as the
+authoritative envelope: each section has `section`, `execution`, `trust`, `completeness`, rows,
+and row-bound `proof_targets`. `execution` distinguishes `included`, `omitted_by_policy`, and
+`not_run_target_unresolved`; it is not truncation or an exact zero. `trust` is independently
+`resolved_target`, `exact_literal_text`, or `navigation { mode }`. `proof_targets[].action_id`
+selects the exact canonical `next_actions[]` replay for that section row. Test evidence is absent
+unless `include_test_mentions=true`; that opt-in performs an exact-literal test-path pass and a
+zero result remains an included, honest zero section. `impact_bundle` does not compose outgoing
+calls; use that provisional navigation tool separately when needed.
+
 Use `impact_bundle` when you already know the symbol and need its references, callers, and implementations in one response:
 
 ```json

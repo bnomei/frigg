@@ -229,13 +229,14 @@ Example flow:
 
 ## `impact_bundle`
 
-`impact_bundle` composes symbol lookup, references, incoming calls, and (when requested by policy)
-implementations. Its section envelopes are `symbols_completeness`,
-`references_completeness`, `incoming_calls_completeness`, and optional
-`implementations_completeness`; the top-level `completeness` is an `impact_section` aggregate.
-It never upgrades a child that is truncated or incomplete. Read each included section before
-claiming the overall investigation is exhaustive. `implementations_included=false` is an
-explicit policy omission, not hidden truncation.
+`impact_bundle` composes symbol lookup, references, incoming calls, and policy-selected
+implementations. `sections[]` is authoritative: every section has the closed `section` name,
+`execution` (`included`, `omitted_by_policy`, or `not_run_target_unresolved`), independent
+`trust`, `completeness`, rows, and row-bound `proof_targets`. Do not turn a policy omission or an
+unresolved target into truncation, an exact zero, or semantic coverage. Trust is independently
+`resolved_target { resolution_source }`, `exact_literal_text`, or `navigation { mode }`.
+The top-level `completeness` only conjoins included sections; legacy per-list fields and summary
+counts remain compatibility projections. `top_paths_truncated` is only a summary-shaping signal.
 
 For an exact prior result, send its `target_ref` as `target` instead of reducing it to a symbol
 name. `impact_bundle` accepts exactly one of non-empty legacy `symbol` or `target`:
@@ -253,6 +254,14 @@ name. `impact_bundle` accepts exactly one of non-empty legacy `symbol` or `targe
 
 The supplied target resolves once and is given directly to each child computation; Frigg does not
 rerank a symbol name or silently choose a first match. Legacy `impact_bundle(symbol=...)` remains
-valid, but same-rank results return normal disambiguation. Do not combine `target` with `symbol`,
+valid, but same-rank results return structured disambiguation and every child section is
+`not_run_target_unresolved`. Do not combine `target` with `symbol`,
 `path`, `line`, or `column` (`CONFLICTING_TARGET_INPUT`). A matching top-level `repository_id` is
 an allowed assertion; a different one returns `TARGET_REPOSITORY_MISMATCH`.
+
+`proof_targets[]` deterministically indexes actual returned rows by section and carries the
+canonical `action_id`; locate that id in `next_actions[]` and invoke its named existing tool with
+the exact arguments. Test mentions are not default evidence: set `include_test_mentions=true` to
+run one exact-literal search under `test`/`tests`; a zero result stays an included zero section
+without a row-bound proof action. `impact_bundle` never adds outgoing calls—use the separate,
+provisional `outgoing_calls` surface and confirm it with source reads.
