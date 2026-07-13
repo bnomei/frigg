@@ -563,6 +563,14 @@ impl RecoveryFields {
             input.tool.trim()
         };
 
+        // An explicit classification from the calling tool is more specific than the
+        // workspace-wide readiness diagnostic. For example, navigation that did run but
+        // lacks SCIP data must explain that graph limitation even when the workspace also
+        // needs an index refresh.
+        if let Some(reason) = input.reason_override {
+            return Self::for_zero_hit_reason(tool, query, reason, scope, index);
+        }
+
         if let Some(freshness) = index.as_ref().and_then(|index| index.freshness.as_ref()) {
             match freshness.post_edit.strategy {
                 WorkspacePostEditStrategy::AdoptRepo => {
@@ -585,10 +593,6 @@ impl RecoveryFields {
                 | WorkspacePostEditStrategy::WaitForRefresh
                 | WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles => {}
             }
-        }
-
-        if let Some(reason) = input.reason_override {
-            return Self::for_zero_hit_reason(tool, query, reason, scope, index);
         }
 
         let pattern_type_is_literal = input.pattern_type_is_literal.unwrap_or(true);

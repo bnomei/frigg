@@ -98,12 +98,15 @@ async fn run_workspace_recommended_action(report: &Mutex<harness::BenchReport>, 
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "workspace_recommended_action",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "workspace_recommended_action",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_hybrid_ranking_note(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -139,12 +142,15 @@ async fn run_hybrid_ranking_note(report: &Mutex<harness::BenchReport>, root: &Pa
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "hybrid_ranking_note_suggested_next",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "hybrid_ranking_note_suggested_next",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_search_batch_multi_probe(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -203,12 +209,15 @@ async fn run_search_batch_multi_probe(report: &Mutex<harness::BenchReport>, root
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "search_batch_multi_probe",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "search_batch_multi_probe",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_known_symbol(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -247,12 +256,15 @@ async fn run_known_symbol(report: &Mutex<harness::BenchReport>, root: &Path) {
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "known_symbol_search_symbol",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "known_symbol_search_symbol",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_zero_hit_recovery(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -285,12 +297,15 @@ async fn run_zero_hit_recovery(report: &Mutex<harness::BenchReport>, root: &Path
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "zero_hit_recovery_fields",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "zero_hit_recovery_fields",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_read_match_handle(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -352,7 +367,7 @@ async fn run_read_match_handle(report: &Mutex<harness::BenchReport>, root: &Path
     .await;
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("read_match_handle_path", Surface::Dogfood, started, outcome);
 }
 
@@ -392,7 +407,7 @@ async fn run_ignored_docs_absence(report: &Mutex<harness::BenchReport>, root: &P
     .await;
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("ignored_docs_absence", Surface::Dogfood, started, outcome);
 }
 
@@ -430,12 +445,15 @@ async fn run_citation_read_file(report: &Mutex<harness::BenchReport>, root: &Pat
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "citation_mode_read_file",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "citation_mode_read_file",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -495,7 +513,7 @@ async fn run_list_files_pagination(report: &Mutex<harness::BenchReport>, root: &
     .await;
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("list_files_pagination", Surface::Dogfood, started, outcome);
 }
 
@@ -529,12 +547,15 @@ async fn run_document_symbols_outline(report: &Mutex<harness::BenchReport>, root
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "document_symbols_outline_pagination",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "document_symbols_outline_pagination",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_impact_bundle_if_registered(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -580,12 +601,15 @@ async fn run_impact_bundle_if_registered(report: &Mutex<harness::BenchReport>, r
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "impact_bundle_composition",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "impact_bundle_composition",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }
 
 async fn run_wrong_repo_zero_recovery(report: &Mutex<harness::BenchReport>, root: &Path) {
@@ -637,10 +661,13 @@ async fn run_wrong_repo_zero_recovery(report: &Mutex<harness::BenchReport>, root
         Ok(())
     }
     .await;
-    report.lock().unwrap().record(
-        "wrong_repo_zero_recovery",
-        Surface::Dogfood,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "wrong_repo_zero_recovery",
+            Surface::Dogfood,
+            started,
+            outcome,
+        );
 }

@@ -78,7 +78,7 @@ async fn run_php_board(report: &Mutex<harness::BenchReport>) {
     cleanup_workspace_root(&root);
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("lang_php_text_and_symbol", Surface::Lang, started, outcome);
 }
 
@@ -97,7 +97,7 @@ async fn run_ts_board(report: &Mutex<harness::BenchReport>) {
     cleanup_workspace_root(&root);
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("lang_ts_text_and_symbol", Surface::Lang, started, outcome);
 }
 
@@ -114,12 +114,15 @@ async fn run_python_board(report: &Mutex<harness::BenchReport>) {
     )
     .await;
     cleanup_workspace_root(&root);
-    report.lock().unwrap().record(
-        "lang_python_text_and_symbol",
-        Surface::Lang,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "lang_python_text_and_symbol",
+            Surface::Lang,
+            started,
+            outcome,
+        );
 }
 
 async fn lang_text_and_symbol(

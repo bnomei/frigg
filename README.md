@@ -52,7 +52,7 @@ The narrow promise is source-backed context for AI agents: repository-aware sear
 Fast path on macOS or GNU/glibc Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.8.0 sh
+curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.9.0 sh
 ```
 
 The installer downloads the matching GitHub Release archive, verifies its `.sha256`, and installs the `frigg` binary to `$HOME/.local/bin` unless `FRIGG_INSTALL_DIR` is set. When `FRIGG_VERSION` is unset, it resolves the latest GitHub Release.
@@ -65,7 +65,7 @@ Other install surfaces:
 | Cargo prebuilt binary | `cargo binstall frigg` |
 | Cargo source fallback | `cargo install frigg` |
 | npm wrapper | `npx @bnomei/frigg --version` |
-| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.8.0 --version` |
+| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.9.0 --version` |
 | Scoop | `scoop bucket add frigg https://github.com/bnomei/scoop-frigg && scoop install frigg` |
 
 The prebuilt paths are the point: one local binary, no Python 3.11+ runtime, no local C compiler, and no ONNX model download unless you explicitly enable the local semantic runtime.
@@ -82,7 +82,7 @@ target/release/frigg --version
 Expected output:
 
 ```text
-frigg 0.8.0
+frigg 0.9.0
 ```
 
 Frigg's source currently requires Rust 1.88 or newer.
@@ -342,6 +342,8 @@ rerunning the typed origin producer and selecting a fresh `match_id`; never reus
 - `snapshot.state`: whether the indexed snapshot is usable (`ready` is independent of watch activity);
 - `continuous`: watch state plus `can_converge_by_waiting`;
 - `post_edit.strategy`: the safe next step after edits.
+- `dirty_scope` and `changed_paths_since_snapshot`: whether the snapshot differs and which known paths need special handling;
+- `tool_capabilities`: per-tool freshness rows with the source basis, availability, path scope, and any required recovery.
 
 For a clean `ready` snapshot, use indexed Frigg tools on both HTTP and stdio; do not wait for a
 watch. For known dirty paths, use `wait_for_refresh` only when a leased watch is actually
@@ -349,6 +351,8 @@ watch. For known dirty paths, use `wait_for_refresh` only when a leased watch is
 `notify_degraded`, waiting is not a recovery: use live-disk reads for touched paths while keeping
 the snapshot for unaffected paths. Missing, uninitialized, or erroneous storage requires the
 operator/CLI command `frigg index`; MCP exposes no reindex or other public write tool.
+When a requested tool or path has a capability row, use that row as the more specific decision
+instead of inferring safety from the aggregate state alone.
 
 ```json
 // HTTP: shared runtime and leased watch can refresh queued edits.
@@ -691,7 +695,7 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.8.0
+  FRIGG_VERSION: 0.9.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
@@ -720,7 +724,7 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.8.0
+  FRIGG_VERSION: 0.9.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:

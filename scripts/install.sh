@@ -17,7 +17,7 @@ Usage:
   curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | sh
 
 Environment:
-  FRIGG_VERSION      Release version or tag, for example 0.8.0 or v0.8.0.
+  FRIGG_VERSION      Release version or tag, for example 0.9.0 or v0.9.0.
                      Defaults to the latest GitHub Release.
   FRIGG_INSTALL_DIR  Install directory. Defaults to $HOME/.local/bin.
 

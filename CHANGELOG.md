@@ -2,12 +2,13 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-07-13
+
 - Workspace freshness now adds authoritative `snapshot`, `continuous`, `post_edit`, dirty-scope,
   changed-path, and per-tool capability fields. Existing `recommended_action`, `gate_hint`, and
   `fresh_enough_for` remain derived compatibility fields for at least two consecutive minor
   releases. `wait_watch` is projected only from `wait_for_refresh`; CLI `frigg index` remains
   operator-only and no public write/reindex MCP tool was added.
-
 - Trust-preserving composers: `search_batch` now exposes fixed
   `merge_strategy=reciprocal_rank_fusion`, `merge_algorithm_version`, per-row evidence,
   consensus, RRF, and derived strength instead of implying cross-kind raw-score comparison.
@@ -15,24 +16,20 @@
   The historical `merge="rank_by_probe_hit_strength"` input remains accepted only for two minor
   releases, normalizes to RRF, and returns a compatibility note; the canonical schema no longer
   presents merge as a choice.
-
 - Fail-closed impact composition: `impact_bundle` now resolves copied `target_ref` values once,
   reports legacy same-rank ambiguity without running children, and exposes section execution,
   trust, completeness, and section-qualified proof targets. Test mentions are explicit via
   `include_test_mentions=true`; outgoing calls remain outside the bundle. These additive fields
   preserve direct symbol compatibility and do not require persisted migration or backfill.
-
 - Stable result targets: search and navigation rows now add optional `target_ref`; navigation
   parameters add optional `target`; and `impact_bundle` accepts exactly one of `target` or legacy
   non-empty `symbol`. Result-match targets are session/source scoped, stable-symbol targets are
   repository/corpus scoped, and target-mode impact resolves the supplied target once without
   reranking it. Existing direct symbol/location clients remain compatible.
-
 - Typed executable follow-ups: `next_actions` is authoritative and names existing MCP tools with
   exact `arguments`; hosts choose role/order/dependencies and retain authorization. Compact and
   full modes carry identical actions. Stale/mixed proof retries use typed origins and fresh match
   ids. `suggested_next` remains a deprecated lossy projection for at least two minor releases.
-
 - Exact-search completeness rollout: bounded MCP collections now expose typed `completeness`
   (`unit`, page-local `returned`, exact-or-absent `total`, complete/truncated state, typed
   reasons, and canonical v2 `continuation`); valid legacy `resume_from` remains accepted during

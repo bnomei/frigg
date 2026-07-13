@@ -2168,6 +2168,27 @@ mod tests {
         server
     }
 
+    fn seed_ready_manifest_snapshot(workspace: &AttachedWorkspace) {
+        let db_path = crate::storage::ensure_provenance_db_parent_dir(&workspace.root)
+            .expect("presentation fixture storage path should work");
+        let storage = Storage::new(db_path);
+        storage
+            .initialize()
+            .expect("presentation fixture storage should initialize");
+        storage
+            .upsert_manifest(
+                &workspace.runtime_repository_id,
+                "presentation-ready-snapshot",
+                &[crate::storage::ManifestEntry {
+                    path: "src/lib.rs".to_owned(),
+                    sha256: "presentation-fixture".to_owned(),
+                    size_bytes: 0,
+                    mtime_ns: None,
+                }],
+            )
+            .expect("presentation fixture should seed a ready manifest snapshot");
+    }
+
     fn sample_text_match(repository_id: &str, path: &str) -> TextMatch {
         TextMatch {
             match_id: None,
@@ -2359,6 +2380,7 @@ mod tests {
             .into_iter()
             .next()
             .expect("startup workspace");
+        seed_ready_manifest_snapshot(&workspace);
         server.test_record_gate_dirty_paths(
             &workspace.repository_id,
             &[String::from("src/lib.rs")],

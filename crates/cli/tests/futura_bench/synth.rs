@@ -73,12 +73,15 @@ async fn run_regex_trap(report: &Mutex<harness::BenchReport>, fixture: &std::pat
     }
     .await;
     cleanup_workspace_root(&root);
-    report.lock().unwrap().record(
-        "search_text_regex_trap_recovery",
-        Surface::Synth,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "search_text_regex_trap_recovery",
+            Surface::Synth,
+            started,
+            outcome,
+        );
 }
 
 async fn run_count_only(report: &Mutex<harness::BenchReport>, fixture: &std::path::Path) {
@@ -119,7 +122,7 @@ async fn run_count_only(report: &Mutex<harness::BenchReport>, fixture: &std::pat
     cleanup_workspace_root(&root);
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("count_only_shape", Surface::Synth, started, outcome);
 }
 
@@ -164,7 +167,7 @@ async fn run_zero_hit(report: &Mutex<harness::BenchReport>, fixture: &std::path:
     cleanup_workspace_root(&root);
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("zero_hit_recovery_synth", Surface::Synth, started, outcome);
 }
 
@@ -224,7 +227,7 @@ async fn run_handle_path(report: &Mutex<harness::BenchReport>, fixture: &std::pa
     cleanup_workspace_root(&root);
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("read_match_handle_synth", Surface::Synth, started, outcome);
 }
 
@@ -314,10 +317,13 @@ async fn run_post_edit_dirty_gate(report: &Mutex<harness::BenchReport>, fixture:
     }
     .await;
     cleanup_workspace_root(&root);
-    report.lock().unwrap().record(
-        "post_edit_dirty_gate_path_scoped",
-        Surface::Synth,
-        started,
-        outcome,
-    );
+    report
+        .lock()
+        .expect("benchmark report mutex should not be poisoned")
+        .record(
+            "post_edit_dirty_gate_path_scoped",
+            Surface::Synth,
+            started,
+            outcome,
+        );
 }

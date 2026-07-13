@@ -41,7 +41,7 @@ struct LatencyStats {
 impl LatencyStats {
     fn from_samples(mut samples: Vec<f64>) -> Result<Self, String> {
         require(!samples.is_empty(), "latency samples empty")?;
-        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        samples.sort_by(|a, b| a.total_cmp(b));
         let n = samples.len();
         let mean_ms = samples.iter().sum::<f64>() / n as f64;
         Ok(Self {
@@ -384,7 +384,7 @@ pub async fn run_search_text_latency(report: &Mutex<harness::BenchReport>, fixtu
     cleanup_workspace_root(&root);
     report
         .lock()
-        .unwrap()
+        .expect("benchmark report mutex should not be poisoned")
         .record("slo_search_text_vs_rg", Surface::Synth, started, outcome);
 }
 

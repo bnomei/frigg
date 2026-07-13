@@ -187,7 +187,10 @@ treat workspace as the answer.
 
 `workspace.freshness` is authoritative; the older `recommended_action`, `gate_hint`, and
 `fresh_enough_for` fields are derived compatibility projections retained for two minor releases.
-Read all three axes before choosing a recovery:
+Read the three state axes before choosing a recovery, then inspect `dirty_scope`,
+`changed_paths_since_snapshot`, and any matching `tool_capabilities` row. Capability rows state
+the source basis, availability, path scope, and required recovery for a particular tool/path, so
+they override an aggregate inference when they are present:
 
 | Authoritative state | Action |
 | --- | --- |
