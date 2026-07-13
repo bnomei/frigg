@@ -88,6 +88,207 @@ pub fn workspace_gate_hint(action: WorkspaceGateAction) -> Option<String> {
     }
 }
 
+/// Authoritative readiness of the indexed snapshot, independent of watch activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSnapshotFreshnessState {
+    Detached,
+    Missing,
+    Uninitialized,
+    Ready,
+    Error,
+    Unavailable,
+}
+
+/// Snapshot-readiness state and bounded storage detail when it is unavailable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceSnapshotSummary {
+    pub state: WorkspaceSnapshotFreshnessState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_available: Option<bool>,
+}
+
+/// Continuous refresh state for the current workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceContinuousFreshnessState {
+    ModeOff,
+    NoLease,
+    Active,
+    Debouncing,
+    Refreshing,
+    RetryBackoff,
+    Blocked,
+    NotifyDegraded,
+}
+
+/// Whether the running process can converge the indexed snapshot without client intervention.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceContinuousFreshnessSummary {
+    pub state: WorkspaceContinuousFreshnessState,
+    pub can_converge_by_waiting: bool,
+}
+
+/// Safe strategy after repository edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePostEditStrategy {
+    UseSnapshot,
+    UseLiveDiskForTouchedFiles,
+    WaitForRefresh,
+    RunCliIndex,
+    AdoptRepo,
+    FriggUnavailable,
+}
+
+/// Authoritative post-edit strategy, deliberately separate from snapshot and continuous state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePostEditSummary {
+    pub strategy: WorkspacePostEditStrategy,
+}
+
+/// Scope of working-tree changes relative to the indexed snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceDirtyScope {
+    Clean,
+    KnownChangedPaths,
+    UnknownRepositoryDirtiness,
+}
+
+/// Data source a tool consults when serving the current request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceToolFreshnessSourceBasis {
+    SnapshotIndex,
+    LiveManifest,
+    LiveFile,
+    HandleBoundLiveContent,
+    Mixed,
+    NotApplicable,
+}
+
+/// Current freshness availability of a tool for the applicable path scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceToolFreshnessAvailability {
+    FullyFresh,
+    StalePossible,
+    Unavailable,
+    NotApplicable,
+}
+
+/// Paths to which a tool capability row applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceToolFreshnessPathScope {
+    RepositoryWide,
+    TouchedPaths,
+    UntouchedPaths,
+    HandleGenerationBound,
+    NotApplicable,
+}
+
+/// One live tool's path-scoped freshness capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceToolFreshnessCapability {
+    pub tool_name: String,
+    pub source_basis: WorkspaceToolFreshnessSourceBasis,
+    pub availability: WorkspaceToolFreshnessAvailability,
+    pub path_scope: WorkspaceToolFreshnessPathScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_recovery: Option<WorkspacePostEditStrategy>,
+}
+
+/// The authoritative freshness axes returned by `workspace`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceFreshnessSummary {
+    pub snapshot: WorkspaceSnapshotSummary,
+    pub continuous: WorkspaceContinuousFreshnessSummary,
+    pub post_edit: WorkspacePostEditSummary,
+    pub dirty_scope: WorkspaceDirtyScope,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_paths_since_snapshot: Vec<String>,
+    #[serde(default)]
+    pub tool_capabilities: Vec<WorkspaceToolFreshnessCapability>,
+}
+
+/// Legacy workspace fields projected exclusively from authoritative freshness state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFreshnessCompatibilityProjection {
+    pub recommended_action: WorkspaceGateAction,
+    pub gate_hint: Option<String>,
+    pub fresh_enough_for: Vec<String>,
+}
+
+impl WorkspaceFreshnessSummary {
+    /// Conservative temporary value used until the server derives authoritative freshness.
+    ///
+    /// T004 replaces this mechanical initializer with the pure runtime-state derivation.
+    pub(crate) fn migration_placeholder() -> Self {
+        Self {
+            snapshot: WorkspaceSnapshotSummary {
+                state: WorkspaceSnapshotFreshnessState::Unavailable,
+                storage_available: None,
+            },
+            continuous: WorkspaceContinuousFreshnessSummary {
+                state: WorkspaceContinuousFreshnessState::NoLease,
+                can_converge_by_waiting: false,
+            },
+            post_edit: WorkspacePostEditSummary {
+                strategy: WorkspacePostEditStrategy::FriggUnavailable,
+            },
+            dirty_scope: WorkspaceDirtyScope::UnknownRepositoryDirtiness,
+            changed_paths_since_snapshot: Vec::new(),
+            tool_capabilities: Vec::new(),
+        }
+    }
+
+    /// Projects compatibility fields retained during the workspace freshness migration.
+    pub fn compatibility_projection(&self) -> WorkspaceFreshnessCompatibilityProjection {
+        let recommended_action = match self.post_edit.strategy {
+            WorkspacePostEditStrategy::UseSnapshot => WorkspaceGateAction::Ready,
+            WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles => {
+                WorkspaceGateAction::UseLiveDiskForTouchedFiles
+            }
+            WorkspacePostEditStrategy::WaitForRefresh => WorkspaceGateAction::WaitWatch,
+            WorkspacePostEditStrategy::RunCliIndex => WorkspaceGateAction::Reindex,
+            WorkspacePostEditStrategy::AdoptRepo => WorkspaceGateAction::AdoptRepo,
+            WorkspacePostEditStrategy::FriggUnavailable => WorkspaceGateAction::FriggUnavailable,
+        };
+        let gate_hint = match self.post_edit.strategy {
+            WorkspacePostEditStrategy::RunCliIndex => workspace_gate_hint(recommended_action),
+            WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles => Some(
+                "Snapshot may be stale for changed paths. Use live-disk reads for touched paths; do not wait for watch refresh."
+                    .to_owned(),
+            ),
+            WorkspacePostEditStrategy::AdoptRepo => {
+                Some("Adopt a repository before using repository-scoped tools.".to_owned())
+            }
+            WorkspacePostEditStrategy::FriggUnavailable => {
+                Some("Frigg workspace state is unavailable; restore the service before retrying.".to_owned())
+            }
+            WorkspacePostEditStrategy::UseSnapshot | WorkspacePostEditStrategy::WaitForRefresh => None,
+        };
+        let mut fresh_enough_for = self
+            .tool_capabilities
+            .iter()
+            .filter(|capability| {
+                capability.availability == WorkspaceToolFreshnessAvailability::FullyFresh
+            })
+            .map(|capability| capability.tool_name.clone())
+            .collect::<Vec<_>>();
+        fresh_enough_for.sort();
+        fresh_enough_for.dedup();
+
+        WorkspaceFreshnessCompatibilityProjection {
+            recommended_action,
+            gate_hint,
+            fresh_enough_for,
+        }
+    }
+}
+
 /// Aggregate precise readiness reported by workspace lifecycle tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -369,6 +570,8 @@ pub struct WorkspaceResponse {
     pub repositories: Vec<RepositorySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeStatusSummary>,
+    /// Authoritative freshness state. The following top-level gate fields are compatibility projections.
+    pub freshness: WorkspaceFreshnessSummary,
     /// Session gate: what the agent should do next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_action: Option<WorkspaceGateAction>,
@@ -859,6 +1062,7 @@ mod tests {
             session_default: false,
             repositories: Vec::new(),
             runtime: None,
+            freshness: fixture_freshness(WorkspacePostEditStrategy::RunCliIndex),
             recommended_action: Some(WorkspaceGateAction::Reindex),
             gate_hint: workspace_gate_hint(WorkspaceGateAction::Reindex),
             working_tree_dirty: None,
@@ -881,6 +1085,7 @@ mod tests {
             session_default: false,
             repositories: Vec::new(),
             runtime: None,
+            freshness: fixture_freshness(WorkspacePostEditStrategy::AdoptRepo),
             recommended_action: Some(WorkspaceGateAction::AdoptRepo),
             gate_hint: None,
             working_tree_dirty: Some(false),
@@ -897,6 +1102,7 @@ mod tests {
         assert_eq!(value["watch_active"], false);
         assert_eq!(value["lexical_ready"], true);
         assert_eq!(value["semantic_ready"], false);
+        assert_eq!(value["freshness"]["snapshot"]["state"], "ready");
         assert!(value.get("changed_paths_since_snapshot").is_none());
         assert!(value.get("fresh_enough_for").is_none());
         assert!(value.get("routing_stats").is_none());
@@ -925,5 +1131,100 @@ mod tests {
             serde_json::to_value(WatchStatusReason::Debouncing).expect("serialize"),
             json!("debouncing")
         );
+    }
+
+    fn fixture_freshness(strategy: WorkspacePostEditStrategy) -> WorkspaceFreshnessSummary {
+        WorkspaceFreshnessSummary {
+            snapshot: WorkspaceSnapshotSummary {
+                state: WorkspaceSnapshotFreshnessState::Ready,
+                storage_available: Some(true),
+            },
+            continuous: WorkspaceContinuousFreshnessSummary {
+                state: WorkspaceContinuousFreshnessState::Active,
+                can_converge_by_waiting: false,
+            },
+            post_edit: WorkspacePostEditSummary { strategy },
+            dirty_scope: WorkspaceDirtyScope::Clean,
+            changed_paths_since_snapshot: Vec::new(),
+            tool_capabilities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn freshness_summary_uses_closed_snake_case_wire_values_and_omits_empty_paths() {
+        let freshness = fixture_freshness(WorkspacePostEditStrategy::WaitForRefresh);
+        let value = serde_json::to_value(freshness).expect("freshness should serialize");
+
+        assert_eq!(value["snapshot"]["state"], "ready");
+        assert_eq!(value["continuous"]["state"], "active");
+        assert_eq!(value["post_edit"]["strategy"], "wait_for_refresh");
+        assert_eq!(value["dirty_scope"], "clean");
+        assert!(value.get("changed_paths_since_snapshot").is_none());
+        assert_eq!(value["tool_capabilities"], json!([]));
+    }
+
+    #[test]
+    fn compatibility_projection_maps_each_strategy_and_sorts_fresh_tools() {
+        let expected = [
+            (
+                WorkspacePostEditStrategy::UseSnapshot,
+                WorkspaceGateAction::Ready,
+            ),
+            (
+                WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles,
+                WorkspaceGateAction::UseLiveDiskForTouchedFiles,
+            ),
+            (
+                WorkspacePostEditStrategy::WaitForRefresh,
+                WorkspaceGateAction::WaitWatch,
+            ),
+            (
+                WorkspacePostEditStrategy::RunCliIndex,
+                WorkspaceGateAction::Reindex,
+            ),
+            (
+                WorkspacePostEditStrategy::AdoptRepo,
+                WorkspaceGateAction::AdoptRepo,
+            ),
+            (
+                WorkspacePostEditStrategy::FriggUnavailable,
+                WorkspaceGateAction::FriggUnavailable,
+            ),
+        ];
+
+        for (strategy, action) in expected {
+            let mut freshness = fixture_freshness(strategy);
+            freshness.tool_capabilities = vec![
+                WorkspaceToolFreshnessCapability {
+                    tool_name: "search_text".to_owned(),
+                    source_basis: WorkspaceToolFreshnessSourceBasis::SnapshotIndex,
+                    availability: WorkspaceToolFreshnessAvailability::FullyFresh,
+                    path_scope: WorkspaceToolFreshnessPathScope::RepositoryWide,
+                    required_recovery: None,
+                },
+                WorkspaceToolFreshnessCapability {
+                    tool_name: "read_file".to_owned(),
+                    source_basis: WorkspaceToolFreshnessSourceBasis::LiveFile,
+                    availability: WorkspaceToolFreshnessAvailability::FullyFresh,
+                    path_scope: WorkspaceToolFreshnessPathScope::TouchedPaths,
+                    required_recovery: None,
+                },
+                WorkspaceToolFreshnessCapability {
+                    tool_name: "read_match".to_owned(),
+                    source_basis: WorkspaceToolFreshnessSourceBasis::HandleBoundLiveContent,
+                    availability: WorkspaceToolFreshnessAvailability::StalePossible,
+                    path_scope: WorkspaceToolFreshnessPathScope::HandleGenerationBound,
+                    required_recovery: Some(WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles),
+                },
+            ];
+
+            let projection = freshness.compatibility_projection();
+            assert_eq!(projection.recommended_action, action);
+            assert_eq!(projection.fresh_enough_for, ["read_file", "search_text"]);
+            assert_eq!(
+                projection.recommended_action == WorkspaceGateAction::WaitWatch,
+                strategy == WorkspacePostEditStrategy::WaitForRefresh,
+            );
+        }
     }
 }
