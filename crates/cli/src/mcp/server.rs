@@ -174,6 +174,9 @@ mod runtime_status;
 mod search_tools;
 mod symbol_index;
 mod workspace;
+// T002 establishes the pure derivation before T004 wires it into response handlers.
+#[allow(dead_code)]
+mod workspace_freshness;
 mod workspace_session;
 
 /// Aggregate counts from building repository symbol corpora for diagnostics benchmarks.
