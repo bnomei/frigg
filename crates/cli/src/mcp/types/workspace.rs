@@ -1205,4 +1205,35 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn workspace_response_compatibility_fields_are_sourced_from_the_single_projector() {
+        // This source-visible boundary prevents a future response constructor from inventing a
+        // legacy value that contradicts the authoritative freshness axes. Precise-generation
+        // `recommended_action` fields are a different type and intentionally out of scope.
+        let server_source = include_str!("../server.rs");
+        let response_start = server_source
+            .find("fn workspace_response(&self) -> WorkspaceResponse")
+            .expect("workspace response constructor must remain source-visible");
+        let response_end = server_source[response_start..]
+            .find("    /// Optional lexical/semantic ready flags")
+            .expect("workspace response constructor must have a stable boundary")
+            + response_start;
+        let response_source = &server_source[response_start..response_end];
+
+        assert!(
+            response_source.contains("let compatibility = freshness.compatibility_projection();"),
+            "workspace compatibility must be produced by WorkspaceFreshnessSummary::compatibility_projection"
+        );
+        for field in [
+            "recommended_action: Some(compatibility.recommended_action)",
+            "gate_hint: compatibility.gate_hint",
+            "fresh_enough_for: Some(compatibility.fresh_enough_for)",
+        ] {
+            assert!(
+                response_source.contains(field),
+                "workspace response must project `{field}` rather than author it independently"
+            );
+        }
+    }
 }

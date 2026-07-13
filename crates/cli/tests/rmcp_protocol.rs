@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use frigg::mcp::{
     FriggMcpServer,
     tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile},
-    types::{NextAction, NextActionId, NextActionRole, NextActionTarget},
+    types::{NextAction, NextActionId, NextActionRole, NextActionTarget, PUBLIC_WRITE_TOOL_NAMES},
 };
 use frigg::settings::FriggConfig;
 use rmcp::{
@@ -223,6 +223,75 @@ async fn canonical_next_actions_validate_against_live_rmcp_schemas_on_all_profil
     for profile in ToolSurfaceProfile::ALL {
         let tools = tools_list_for_profile(profile).await;
         assert_actions_validate_against_live_schemas(profile, &tools);
+    }
+}
+
+/// Prove against actual RMCP descriptors that workspace keeps the additive freshness contract
+/// while preserving the compatibility fields. The router surface, rather than a hand-maintained
+/// list, remains the authority for capability membership.
+#[tokio::test]
+async fn workspace_freshness_schema_and_live_surface_are_read_only_and_complete() {
+    assert!(
+        PUBLIC_WRITE_TOOL_NAMES.is_empty(),
+        "workspace freshness must not introduce a public write/reindex surface"
+    );
+
+    for profile in ToolSurfaceProfile::ALL {
+        let tools = tools_list_for_profile(profile).await;
+        let actual_names = tools
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<BTreeSet<_>>();
+        let expected_names = manifest_for_tool_surface_profile(profile)
+            .tool_names
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_names,
+            expected_names,
+            "{} tools/list must exactly match the live capability surface",
+            profile.as_str()
+        );
+        assert!(
+            !actual_names.iter().any(|name| name.contains("index")),
+            "{} tools/list must not expose CLI-only index repair: {actual_names:?}",
+            profile.as_str()
+        );
+
+        let workspace = tool_named(&tools, "workspace");
+        let output = workspace
+            .output_schema
+            .as_ref()
+            .expect("workspace must publish an outputSchema");
+        let output_properties = schema_properties(output, "workspace outputSchema");
+        for field in [
+            "freshness",
+            "recommended_action",
+            "gate_hint",
+            "fresh_enough_for",
+        ] {
+            assert!(
+                output_properties.contains_key(field),
+                "workspace outputSchema must retain `{field}`"
+            );
+        }
+        for field in [
+            "snapshot",
+            "continuous",
+            "post_edit",
+            "dirty_scope",
+            "changed_paths_since_snapshot",
+            "tool_capabilities",
+            "source_basis",
+            "availability",
+            "path_scope",
+            "required_recovery",
+        ] {
+            assert!(
+                schema_contains_key(&Value::Object(output.as_ref().clone()), field),
+                "workspace outputSchema must expose freshness `{field}`"
+            );
+        }
     }
 }
 
@@ -754,6 +823,16 @@ fn schema_properties<'a>(
         .get("properties")
         .and_then(Value::as_object)
         .unwrap_or_else(|| panic!("{label} should define object properties"))
+}
+
+fn schema_contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.contains_key(key) || object.values().any(|child| schema_contains_key(child, key))
+        }
+        Value::Array(values) => values.iter().any(|child| schema_contains_key(child, key)),
+        _ => false,
+    }
 }
 
 fn assert_schema_descriptions_are_concise(value: &Value, label: &str) {

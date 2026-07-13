@@ -537,7 +537,10 @@ impl FriggMcpServer {
         let session_result_handle_caches = Arc::new(RwLock::new(Vec::new()));
         Self {
             config: Arc::new(config),
-            tool_router: Self::filtered_tool_router(tool_surface_profile),
+            tool_router: Self::with_optional_playbook_tools(
+                Self::filtered_tool_router(tool_surface_profile),
+                tool_surface_profile,
+            ),
             tool_surface_profile,
             runtime_state: FriggMcpRuntimeState {
                 runtime_profile,
@@ -2304,20 +2307,41 @@ impl FriggMcpServer {
     ) -> Result<Json<ImpactBundleResponse>, ErrorData> {
         self.impact_bundle_impl(params.0).await
     }
+}
 
-    #[cfg_attr(
-        feature = "playbook",
-        tool(
-            name = "playbook_run",
-            description = "Run a trace-oriented playbook and return the resulting trace artifact.",
-            annotations(
-                read_only_hint = true,
-                destructive_hint = false,
-                idempotent_hint = true
-            )
+impl FriggMcpServer {
+    fn with_optional_playbook_tools(
+        router: ToolRouter<Self>,
+        profile: ToolSurfaceProfile,
+    ) -> ToolRouter<Self> {
+        #[cfg(feature = "playbook")]
+        {
+            let mut router = router;
+            if profile == ToolSurfaceProfile::Extended {
+                router.merge(Self::playbook_tool_router());
+            }
+            router
+        }
+        #[cfg(not(feature = "playbook"))]
+        {
+            let _ = profile;
+            router
+        }
+    }
+}
+
+#[cfg(feature = "playbook")]
+#[tool_router(router = playbook_tool_router, vis = "pub(super)")]
+impl FriggMcpServer {
+    #[tool(
+        name = "playbook_run",
+        description = "Run a trace-oriented playbook and return the resulting trace artifact.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
         )
     )]
-    #[cfg(feature = "playbook")]
     pub async fn playbook_run(
         &self,
         params: Parameters<PlaybookRunParams>,
@@ -2325,19 +2349,15 @@ impl FriggMcpServer {
         self.playbook_run_impl(params.0.into()).await
     }
 
-    #[cfg_attr(
-        feature = "playbook",
-        tool(
-            name = "playbook_replay",
-            description = "Replay a playbook against an expected trace artifact and report whether it still matches.",
-            annotations(
-                read_only_hint = true,
-                destructive_hint = false,
-                idempotent_hint = true
-            )
+    #[tool(
+        name = "playbook_replay",
+        description = "Replay a playbook against an expected trace artifact and report whether it still matches.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
         )
     )]
-    #[cfg(feature = "playbook")]
     pub async fn playbook_replay(
         &self,
         params: Parameters<PlaybookReplayParams>,
@@ -2345,19 +2365,15 @@ impl FriggMcpServer {
         self.playbook_replay_impl(params.0).await
     }
 
-    #[cfg_attr(
-        feature = "playbook",
-        tool(
-            name = "playbook_compose_citations",
-            description = "Compose citation payloads from an existing playbook trace artifact.",
-            annotations(
-                read_only_hint = true,
-                destructive_hint = false,
-                idempotent_hint = true
-            )
+    #[tool(
+        name = "playbook_compose_citations",
+        description = "Compose citation payloads from an existing playbook trace artifact.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
         )
     )]
-    #[cfg(feature = "playbook")]
     pub async fn playbook_compose_citations(
         &self,
         params: Parameters<PlaybookComposeCitationsParams>,
