@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Workspace freshness now adds authoritative `snapshot`, `continuous`, `post_edit`, dirty-scope,
+  changed-path, and per-tool capability fields. Existing `recommended_action`, `gate_hint`, and
+  `fresh_enough_for` remain derived compatibility fields for at least two consecutive minor
+  releases. `wait_watch` is projected only from `wait_for_refresh`; CLI `frigg index` remains
+  operator-only and no public write/reindex MCP tool was added.
+
 - Trust-preserving composers: `search_batch` now exposes fixed
   `merge_strategy=reciprocal_rank_fusion`, `merge_algorithm_version`, per-row evidence,
   consensus, RRF, and derived strength instead of implying cross-kind raw-score comparison.

@@ -50,7 +50,7 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
 | **Stdio** (client spawns `frigg`) | One local client that owns the process | **Valid, different contract** — default `WatchMode::Off` (not Auto); often `mode_off`; not “broken Frigg” |
 
 - Managed adopt configs emit **HTTP** (`type: http`, `http://127.0.0.1:37444/mcp`). Keep `frigg serve` running for those clients.
-- Do **not** claim full post-edit watch freshness on stdio when `runtime.watch_status.reason=mode_off` / `no_lease`. Use path-scoped live-disk or wait only if watch is actually on.
+- Do **not** claim full post-edit watch freshness on stdio when `runtime.watch_status.reason=mode_off` / `no_lease`. Use path-scoped live-disk; wait only for a leased `debouncing` or `refreshing` refresh.
 - Do **not** blame ranking, hybrid, or search quality for staleness that is really stdio-without-watch / multi-process stdio races.
 - Stdio is not second-class or deprecated; it is the right shape for a single ephemeral client. Prefer HTTP as soon as a second client or subagent shares the repo.
 
@@ -449,7 +449,7 @@ Handle lifetime (session-scoped, not a durable citation id):
 - Watch refresh with a known dirty set → only anchors on **dirty paths** drop; untouched-path
   bookmarks may still work. Known-empty success (noop refresh) does not wipe handles.
 - Unknown dirty set (notify drop, failed refresh) → whole-repo handle wipe (conservative).
-- After post-edit / use_live_disk / wait_watch→ready for paths you care about:
+- After post-edit / use_live_disk / wait_for_refresh→ready for paths you care about:
     **re-run search** before trusting an old result_handle for proof or citations.
   Do not chain pre-edit handles across a freshness transition for those paths.
 
@@ -494,7 +494,7 @@ Or: presentation_mode=json → use start_line/end_line + path in ```start:end:pa
 | **Fallback** | Shell not a patch for unexplained zeros; check repo/index first |
 | **Proof** | After adoption/health, resume the real scenario tool |
 | **Done** | Workspace used when trust changes, not before every search |
-| **Product support** | `recommended_action`, `gate_hint`, `runtime.watch_status` (reason + dual-class queue depth / dirty count), `runtime.tools_exposed`, optional `lexical_ready`/`semantic_ready`, dirty/changed paths |
+| **Product support** | `freshness.snapshot`, `freshness.continuous`, `freshness.post_edit`, dirty scope and per-tool/path capabilities; legacy `recommended_action`/`gate_hint`/`fresh_enough_for`; `runtime.tools_exposed` |
 
 ```text
 Call workspace(path=...) IF:
@@ -502,18 +502,22 @@ Call workspace(path=...) IF:
 Skip workspace IF:
   - first search hits expected paths and index is ready
 
-Agent health decision tree (branch here only — not full scorecards):
-  1. recommended_action (primary)
-  2. zero-hit recovery / ZeroHitIndex when a search returned empty
-  3. optional lexical_ready / semantic_ready — never promote SCIP generator install mid-task
-     (precise SCIP is an **optional accelerator**; heuristic nav is valid Frigg)
-  4. runtime.watch_status.reason explains wait_watch (mode_off / no_lease / debouncing / refreshing / active);
-     optional refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms (dual-class only — no third queue)
-  5. Transport: read `runtime.profile` + `watch_status.reason` — default stdio is often `mode_off`
-     (watch Off); `no_lease` means watch is on but no session lease. Either way: not a ranking bug —
-     path-scoped live-disk or switch to HTTP+serve for shared freshness; do not invent reindex tools
+Freshness decision tree (authoritative; branch here before legacy fields):
+  1. snapshot=ready + dirty_scope=clean → use snapshot on HTTP or stdio; do not wait
+  2. ready + known dirty paths + leased continuous=debouncing|refreshing → wait_for_refresh;
+     brief wait, then re-check workspace
+  3. ready + dirty + continuous=mode_off|no_lease|retry_backoff|blocked|notify_degraded →
+     can_converge_by_waiting=false; live-disk reads for touched paths only, snapshot for untouched
+  4. snapshot=missing|uninitialized|error → run_cli_index (operator/CLI)
+  5. snapshot=detached → adopt_repo; snapshot=unavailable → frigg_unavailable/recover service
+  6. Use exact canonical next_actions when returned; legacy recommended_action is compatibility only
 
-recommended_action=reindex means index substrate not Ready:
+`wait_watch` is a legacy projection only of `wait_for_refresh`, never an independent wait reason.
+Stdio is valid; default stdio often reports `mode_off`, so use live disk for touched paths or HTTP
+for shared freshness. `read_match` is handle-generation-bound: after a touched edit, rerun its
+producer and use its new pair before citation proof.
+
+run_cli_index means index substrate not Ready:
   - NOT a public MCP tool (tools/list has no reindex / workspace_reindex)
   - operator/CLI: `frigg index` (or attach-side ensure / operator lifecycle)
   - read gate_hint when present; do not invent a write tool or shell-grep the repo "to fix" it
@@ -569,22 +573,16 @@ Multi-attach (common on HTTP):
 | **Fallback** | Live-disk for **touched paths only** (`changed_paths_since_snapshot` / known edit paths) — **never** a license for repo-wide shell grep |
 | **Proof** | Frigg after watch; else direct read of edited paths |
 | **Done** | Freshness visible; no default repo-wide shell verification |
-| **Product support** | `working_tree_dirty`, `changed_paths_since_snapshot`, `runtime.watch_status`, `recommended_action` + `gate_hint` (path-scoped live-disk when dirty+Ready) |
+| **Product support** | `freshness` axes, `changed_paths_since_snapshot`, per-tool/path capabilities, canonical `next_actions`; legacy compatibility fields |
 
 ```text
 1. workspace() after edits
-2. If recommended_action=ready (or fresh_enough_for includes search_*) → Frigg search
-3. If use_live_disk_for_touched_files → read_file / host Read on **those paths only**
-4. If wait_watch → read runtime.watch_status:
-     - reason: mode_off / no_lease / debouncing / refreshing / active
-     - refresh_queue_depth / pending_dirty_path_count / oldest_pending_age_ms when present
-       (dual-class manifest_fast + semantic_followup only — there is no agent_hot third queue)
-     - mode_off / no_lease: **not** full HTTP+watch freshness — use path-scoped live reads for
-       touched paths; prefer loopback HTTP + `frigg serve` if multi-client post-edit freshness matters
-     - high dirty count or rising age_ms → prefer path-scoped live reads on **touched** paths
-       over busy-wait; low depth + debouncing/refreshing → brief wait then re-check workspace
-     - do not "verify" with whole-repo rg or invent micro-retry loops
-5. If reindex → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
+2. If snapshot=ready and dirty_scope=clean → Frigg search on HTTP or stdio; never wait
+3. If post_edit=use_live_disk_for_touched_files → read_file / host Read on **those paths only**
+4. If post_edit=wait_for_refresh → only leased debouncing/refreshing work can converge; wait
+   briefly, then re-check workspace. mode_off/no_lease/retry_backoff/blocked/notify_degraded do
+   not wait: use touched-path live disk or HTTP/operator recovery.
+5. If post_edit=run_cli_index → CLI `frigg index` / operator lifecycle (not an MCP tool); optional path-scoped live reads while index rebuilds
 6. **Handles after freshness:** do not `read_match` a pre-edit result_handle for touched paths.
      Re-run the originating search_text / search_symbol / navigation tool after ready (or after
      watch commits dirty paths) and use its new paired IDs. `STALE_PROOF_ANCHOR` is a
@@ -593,10 +591,10 @@ Multi-attach (common on HTTP):
      opportunistic, not guaranteed across reindex or whole-repo invalidation.
 BAD: workspace dirty → rg -n across the repo
 BAD: recommended_action=reindex → call invented MCP workspace_reindex
-BAD: wait_watch → invent a retry loop without reading watch_status
+BAD: mode_off / no_lease → wait as if watch could converge
 BAD: post-edit → read_match(old_handle) for a file you just changed
 GOOD: workspace dirty → read_file(edited/path.rs) or wait for hot-path watch refresh
-GOOD: wait_watch + pending_dirty_path_count high → path-scoped live read of touched files
+GOOD: wait_for_refresh only for leased debouncing/refreshing work; otherwise path-scoped live read
 GOOD: recommended_action=reindex → frigg index (CLI) or wait for operator; read gate_hint
 GOOD: after ready → new search → new result_handle → read_match
 ```

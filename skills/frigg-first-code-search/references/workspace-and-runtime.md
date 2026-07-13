@@ -29,12 +29,18 @@ Important `workspace` outputs:
 - `session_default`
 - `repositories`
 - `runtime` — includes `tool_surface_profile` (`core`|`extended`), **`tools_exposed`**, and **`watch_status`** (`reason`, `lease_count`, optional `repository_id` / `detail`, dual-class **`refresh_queue_depth`**, **`pending_dirty_path_count`**, **`oldest_pending_age_ms`**)
-- `recommended_action` — session gate next step (`ready`, `adopt_repo`, `wait_watch`, `reindex`, `use_live_disk_for_touched_files`, …) — **primary agent decision**
-- `gate_hint` — optional plain-language recovery when the action is non-obvious (especially `reindex`)
-- `working_tree_dirty`, `changed_paths_since_snapshot`, `watch_active`, `fresh_enough_for`
+- `freshness` — **primary agent decision**: independent `snapshot`, `continuous`, `post_edit`,
+  dirty scope, changed paths, and per-tool/path capabilities
+- legacy `recommended_action`, `gate_hint`, and `fresh_enough_for` — derived compatibility fields
+  retained for at least two minor releases; do not treat them as authoritative
 - `lexical_ready` / `semantic_ready` — optional substrate flags only; not full health scorecards; do not install generators mid-task from these alone
 
-**`watch_status.reason` values (compact):** `mode_off`, `no_lease`, `debouncing`, `refreshing`, `active` (plus reserved: `retry_backoff`, `blocked`, `notify_degraded`). Use to **explain** `wait_watch`, not to replace the gate action. Queue fields are dual-class only (`manifest_fast` + `semantic_followup`) — no third agent-hot queue; high dirty count / age → path-scoped live reads of touched paths.
+**Freshness rule:** a clean `snapshot=ready` is usable on HTTP and stdio regardless of watch state.
+For dirty known paths, only a leased `continuous=debouncing|refreshing` can emit
+`post_edit=wait_for_refresh`. `mode_off`, `no_lease`, `retry_backoff`, `blocked`, and
+`notify_degraded` have `can_converge_by_waiting=false`: use live-disk reads for touched paths,
+not a wait. `active` without queued work is also not a wait instruction. Queue fields are
+dual-class only (`manifest_fast` + `semantic_followup`).
 
 **Tool surface honesty / live SSOT:**
 - Process: `runtime.tools_exposed` or live `tools/list` for **this** server
@@ -43,7 +49,10 @@ Important `workspace` outputs:
 
 **Not authoritative:** Phase 0 / systems inventory freezes, host schema caches, non-public `#[tool]` handlers. Lifecycle tools such as `workspace_index` / `workspace_attach` are not public and never appear in `tools_exposed` / `active_tools`.
 
-**`recommended_action=reindex` is not an MCP tool.** Public Frigg MCP has no reindex/write tool. It means the index substrate is not Ready: run CLI `frigg index` (or operator lifecycle / attach-side ensure). Prefer reading `gate_hint` when present; do not invent `workspace_reindex` or shell-grep the repo as a trust patch.
+**`post_edit=run_cli_index` is not an MCP tool.** Public Frigg MCP has no reindex/write tool. It
+means the snapshot is missing, uninitialized, or erroneous: run CLI `frigg index` (or operator
+lifecycle / attach-side ensure). Do not invent `workspace_reindex` or shell-grep the repo as a
+trust patch.
 
 Repo-aware tools auto-adopt when they can resolve a sensible default or a supplied `repository_id`. Use CLI `frigg init` and `frigg index` for explicit maintenance refreshes.
 
@@ -81,14 +90,18 @@ For explicit semantic troubleshooting only, inspect `workspace.runtime`.
 - `workspace` is a **gate, not a preamble**: call it when adoption is uncertain, paths look wrong, zeros are surprising, multi-repo default may be wrong, or post-edit freshness matters. Skip it when the first search already hits expected paths and the index is ready.
 - If a tool says it cannot resolve a repository, call `workspace` with `path=<repo root or any file inside it>`.
 - Use `workspace` to see the session default and runtime tasks when debugging wrong-repo or freshness issues.
-- After edits: check workspace freshness, then either re-search with Frigg or use **path-scoped** live reads for touched files only — never treat live-disk as a license for repo-wide shell grep.
+- After edits: inspect authoritative `freshness`. Use `wait_for_refresh` only for leased
+  debouncing/refreshing work; otherwise use **path-scoped** live reads for touched files only —
+  never treat live-disk as a license for repo-wide shell grep.
 - A v2 `completeness.continuation` is bound to the issuing tool, normalized request, session,
   repository scope, and repository snapshot. Replay it only as `continuation` on the same request;
   never combine it with legacy `resume_from`. If freshness changes, expect structured
   `STALE_CONTINUATION` recovery and rerun the original request rather than mixing pages.
 - Do not reuse a pre-edit `result_handle` / `read_match` pair for touched paths after a freshness transition; re-run the originating search/navigation tool for a new pair. `read_match` also fail-closes with `STALE_PROOF_ANCHOR` (and no bytes) if its revision-bound source changed, was deleted, or cannot be verified. Watch may drop only dirty-path anchors; reindex and unknown dirty sets wipe the repo's handles.
 - `read_file` is the explicit current-live-content path. It is appropriate when historical proof is not needed, but it does not refresh a stale proof pair.
-- Branch on gate: `ready` → Frigg; `use_live_disk_for_touched_files` → touched paths only; `wait_watch` → wait for watch (read `runtime.watch_status`); `reindex` → CLI `frigg index` / operator (not MCP).
+- Branch on `freshness.post_edit`: `use_snapshot` → Frigg; `use_live_disk_for_touched_files` →
+  touched paths only; `wait_for_refresh` → brief wait then recheck; `run_cli_index` → CLI
+  `frigg index` / operator (not MCP). Prefer exact returned `next_actions` where available.
 - Health vocab: prefer `recommended_action` + recovery zeros; use `lexical_ready`/`semantic_ready` only as secondary substrate signals (never full generator scorecards mid-task).
 - Progressive disclosure: skill scenarios are agent SSOT; `frigg://policy/*` resources are machine/host secondary surfaces — keep aligned but not a second full skill.
 - **Transport dual mode (hosts choose):**

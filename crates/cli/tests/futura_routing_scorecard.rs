@@ -139,6 +139,19 @@ fn futura_routing_scorecard_skill_intent_map_and_shell_card() {
         skill.contains("next_actions"),
         "skill must teach canonical next_actions"
     );
+    for term in [
+        "snapshot=ready",
+        "wait_for_refresh",
+        "mode_off",
+        "no_lease",
+        "run_cli_index",
+        "two minor releases",
+    ] {
+        assert!(
+            skill.contains(term),
+            "skill must document freshness term `{term}`"
+        );
+    }
     assert!(!skill.contains("run_next_action") && !skill.contains("execute_action"));
 }
 
@@ -207,6 +220,12 @@ fn composer_guidance_rejects_phantom_and_overclaiming_workflows() {
         assert!(document.contains("reciprocal_rank_fusion"));
         assert!(document.contains("consensus"));
         assert!(document.contains("continuation"));
+    }
+    for document in [skill.as_str(), guidance, readme] {
+        assert!(document.contains("wait_for_refresh"));
+        assert!(document.contains("mode_off"));
+        assert!(document.contains("no_lease"));
+        assert!(document.contains("frigg index"));
     }
     for document in [skill.as_str(), guidance, readme, navigation] {
         assert!(document.contains("target_ref"));

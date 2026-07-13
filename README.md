@@ -335,6 +335,38 @@ and full responses carry identical executable action data. Stale or mixed proof 
 rerunning the typed origin producer and selecting a fresh `match_id`; never reuse the old match.
 `suggested_next` is a deprecated lossy projection kept for at least two minor releases.
 
+### Workspace freshness and transports
+
+`workspace.freshness` is the authoritative freshness contract. It separates:
+
+- `snapshot.state`: whether the indexed snapshot is usable (`ready` is independent of watch activity);
+- `continuous`: watch state plus `can_converge_by_waiting`;
+- `post_edit.strategy`: the safe next step after edits.
+
+For a clean `ready` snapshot, use indexed Frigg tools on both HTTP and stdio; do not wait for a
+watch. For known dirty paths, use `wait_for_refresh` only when a leased watch is actually
+`debouncing` or `refreshing`. In `mode_off`, `no_lease`, `retry_backoff`, `blocked`, or
+`notify_degraded`, waiting is not a recovery: use live-disk reads for touched paths while keeping
+the snapshot for unaffected paths. Missing, uninitialized, or erroneous storage requires the
+operator/CLI command `frigg index`; MCP exposes no reindex or other public write tool.
+
+```json
+// HTTP: shared runtime and leased watch can refresh queued edits.
+{ "freshness": { "snapshot": { "state": "ready" }, "continuous":
+  { "state": "refreshing", "can_converge_by_waiting": true }, "post_edit":
+  { "strategy": "wait_for_refresh" } } }
+
+// Stdio is valid for a local client; its default watch is often off.
+{ "freshness": { "snapshot": { "state": "ready" }, "continuous":
+  { "state": "mode_off", "can_converge_by_waiting": false }, "post_edit":
+  { "strategy": "use_live_disk_for_touched_files" } } }
+```
+
+Use the exact callable `next_actions` returned by recovery where present; `suggested_next` and
+legacy workspace fields are compatibility projections retained for at least two minor releases.
+After changing a touched path, do not use an old `read_match` proof pair: rerun its producer and
+use the new `result_handle` + `match_id`.
+
 ### Follow a result with `target_ref`
 
 For navigation, the preferred flow is **search → copy a row's `target_ref` → call navigation or
@@ -810,9 +842,11 @@ No repositories appear in a client:
 
 Search misses a recent change:
 
-1. Call `workspace` with the repository path or id, or run `frigg index --changed`.
-2. Inspect runtime task state only if the refresh did not fix the result.
-3. If you use the CLI, run `frigg index --changed`.
+1. Call `workspace` and inspect `freshness.snapshot`, `freshness.continuous`, and
+   `freshness.post_edit`.
+2. For `wait_for_refresh`, wait briefly and recheck; for any non-waitable dirty state, direct-read
+   only the touched paths.
+3. For non-ready snapshot storage, run CLI `frigg index`; it is operator-only, not an MCP call.
 
 Semantic recall is unavailable or weak:
 
