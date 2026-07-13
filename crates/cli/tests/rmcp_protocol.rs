@@ -680,6 +680,49 @@ fn assert_collection_contracts_are_discoverable(tools: &[Tool]) {
         }
     }
 
+    let batch = tool_named(tools, "search_batch");
+    let batch_input = schema_properties(&batch.input_schema, "search_batch inputSchema");
+    assert!(
+        !batch_input.contains_key("merge"),
+        "search_batch must not advertise its compatibility-only legacy merge input"
+    );
+    let batch_output = batch
+        .output_schema
+        .as_ref()
+        .expect("search_batch should publish an outputSchema");
+    let batch_output_properties = schema_properties(batch_output, "search_batch outputSchema");
+    for field in [
+        "merge_strategy",
+        "merge_algorithm_version",
+        "matches",
+        "probe_summary",
+    ] {
+        assert!(
+            batch_output_properties.contains_key(field),
+            "search_batch outputSchema must expose fixed-RRF `{field}` evidence"
+        );
+    }
+
+    let impact = tool_named(tools, "impact_bundle");
+    let impact_input = schema_properties(&impact.input_schema, "impact_bundle inputSchema");
+    for field in ["target", "include_test_mentions"] {
+        assert!(
+            impact_input.contains_key(field),
+            "impact_bundle inputSchema must expose `{field}`"
+        );
+    }
+    let impact_output = impact
+        .output_schema
+        .as_ref()
+        .expect("impact_bundle should publish an outputSchema");
+    let impact_output_properties = schema_properties(impact_output, "impact_bundle outputSchema");
+    for field in ["target_selection", "sections", "proof_targets"] {
+        assert!(
+            impact_output_properties.contains_key(field),
+            "impact_bundle outputSchema must expose `{field}`"
+        );
+    }
+
     let hybrid_description = tool_named(tools, "search_hybrid")
         .description
         .as_deref()

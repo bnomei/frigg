@@ -386,6 +386,32 @@ async fn assert_target_routes_through_every_consumer(
             .as_deref()
             .expect("target-mode impact symbol should issue a match id")
     );
+    assert!(
+        ImpactSectionResult::new(
+            ImpactSection::Symbol,
+            ImpactSectionExecution::Included,
+            symbol_section.trust.clone(),
+            symbol_section.completeness.clone(),
+            symbol_section.result_handle.clone(),
+            ImpactSectionRows::Symbol(impact.symbols.clone()),
+            Vec::new(),
+        )
+        .is_none(),
+        "every proofable impact row must receive exactly one proof target"
+    );
+    assert!(
+        ImpactSectionResult::new(
+            ImpactSection::Symbol,
+            ImpactSectionExecution::Included,
+            symbol_section.trust.clone(),
+            symbol_section.completeness.clone(),
+            symbol_section.result_handle.clone(),
+            ImpactSectionRows::Symbol(impact.symbols.clone()),
+            vec![symbol_proof.clone(), symbol_proof.clone()],
+        )
+        .is_none(),
+        "an impact row must not receive duplicate proof targets"
+    );
     let issued_symbol_target = impact.symbols[0]
         .target_ref
         .clone()
@@ -4951,6 +4977,64 @@ async fn impact_bundle_opted_in_test_mentions_keeps_an_honest_zero_section() {
             .iter()
             .all(|action| !action.id.0.contains("test-mention")),
         "an exact zero must not fabricate a test-mention proof action"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn impact_bundle_forced_implementation_section_is_included_even_for_an_honest_zero() {
+    let workspace_root = temp_workspace_root("impact-bundle-implementation-section-zero");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn target() {}\npub fn caller() { target(); }\n",
+    )
+    .expect("failed to seed source fixture");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    let response = server
+        .impact_bundle(Parameters(ImpactBundleParams {
+            target: None,
+            symbol: "target".to_owned(),
+            path_class: None,
+            repository_id: Some("repo-001".to_owned()),
+            include_implementations: Some(true),
+            include_test_mentions: Some(false),
+            response_mode: Some(ResponseMode::Compact),
+        }))
+        .await
+        .expect("forced implementation section should compose")
+        .0;
+    let implementations = response
+        .sections
+        .iter()
+        .find(|section| section.section == ImpactSection::Implementation)
+        .expect("closed impact matrix must include implementation section");
+    assert_eq!(implementations.execution, ImpactSectionExecution::Included);
+    assert!(implementations.trust.is_some());
+    assert!(implementations.completeness.is_some());
+    assert_eq!(response.implementations_included, true);
+    assert_eq!(
+        response.implementations_completeness.as_ref(),
+        implementations.completeness.as_ref(),
+        "legacy projection must retain the included section coverage exactly"
+    );
+    assert!(matches!(
+        &implementations.rows,
+        ImpactSectionRows::Implementation(rows) if rows.len() == response.implementations.len()
+    ));
+    if response.implementations.is_empty() {
+        assert!(implementations.proof_targets.is_empty());
+        assert!(implementations.result_handle.is_none());
+    }
+    assert!(
+        !response
+            .sections
+            .iter()
+            .any(|section| section.section == ImpactSection::IncomingCall
+                && matches!(section.rows, ImpactSectionRows::Implementation(_))),
+        "outgoing calls are not an impact section and implementations cannot leak into another section"
     );
 
     cleanup_workspace_root(&workspace_root);

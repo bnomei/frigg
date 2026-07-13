@@ -2291,7 +2291,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "impact_bundle",
-        description = "Bundle hits/refs/callers/impls for planning and proof. Section and aggregate completeness expose caps; nav tools remain source of truth.",
+        description = "Fail-closed impact planning with section completeness and proof. Test mentions are opt-in; navigation remains authoritative.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

@@ -657,10 +657,7 @@ pub enum ImpactSectionTrust {
     },
 }
 
-/// The concrete rows owned by one `impact_bundle` section.
-///
-/// The tag makes a section envelope self-describing while the enclosing
-/// [`ImpactSectionResult`] verifies that the row vocabulary agrees with its section.
+/// Rows owned by one typed impact section.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "row_kind",
@@ -711,13 +708,59 @@ impl ImpactSectionRows {
                 .any(|row| matches(&row.match_id, &row.target_ref)),
         }
     }
+
+    /// Every returned row that carries a spec-011 result target is proofable.
+    fn bound_row_targets(&self) -> Vec<ImpactProofRowTarget> {
+        let collect = |rows: Vec<(&Option<String>, &Option<TargetRef>)>| {
+            rows.into_iter()
+                .filter_map(|(match_id, target_ref)| match (match_id, target_ref) {
+                    (
+                        Some(match_id),
+                        Some(TargetRef::ResultMatch {
+                            result_handle,
+                            match_id: target_match_id,
+                            target_scope,
+                        }),
+                    ) if match_id == target_match_id => ImpactProofRowTarget::new(
+                        result_handle.clone(),
+                        match_id.clone(),
+                        target_scope.clone(),
+                    ),
+                    _ => None,
+                })
+                .collect()
+        };
+        match self {
+            Self::Symbol(rows) => collect(
+                rows.iter()
+                    .map(|row| (&row.match_id, &row.target_ref))
+                    .collect(),
+            ),
+            Self::Reference(rows) => collect(
+                rows.iter()
+                    .map(|row| (&row.match_id, &row.target_ref))
+                    .collect(),
+            ),
+            Self::IncomingCall(rows) => collect(
+                rows.iter()
+                    .map(|row| (&row.match_id, &row.target_ref))
+                    .collect(),
+            ),
+            Self::Implementation(rows) => collect(
+                rows.iter()
+                    .map(|row| (&row.match_id, &row.target_ref))
+                    .collect(),
+            ),
+            Self::TestMention(rows) => collect(
+                rows.iter()
+                    .map(|row| (&row.match_id, &row.target_ref))
+                    .collect(),
+            ),
+        }
+    }
 }
 
-/// Authoritative result envelope for one closed `impact_bundle` section.
-///
-/// Legacy arrays remain compatibility projections, but this type owns the section's execution
-/// state, trust, rows, result handle, completeness, and any proof targets. Omitted and unresolved
-/// sections cannot fabricate coverage, rows, handles, or proofs.
+/// Authoritative execution, trust, completeness, rows, and proofs for one impact section.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ImpactSectionResult {
     pub section: ImpactSection,
@@ -780,12 +823,21 @@ impl ImpactSectionResult {
                 {
                     return false;
                 }
-                self.proof_targets.iter().all(|proof| {
-                    proof.section == self.section
-                        && self.result_handle.as_deref()
-                            == Some(proof.target.result_handle.as_str())
-                        && self.rows.has_bound_row(&proof.target)
-                })
+                let bound_targets = self.rows.bound_row_targets();
+                bound_targets.len() == self.proof_targets.len()
+                    && bound_targets.iter().all(|target| {
+                        self.proof_targets
+                            .iter()
+                            .filter(|proof| proof.target == *target)
+                            .count()
+                            == 1
+                    })
+                    && self.proof_targets.iter().all(|proof| {
+                        proof.section == self.section
+                            && self.result_handle.as_deref()
+                                == Some(proof.target.result_handle.as_str())
+                            && self.rows.has_bound_row(&proof.target)
+                    })
             }
             ImpactSectionExecution::OmittedByPolicy
             | ImpactSectionExecution::NotRunTargetUnresolved => {
@@ -834,10 +886,7 @@ impl<'de> Deserialize<'de> for ImpactSectionResult {
     }
 }
 
-/// The only result-row identity an impact proof may address.
-///
-/// This mirrors the `TargetRef::ResultMatch` contract while preventing a proof from naming a
-/// stable symbol, a guessed coordinate, or a row from another result handle.
+/// Exact handle-bound result row addressed by an impact proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImpactProofRowTarget {

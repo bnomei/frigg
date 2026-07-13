@@ -637,3 +637,165 @@ async fn search_batch_rejects_mismatched_continuation_with_exact_producer_retry(
     );
     cleanup_workspace_root(&workspace_root);
 }
+
+#[tokio::test]
+async fn search_batch_preserves_all_probe_kinds_and_order_across_response_profiles() {
+    let workspace_root = fresh_fixture_root("tool-handlers-search-batch-profile-matrix");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let params = SearchBatchParams {
+        probes: vec![
+            SearchBatchProbe {
+                id: "literal-first".to_owned(),
+                kind: SearchBatchProbeKind::Text,
+                query: "greeting".to_owned(),
+                repository_id: None,
+                path_regex: Some("^src/".to_owned()),
+                glob: None,
+                path_class: None,
+                pattern_type: Some(SearchPatternType::Literal),
+            },
+            SearchBatchProbe {
+                id: "symbol-second".to_owned(),
+                kind: SearchBatchProbeKind::Symbol,
+                query: "greeting".to_owned(),
+                repository_id: None,
+                path_regex: Some("^src/".to_owned()),
+                glob: None,
+                path_class: Some(SearchSymbolPathClass::Runtime),
+                pattern_type: None,
+            },
+            SearchBatchProbe {
+                id: "hybrid-third".to_owned(),
+                kind: SearchBatchProbeKind::Hybrid,
+                query: "greeting".to_owned(),
+                repository_id: None,
+                path_regex: None,
+                glob: None,
+                path_class: None,
+                pattern_type: None,
+            },
+        ],
+        merge: None,
+        limit: Some(20),
+        repository_id: None,
+        response_mode: Some(ResponseMode::Compact),
+        resume_from: None,
+        continuation: None,
+    };
+
+    let compact = server
+        .search_batch(Parameters(params.clone()))
+        .await
+        .expect("all three independent probe kinds should compose")
+        .0;
+    let mut full_params = params;
+    full_params.response_mode = Some(ResponseMode::Full);
+    let full = server
+        .search_batch(Parameters(full_params))
+        .await
+        .expect("full response must retain the same batch merge")
+        .0;
+
+    let summary_kinds = |response: &SearchBatchResponse| {
+        response
+            .probe_summary
+            .iter()
+            .map(|summary| {
+                (
+                    summary.id.clone(),
+                    summary.kind,
+                    summary.trust,
+                    summary.completeness.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        summary_kinds(&compact),
+        summary_kinds(&full),
+        "compact/full must preserve probe order, kind, trust, and completeness"
+    );
+    assert_eq!(
+        compact
+            .probe_summary
+            .iter()
+            .map(|summary| summary.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            SearchBatchProbeKind::Text,
+            SearchBatchProbeKind::Symbol,
+            SearchBatchProbeKind::Hybrid,
+        ],
+        "probe summaries preserve request order and all public probe kinds"
+    );
+
+    let ordering_projection = |response: &SearchBatchResponse| {
+        response
+            .matches
+            .iter()
+            .map(|matched| {
+                (
+                    matched.repository_id.clone(),
+                    matched.path.clone(),
+                    matched.line,
+                    matched.column,
+                    matched.kind,
+                    matched.evidence.clone(),
+                    matched.consensus_count,
+                    matched.rrf_score,
+                    matched.match_strength,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ordering_projection(&compact),
+        ordering_projection(&full),
+        "response detail must not alter consensus-first RRF ordering or evidence"
+    );
+    assert!(compact.matches.iter().all(|matched| {
+        matched.consensus_count == matched.evidence.len()
+            && matched
+                .evidence
+                .iter()
+                .map(|evidence| &evidence.probe_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == matched.evidence.len()
+    }));
+
+    // A second fresh execution is the public regression anchor for stable ordering, rather than
+    // relying on a continuation token or cached response identity.
+    let repeat = server
+        .search_batch(Parameters(SearchBatchParams {
+            response_mode: Some(ResponseMode::Compact),
+            probes: compact
+                .probe_summary
+                .iter()
+                .map(|summary| SearchBatchProbe {
+                    id: summary.id.clone(),
+                    kind: summary.kind,
+                    query: "greeting".to_owned(),
+                    repository_id: None,
+                    path_regex: (summary.kind != SearchBatchProbeKind::Hybrid)
+                        .then(|| "^src/".to_owned()),
+                    glob: None,
+                    path_class: (summary.kind == SearchBatchProbeKind::Symbol)
+                        .then_some(SearchSymbolPathClass::Runtime),
+                    pattern_type: (summary.kind == SearchBatchProbeKind::Text)
+                        .then_some(SearchPatternType::Literal),
+                })
+                .collect(),
+            merge: None,
+            limit: Some(20),
+            repository_id: None,
+            resume_from: None,
+            continuation: None,
+        }))
+        .await
+        .expect("a fresh identical batch should retain stable ordering")
+        .0;
+    assert_eq!(ordering_projection(&compact), ordering_projection(&repeat));
+
+    cleanup_workspace_root(&workspace_root);
+}
