@@ -479,13 +479,16 @@ fn execute_semantic_embedding_batches(
                 let mut send_progress = |files_completed, files_total| {
                     let _ = progress_sender.send((files_completed, files_total));
                 };
-                build_semantic_embedding_records_with_runtime(
+                let context = SemanticEmbeddingRecordBuildContext {
                     provider,
                     model,
-                    chunks,
                     trace_id,
                     executor,
-                    &runtime,
+                    runtime: &runtime,
+                };
+                build_semantic_embedding_records_with_runtime(
+                    chunks,
+                    &context,
                     &mut send_progress,
                     files_total,
                 )
@@ -504,25 +507,27 @@ fn execute_semantic_embedding_batches(
     }
 
     let runtime = build_semantic_embedding_runtime()?;
-    build_semantic_embedding_records_with_runtime(
+    let context = SemanticEmbeddingRecordBuildContext {
         provider,
         model,
-        chunks,
         trace_id,
         executor,
-        &runtime,
-        on_file_progress,
-        files_total,
-    )
+        runtime: &runtime,
+    };
+    build_semantic_embedding_records_with_runtime(chunks, &context, on_file_progress, files_total)
+}
+
+struct SemanticEmbeddingRecordBuildContext<'a> {
+    provider: SemanticRuntimeProvider,
+    model: &'a str,
+    trace_id: &'a str,
+    executor: &'a dyn SemanticRuntimeEmbeddingExecutor,
+    runtime: &'a tokio::runtime::Runtime,
 }
 
 fn build_semantic_embedding_records_with_runtime(
-    provider: SemanticRuntimeProvider,
-    model: &str,
     chunks: &[SemanticChunkCandidate],
-    trace_id: &str,
-    executor: &dyn SemanticRuntimeEmbeddingExecutor,
-    runtime: &tokio::runtime::Runtime,
+    context: &SemanticEmbeddingRecordBuildContext<'_>,
     on_file_progress: &mut impl FnMut(usize, usize),
     files_total: usize,
 ) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
@@ -537,12 +542,12 @@ fn build_semantic_embedding_records_with_runtime(
             })
             .collect::<Vec<_>>();
         let vectors = execute_semantic_embedding_batch(
-            runtime,
-            executor,
-            provider,
-            model,
+            context.runtime,
+            context.executor,
+            context.provider,
+            context.model,
             batch_input,
-            Some(trace_id.to_owned()),
+            Some(context.trace_id.to_owned()),
         )
         .map_err(|error| {
             let first_anchor = batch
@@ -594,9 +599,9 @@ fn build_semantic_embedding_records_with_runtime(
                 chunk_index: chunk.chunk_index,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
-                provider: provider.as_str().to_owned(),
-                model: model.to_owned(),
-                trace_id: Some(trace_id.to_owned()),
+                provider: context.provider.as_str().to_owned(),
+                model: context.model.to_owned(),
+                trace_id: Some(context.trace_id.to_owned()),
                 content_hash_blake3: chunk.content_hash_blake3_string(),
                 content_text: chunk.content_text.clone(),
                 embedding,

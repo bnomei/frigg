@@ -116,10 +116,19 @@ async fn search_batch_merges_multi_probe_hits_with_probe_ids() {
             _ => None,
         })
         .expect("batch success must expose an exact proof-read action");
-    assert_eq!(proof.result_handle, response.result_handle.clone().unwrap());
+    assert_eq!(
+        proof.result_handle,
+        response
+            .result_handle
+            .clone()
+            .expect("batch success must expose a result handle")
+    );
     assert_eq!(
         proof.match_id,
-        response.matches[0].match_id.clone().unwrap(),
+        response.matches[0]
+            .match_id
+            .clone()
+            .expect("merged batch match must have an opaque match id"),
         "batch proof action must select the top merged row"
     );
     assert_eq!(

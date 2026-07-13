@@ -4471,13 +4471,13 @@ async fn navigation_go_to_definition_path_line_without_symbol_sets_location_warn
         );
     }
     // Do not invent DisambiguationRequired solely for density; leave real multi-candidate shape alone.
-    if let Some(selection) = response.target_selection.as_ref() {
-        if selection.status == NavigationTargetSelectionStatus::DisambiguationRequired {
-            assert!(
-                selection.selected_stable_symbol_id.is_none() || !selection.candidates.is_empty(),
-                "true disambiguation should clear selection or list candidates: {selection:?}"
-            );
-        }
+    if let Some(selection) = response.target_selection.as_ref()
+        && selection.status == NavigationTargetSelectionStatus::DisambiguationRequired
+    {
+        assert!(
+            selection.selected_stable_symbol_id.is_none() || !selection.candidates.is_empty(),
+            "true disambiguation should clear selection or list candidates: {selection:?}"
+        );
     }
     cleanup_workspace_root(&workspace_root);
 }
@@ -5014,7 +5014,7 @@ async fn impact_bundle_forced_implementation_section_is_included_even_for_an_hon
     assert_eq!(implementations.execution, ImpactSectionExecution::Included);
     assert!(implementations.trust.is_some());
     assert!(implementations.completeness.is_some());
-    assert_eq!(response.implementations_included, true);
+    assert!(response.implementations_included);
     assert_eq!(
         response.implementations_completeness.as_ref(),
         implementations.completeness.as_ref(),
@@ -5394,7 +5394,10 @@ fn impact_section_result_owns_rows_completeness_and_execution_truth() {
             ImpactSection::TestMention,
             ImpactSectionExecution::Included,
             Some(ImpactSectionTrust::ExactLiteralText),
-            Some(ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0).unwrap()),
+            Some(
+                ResultCompleteness::complete(ResultUnit::Occurrence, 0, 0)
+                    .expect("zero occurrences satisfy completeness invariants"),
+            ),
             None,
             ImpactSectionRows::TestMention(Vec::new()),
             Vec::new(),
@@ -5408,7 +5411,10 @@ fn impact_section_result_owns_rows_completeness_and_execution_truth() {
             ImpactSection::Implementation,
             ImpactSectionExecution::OmittedByPolicy,
             None,
-            Some(ResultCompleteness::complete(ResultUnit::Implementation, 0, 0).unwrap()),
+            Some(
+                ResultCompleteness::complete(ResultUnit::Implementation, 0, 0)
+                    .expect("zero implementations satisfy completeness invariants"),
+            ),
             None,
             ImpactSectionRows::Implementation(Vec::new()),
             Vec::new(),

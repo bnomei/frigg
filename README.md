@@ -736,7 +736,7 @@ Treat `.frigg/` as cacheable runtime state, not as source and not as a secret st
 - Normal indexing does not edit project source files.
 - `workspace` may refresh lexical and semantic state under `.frigg/` and waits up to the attach timeout when adopting a target.
 - Explicit maintenance remains available through CLI commands such as `frigg init` and `frigg index`.
-- Optional OpenAI, OpenAI-compatible, and Google semantic providers call their configured external embedding APIs. The local provider does not require an API key.
+- OpenAI and Google semantic providers call their external embedding APIs. Optional OpenAI-compatible providers call their configured external embedding APIs as well. The local provider does not require an API key.
 - Optional precise generators may execute repo-local or PATH-discovered tools and write `.frigg/scip/` artifacts. Inspect `workspace` runtime status or CLI output for generator progress and failures.
 - Non-loopback HTTP serving requires `--allow-remote-http` and `--mcp-http-auth-token`.
 

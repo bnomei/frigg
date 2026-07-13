@@ -386,9 +386,9 @@ mod tests {
                 vec![],
                 Some("continuation-000001".to_owned()),
             )
-            .unwrap(),
+            .expect("page-limited completeness fixture must be valid"),
         )
-        .unwrap();
+        .expect("completeness fixture must serialize");
         assert_eq!(value["total"], 15);
         assert_eq!(value["truncated"], true);
         assert_eq!(value["continuation"], "continuation-000001");

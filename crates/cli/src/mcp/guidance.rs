@@ -800,6 +800,8 @@ mod tests {
         OPENAI_COMPAT_ENDPOINT_ENV_VAR,
     };
     use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
+
+    const _: () = assert!(LOCAL_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS);
     use rmcp::model::ResourceContents;
     use serde_json::{Value, json};
 
@@ -835,12 +837,7 @@ mod tests {
         assert_eq!(parsed["semantic_default"]["enabled"], json!(false));
         assert_eq!(parsed["reindex_on_change"], json!(true));
 
-        let models = parsed["models"]
-            .as_array()
-            .expect("models array")
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let models = parsed["models"].as_array().expect("models array").to_vec();
         assert_eq!(
             models.len(),
             4,
@@ -864,10 +861,6 @@ mod tests {
             "local native_dimensions must be REAL MiniLM width (384), not padded 1536"
         );
         assert_eq!(local["pad_to_projection"], json!(true));
-        assert!(
-            LOCAL_DEFAULT_NATIVE_DIMENSIONS < DEFAULT_VECTOR_DIMENSIONS,
-            "local real dims must be strictly less than projection when pad is true"
-        );
         assert!(local["credential_env"].is_null());
         assert_eq!(local["quality"], json!("curated"));
         assert_eq!(
@@ -1040,7 +1033,7 @@ mod tests {
             let preset = presets
                 .iter()
                 .find(|row| row["id"] == id)
-                .unwrap_or_else(|| panic!("missing preset {id}"));
+                .expect("expected semantic preset must exist");
             assert_eq!(preset["provider"], json!(provider));
             assert_eq!(preset["model"], json!(model));
             assert_eq!(preset["model_id"], json!(model_id));
@@ -1071,7 +1064,7 @@ mod tests {
             );
             let resolved = models_by_id
                 .get(model_id)
-                .unwrap_or_else(|| panic!("preset {id} model_id must resolve to models[]"));
+                .expect("semantic preset model_id must resolve to models[]");
             assert_eq!(
                 resolved["provider"],
                 json!(provider),

@@ -505,6 +505,7 @@ async fn run_document_symbols_outline(report: &Mutex<harness::BenchReport>, root
         let server = server_for_root(root).await;
         let response = server
             .document_symbols(Parameters(DocumentSymbolsParams {
+                target: None,
                 path: "crates/cli/src/mcp/types.rs".to_owned(),
                 repository_id: None,
                 top_level_only: Some(true),
@@ -545,10 +546,12 @@ async fn run_impact_bundle_if_registered(report: &Mutex<harness::BenchReport>, r
         let server = server_for_root(root).await;
         let response = server
             .impact_bundle(Parameters(ImpactBundleParams {
+                target: None,
                 symbol: "FriggMcpServer".to_owned(),
                 repository_id: None,
                 path_class: None,
                 include_implementations: None,
+                include_test_mentions: None,
                 response_mode: Some(ResponseMode::Compact),
             }))
             .await

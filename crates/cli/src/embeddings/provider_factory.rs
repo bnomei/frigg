@@ -74,8 +74,10 @@ fn build_semantic_embedding_provider(
         SemanticRuntimeProvider::OpenAiCompat => {
             let api_key = require_api_key(config.provider, config.credentials)?;
             let endpoint = require_openai_compat_endpoint(config.endpoint)?;
-            let mut provider_config = OpenAiEmbeddingProviderConfig::default();
-            provider_config.endpoint = endpoint;
+            let provider_config = OpenAiEmbeddingProviderConfig {
+                endpoint,
+                ..Default::default()
+            };
             Ok(Arc::new(OpenAiEmbeddingProvider::with_config_kind(
                 api_key.to_owned(),
                 provider_config,
