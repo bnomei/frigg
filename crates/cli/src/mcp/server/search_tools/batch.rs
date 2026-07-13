@@ -28,6 +28,10 @@ const PER_PROBE_MATCH_CAP: usize = 40;
 /// Implicit total work budget: per-probe cap × probe count (≤ `MAX_PROBES`).
 const _TOTAL_MATCH_BUDGET: usize = PER_PROBE_MATCH_CAP * MAX_PROBES;
 const SEARCH_BATCH_MERGE_ALGORITHM_VERSION: &str = "rrf-v1";
+/// Version every continuation binds so a future coordinate-key change cannot reuse an old page.
+const SEARCH_BATCH_DEDUPE_KEY_VERSION: &str = "repository-path-line-column-v1";
+const SEARCH_BATCH_RRF_K: usize = 60;
+const SEARCH_BATCH_STABLE_ORDER_VERSION: &str = "consensus-rrf-strength-coordinate-evidence-v1";
 
 type SearchBatchProbeOutput =
     Result<Vec<(SearchBatchProbeSummary, Vec<SearchBatchMatch>)>, ErrorData>;
@@ -43,12 +47,7 @@ impl FriggMcpServer {
             params.resume_from.is_some(),
             params.continuation.is_some(),
         )
-        .map_err(|error| {
-            Self::invalid_params(
-                error.message.clone(),
-                Some(serde_json::json!({ "continuation": error })),
-            )
-        })?;
+        .map_err(|error| self.search_batch_continuation_error(&params, error))?;
         let probe_count = params.probes.len();
         if !(MIN_PROBES..=MAX_PROBES).contains(&probe_count) {
             return Err(Self::invalid_params(
@@ -122,15 +121,17 @@ impl FriggMcpServer {
             .any(|summary| !summary.completeness.complete);
         let exact_merged_total = (!child_incomplete).then_some(total_merged);
         let truncated = child_truncated || merge_page_omitted;
-        let continuation =
-            (merge_page_omitted && !child_incomplete && continuation_binding.is_some())
-                .then(|| {
-                    continuation_binding.clone().map(|mut binding| {
-                        binding.next_position = resume_from.saturating_add(returned);
-                        self.store_session_continuation(binding)
-                    })
+        // A capped or diagnostic child makes coverage incomplete, but it does not make the
+        // already merged rows unstable. Continue that known, snapshot-bound merged page rather
+        // than forcing callers to lose rows solely because the underlying query was bounded.
+        let continuation = (merge_page_omitted && continuation_binding.is_some())
+            .then(|| {
+                continuation_binding.clone().map(|mut binding| {
+                    binding.next_position = resume_from.saturating_add(returned);
+                    self.store_session_continuation(binding)
                 })
-                .flatten();
+            })
+            .flatten();
         let mut truncation_reasons = Vec::new();
         if child_truncated {
             truncation_reasons.push(ResultTruncationReason::ChildLimit);
@@ -321,12 +322,7 @@ impl FriggMcpServer {
                     ResultUnit::BatchProbe,
                 )
                 .map(|binding| binding.next_position)
-                .map_err(|error| {
-                    Self::invalid_params(
-                        error.message.clone(),
-                        Some(serde_json::json!({ "continuation": error })),
-                    )
-                })?,
+                .map_err(|error| self.search_batch_continuation_error(params, error))?,
             None => params.resume_from.unwrap_or(0),
         };
         let binding = (!snapshot_fingerprints.is_empty()).then_some(ContinuationBinding {
@@ -354,10 +350,40 @@ impl FriggMcpServer {
             "tool": "search_batch",
             "request": request,
             "repository_ids": repository_ids,
+            "rrf_k": SEARCH_BATCH_RRF_K,
+            "merge_algorithm_version": SEARCH_BATCH_MERGE_ALGORITHM_VERSION,
+            "dedupe_key_version": SEARCH_BATCH_DEDUPE_KEY_VERSION,
+            "stable_order_version": SEARCH_BATCH_STABLE_ORDER_VERSION,
         });
         let mut hasher = DefaultHasher::new();
         normalized.to_string().hash(&mut hasher);
         format!("batch-v2:{:016x}", hasher.finish())
+    }
+
+    /// Continuation rejection must offer the exact producer request, never a stale cursor or
+    /// batch match id. A fresh execution is the only safe way to rebuild its merged ordering.
+    fn search_batch_continuation_error(
+        &self,
+        params: &SearchBatchParams,
+        error: ContinuationValidationError,
+    ) -> ErrorData {
+        let mut retry = params.clone();
+        retry.resume_from = None;
+        retry.continuation = None;
+        let action = canonical_next_action(
+            "batch-continuation-retry",
+            NextActionRole::Retry,
+            0,
+            NextActionTarget::SearchBatch(retry),
+            "re-run the original batch request to obtain a fresh snapshot-bound continuation",
+        );
+        Self::invalid_params(
+            error.message.clone(),
+            Some(serde_json::json!({
+                "continuation": error,
+                "next_actions": [action],
+            })),
+        )
     }
 
     /// Run probes concurrently (binary join tree) so multi-probe batches improve
@@ -644,7 +670,10 @@ fn batch_evidence(probe: &SearchBatchProbe, rank_one_based: usize) -> SearchBatc
 }
 
 fn reciprocal_rank_fusion(ranks: &[usize]) -> f64 {
-    ranks.iter().map(|rank| 1.0 / (60 + rank) as f64).sum()
+    ranks
+        .iter()
+        .map(|rank| 1.0 / (SEARCH_BATCH_RRF_K + rank) as f64)
+        .sum()
 }
 
 fn merge_batch_rows(

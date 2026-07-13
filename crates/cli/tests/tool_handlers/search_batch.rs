@@ -2,7 +2,7 @@
 
 use super::*;
 use frigg::mcp::types::{
-    NextActionOrigin, NextActionTarget, ReplayOriginTarget, SearchBatchMergeMode,
+    NextAction, NextActionOrigin, NextActionTarget, ReplayOriginTarget, SearchBatchMergeMode,
     SearchBatchMergeStrategy, SearchBatchParams, SearchBatchProbe, SearchBatchProbeKind,
     SearchBatchResponse,
 };
@@ -532,10 +532,108 @@ async fn search_batch_v2_pages_are_deterministic_and_reject_mixed_cursors() {
     assert_eq!(final_page.completeness.total, Some(3));
     assert!(final_page.completeness.continuation.is_none());
 
-    let mut mixed = base;
+    let mut mixed = base.clone();
     mixed.resume_from = Some(1);
     mixed.continuation = Some("continuation-foreign-000001".to_owned());
-    let error = server.search_batch(Parameters(mixed)).await;
-    assert!(error.is_err(), "mixed legacy/v2 cursors must be rejected");
+    let error = match server.search_batch(Parameters(mixed)).await {
+        Ok(_) => panic!("mixed legacy/v2 cursors must be rejected"),
+        Err(error) => error,
+    };
+    let data = error
+        .data
+        .expect("mixed cursor rejection includes recovery data");
+    let actions = data["next_actions"]
+        .as_array()
+        .expect("mixed cursor rejection includes an exact producer retry");
+    assert_eq!(actions.len(), 1);
+    let action: NextAction =
+        serde_json::from_value(actions[0].clone()).expect("producer retry action is canonical");
+    let NextActionTarget::SearchBatch(retry) = action.target else {
+        panic!("mixed cursor retry must target search_batch");
+    };
+    assert_eq!(
+        serde_json::to_value(retry).expect("retry serializes"),
+        serde_json::to_value(base).expect("base request serializes"),
+        "mixed cursor retry must preserve the producer request with both cursor forms removed"
+    );
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_batch_rejects_mismatched_continuation_with_exact_producer_retry() {
+    let workspace_root = temp_workspace_root("search-batch-continuation-retry");
+    fs::create_dir_all(workspace_root.join("src")).expect("create fixture source dir");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "const one: &str = \"batch_retry_needle\";\nconst two: &str = \"batch_retry_needle\";\n",
+    )
+    .expect("seed retry fixture");
+    let server = server_for_workspace_root(&workspace_root).await;
+    let base = SearchBatchParams {
+        probes: vec![
+            SearchBatchProbe {
+                id: "first".to_owned(),
+                kind: SearchBatchProbeKind::Text,
+                query: "batch_retry_needle".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                path_regex: Some("^src/".to_owned()),
+                glob: None,
+                path_class: None,
+                pattern_type: Some(SearchPatternType::Literal),
+            },
+            SearchBatchProbe {
+                id: "second".to_owned(),
+                kind: SearchBatchProbeKind::Text,
+                query: "batch_retry_needle".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                path_regex: Some("^src/".to_owned()),
+                glob: None,
+                path_class: None,
+                pattern_type: Some(SearchPatternType::Literal),
+            },
+        ],
+        merge: None,
+        limit: Some(1),
+        repository_id: Some("repo-001".to_owned()),
+        response_mode: Some(ResponseMode::Compact),
+        resume_from: None,
+        continuation: None,
+    };
+    let first = server
+        .search_batch(Parameters(base.clone()))
+        .await
+        .expect("first page should issue a continuation")
+        .0;
+    let mut mismatched = base.clone();
+    mismatched.probes[0].path_regex = Some("^tests/".to_owned());
+    mismatched.continuation = first.completeness.continuation;
+    let error = match server.search_batch(Parameters(mismatched)).await {
+        Ok(_) => panic!("scope-mismatched continuation must fail closed"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    let data = error
+        .data
+        .expect("continuation failure includes recovery data");
+    assert_eq!(
+        data["continuation"]["code"].as_str(),
+        Some("CONTINUATION_SCOPE_MISMATCH")
+    );
+    let actions = data["next_actions"]
+        .as_array()
+        .expect("continuation failure includes an exact producer retry");
+    assert_eq!(actions.len(), 1);
+    let action: NextAction =
+        serde_json::from_value(actions[0].clone()).expect("producer retry action is canonical");
+    let NextActionTarget::SearchBatch(retry) = action.target else {
+        panic!("continuation retry must target search_batch");
+    };
+    let mut expected_retry = base;
+    expected_retry.probes[0].path_regex = Some("^tests/".to_owned());
+    assert_eq!(
+        serde_json::to_value(retry).expect("retry serializes"),
+        serde_json::to_value(expected_retry).expect("retry serializes"),
+        "retry must preserve the attempted producer request without its stale cursor"
+    );
     cleanup_workspace_root(&workspace_root);
 }
