@@ -305,13 +305,18 @@ const fn recovery_for(
 
 fn input_recovery(input: &WorkspaceFreshnessInput) -> WorkspacePostEditStrategy {
     match input.snapshot_state {
-        WorkspaceSnapshotFreshnessState::Ready => (input.watch_status.lease_count > 0
-            && matches!(
-                input.watch_status.reason,
-                WatchStatusReason::Debouncing | WatchStatusReason::Refreshing
-            ))
-        .then_some(WorkspacePostEditStrategy::WaitForRefresh)
-        .unwrap_or(WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles),
+        WorkspaceSnapshotFreshnessState::Ready
+            if input.watch_status.lease_count > 0
+                && matches!(
+                    input.watch_status.reason,
+                    WatchStatusReason::Debouncing | WatchStatusReason::Refreshing
+                ) =>
+        {
+            WorkspacePostEditStrategy::WaitForRefresh
+        }
+        WorkspaceSnapshotFreshnessState::Ready => {
+            WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles
+        }
         state => recovery_for(state).expect("non-ready snapshot has a recovery"),
     }
 }

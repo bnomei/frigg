@@ -303,7 +303,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             returned: 0,
             truncated: false,
             resume_from: None,
-            completeness: ResultCompleteness::complete(ResultUnit::DocumentSymbol, 0, 0).unwrap(),
+            completeness: ResultCompleteness::complete(ResultUnit::DocumentSymbol, 0, 0)
+                .expect("zero-result document symbols should be complete"),
             top_level_only: true,
             symbols: Vec::new(),
             result_handle: None,
@@ -332,9 +333,9 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
             ancestors: Vec::new(),
             children: Vec::new(),
             ancestors_completeness: ResultCompleteness::complete(ResultUnit::SyntaxNode, 0, 0)
-                .unwrap(),
+                .expect("zero-result syntax-tree ancestors should be complete"),
             children_completeness: ResultCompleteness::complete(ResultUnit::SyntaxNode, 0, 0)
-                .unwrap(),
+                .expect("zero-result syntax-tree children should be complete"),
             follow_up_structural: Vec::new(),
             metadata: None,
             note: None,
@@ -345,7 +346,8 @@ fn metadata_note_responses_omit_absent_fields_on_wire() {
         &SearchStructuralResponse {
             matches: Vec::new(),
             result_mode: StructuralResultMode::Matches,
-            completeness: ResultCompleteness::complete(ResultUnit::StructuralMatch, 0, 0).unwrap(),
+            completeness: ResultCompleteness::complete(ResultUnit::StructuralMatch, 0, 0)
+                .expect("zero-result structural matches should be complete"),
             metadata: None,
             note: None,
         },

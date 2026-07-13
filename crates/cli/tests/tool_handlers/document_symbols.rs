@@ -698,7 +698,7 @@ async fn document_symbols_pagination_is_honest_about_truncation() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             limit: Some(2),
-            resume_from: first.resume_from.clone(),
+            resume_from: first.resume_from,
             continuation: None,
             top_level_only: Some(true),
             ..Default::default()
