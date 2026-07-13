@@ -1,7 +1,10 @@
 //! Freshness and ignore-truth integration tests.
 
 use super::*;
-use frigg::mcp::types::{ReadFileResponse, WorkspaceGateAction};
+use frigg::mcp::types::{
+    ReadFileResponse, WorkspaceDirtyScope, WorkspaceGateAction, WorkspacePostEditStrategy,
+    WorkspaceSnapshotFreshnessState, WorkspaceToolFreshnessAvailability,
+};
 
 #[tokio::test]
 async fn gitignored_tmp_content_absent_from_search_text_but_on_disk() {
@@ -119,6 +122,33 @@ async fn workspace_gate_live_disk_for_touched_dirty_paths() {
         Some(WorkspaceGateAction::UseLiveDiskForTouchedFiles),
         "dirty touched paths with ready index should advise path-scoped live-disk, not repo-wide grep: {:?}",
         response.recommended_action
+    );
+    assert_eq!(
+        response.freshness.snapshot.state,
+        WorkspaceSnapshotFreshnessState::Ready,
+        "the authoritative snapshot state must agree with the legacy live-disk projection"
+    );
+    assert_eq!(
+        response.freshness.dirty_scope,
+        WorkspaceDirtyScope::KnownChangedPaths,
+        "known pending paths must not be collapsed into repository-wide unknown dirtiness"
+    );
+    assert_eq!(
+        response.freshness.post_edit.strategy,
+        WorkspacePostEditStrategy::UseLiveDiskForTouchedFiles,
+        "legacy use_live_disk_for_touched_files must be projected from authoritative post_edit"
+    );
+    assert!(
+        response
+            .freshness
+            .tool_capabilities
+            .iter()
+            .any(|capability| {
+                capability.tool_name == "search_text"
+                    && capability.availability == WorkspaceToolFreshnessAvailability::StalePossible
+            }),
+        "index-backed tools must fail closed for changed paths: {:?}",
+        response.freshness.tool_capabilities
     );
     assert!(
         response

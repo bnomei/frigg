@@ -222,28 +222,6 @@ pub struct WorkspaceFreshnessCompatibilityProjection {
 }
 
 impl WorkspaceFreshnessSummary {
-    /// Conservative temporary value used until the server derives authoritative freshness.
-    ///
-    /// T004 replaces this mechanical initializer with the pure runtime-state derivation.
-    pub(crate) fn migration_placeholder() -> Self {
-        Self {
-            snapshot: WorkspaceSnapshotSummary {
-                state: WorkspaceSnapshotFreshnessState::Unavailable,
-                storage_available: None,
-            },
-            continuous: WorkspaceContinuousFreshnessSummary {
-                state: WorkspaceContinuousFreshnessState::NoLease,
-                can_converge_by_waiting: false,
-            },
-            post_edit: WorkspacePostEditSummary {
-                strategy: WorkspacePostEditStrategy::FriggUnavailable,
-            },
-            dirty_scope: WorkspaceDirtyScope::UnknownRepositoryDirtiness,
-            changed_paths_since_snapshot: Vec::new(),
-            tool_capabilities: Vec::new(),
-        }
-    }
-
     /// Projects compatibility fields retained during the workspace freshness migration.
     pub fn compatibility_projection(&self) -> WorkspaceFreshnessCompatibilityProjection {
         let recommended_action = match self.post_edit.strategy {

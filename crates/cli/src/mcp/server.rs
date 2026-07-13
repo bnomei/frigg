@@ -132,20 +132,19 @@ use crate::mcp::types::{
     SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM,
     WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction, WorkspaceAttachIndexMode,
     WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
-    WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse,
-    WorkspaceFreshnessSummary, WorkspaceGateAction, WorkspaceIndexAction,
-    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
-    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
-    WorkspaceIndexResponse, WorkspaceParams, WorkspacePreciseArtifactFailureSummary,
-    WorkspacePreciseCoverageMode, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
-    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
-    WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
-    WorkspacePreciseLifecycleSummary, WorkspacePreciseState, WorkspacePreciseSummary,
-    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
-    WorkspaceResolveMode, WorkspaceResponse, WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceDirtyScope,
+    WorkspaceFreshnessSummary, WorkspaceIndexAction, WorkspaceIndexComponentState,
+    WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspaceIndexLifecyclePhase,
+    WorkspaceIndexLifecycleSummary, WorkspaceIndexParams, WorkspaceIndexResponse, WorkspaceParams,
+    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
+    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
+    WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
+    WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
+    WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseState,
+    WorkspacePreciseSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
+    WorkspaceRecommendedAction, WorkspaceResolveMode, WorkspaceResponse,
+    WorkspaceSnapshotFreshnessState, WorkspaceStorageIndexState, WorkspaceStorageSummary,
     ZeroHitDiagnostics, ZeroHitIndex, ZeroHitInput, ZeroHitReason, ZeroHitScope,
-    workspace_gate_hint,
 };
 #[cfg(feature = "playbook")]
 use crate::mcp::types::{
@@ -174,8 +173,6 @@ mod runtime_status;
 mod search_tools;
 mod symbol_index;
 mod workspace;
-// T002 establishes the pure derivation before T004 wires it into response handlers.
-#[allow(dead_code)]
 mod workspace_freshness;
 mod workspace_session;
 
@@ -642,13 +639,8 @@ impl FriggMcpServer {
             .collect::<Vec<_>>();
         let runtime = self.runtime_status_summary();
         let watch_active = runtime.watch_active;
-        let (
-            recommended_action,
-            working_tree_dirty,
-            changed_paths_since_snapshot,
-            fresh_enough_for,
-        ) = self.workspace_gate_fields(current_workspace.as_ref(), &repositories, watch_active);
-        let gate_hint = workspace_gate_hint(recommended_action);
+        let freshness = self.workspace_freshness_summary(current_workspace.as_ref(), &runtime);
+        let compatibility = freshness.compatibility_projection();
         let routing_stats = crate::mcp::routing_stats::routing_stats_enabled()
             .then(crate::mcp::routing_stats::snapshot);
         let (lexical_ready, semantic_ready) =
@@ -659,15 +651,13 @@ impl FriggMcpServer {
             session_default: current_workspace.is_some(),
             repositories,
             runtime: Some(runtime),
-            // T001 introduces the additive wire field; T004 replaces this conservative
-            // placeholder with the authoritative, side-effect-free derivation.
-            freshness: WorkspaceFreshnessSummary::migration_placeholder(),
-            recommended_action: Some(recommended_action),
-            gate_hint,
-            working_tree_dirty: Some(working_tree_dirty),
-            changed_paths_since_snapshot,
+            freshness: freshness.clone(),
+            recommended_action: Some(compatibility.recommended_action),
+            gate_hint: compatibility.gate_hint,
+            working_tree_dirty: Some(freshness.dirty_scope != WorkspaceDirtyScope::Clean),
+            changed_paths_since_snapshot: freshness.changed_paths_since_snapshot.clone(),
             watch_active: Some(watch_active),
-            fresh_enough_for,
+            fresh_enough_for: Some(compatibility.fresh_enough_for),
             lexical_ready,
             semantic_ready,
             routing_stats,
@@ -695,81 +685,78 @@ impl FriggMcpServer {
         (lexical_ready, semantic_ready)
     }
 
-    /// Session gate action from attach state, storage readiness, watch, and dirty paths.
-    /// Empty/detached sessions get `AdoptRepo` (attach is still possible); reindex is CLI-only.
-    fn workspace_gate_fields(
+    /// Captures handler facts once, then delegates all public freshness and compatibility state
+    /// to the side-effect-free transition table.
+    fn workspace_freshness_summary(
         &self,
         current_workspace: Option<&AttachedWorkspace>,
-        repositories: &[RepositorySummary],
-        watch_active: bool,
-    ) -> (WorkspaceGateAction, bool, Vec<String>, Option<Vec<String>>) {
-        if repositories.is_empty() && current_workspace.is_none() {
-            return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
-        }
+        runtime: &RuntimeStatusSummary,
+    ) -> WorkspaceFreshnessSummary {
+        let (snapshot_state, storage_available, dirty_scope, changed_paths_since_snapshot) =
+            match current_workspace {
+                None => (
+                    WorkspaceSnapshotFreshnessState::Detached,
+                    None,
+                    WorkspaceDirtyScope::Clean,
+                    Vec::new(),
+                ),
+                Some(workspace) => {
+                    let storage = Self::workspace_storage_summary(workspace);
+                    let changed_paths =
+                        self.changed_paths_since_snapshot_for_gate(&workspace.repository_id);
+                    let dirty_scope = if !changed_paths.is_empty() {
+                        WorkspaceDirtyScope::KnownChangedPaths
+                    } else if self.workspace_has_dirty_root(workspace) {
+                        WorkspaceDirtyScope::UnknownRepositoryDirtiness
+                    } else {
+                        WorkspaceDirtyScope::Clean
+                    };
+                    let snapshot_state = match storage.index_state {
+                        WorkspaceStorageIndexState::MissingDb => {
+                            WorkspaceSnapshotFreshnessState::Missing
+                        }
+                        WorkspaceStorageIndexState::Uninitialized => {
+                            WorkspaceSnapshotFreshnessState::Uninitialized
+                        }
+                        WorkspaceStorageIndexState::Ready => WorkspaceSnapshotFreshnessState::Ready,
+                        WorkspaceStorageIndexState::Error => WorkspaceSnapshotFreshnessState::Error,
+                    };
+                    (
+                        snapshot_state,
+                        Some(storage.exists),
+                        dirty_scope,
+                        changed_paths,
+                    )
+                }
+            };
+        let watch_status = runtime
+            .watch_status
+            .clone()
+            .expect("runtime status always captures watch status");
 
-        let Some(workspace) = current_workspace else {
-            return (WorkspaceGateAction::AdoptRepo, false, Vec::new(), None);
-        };
-
-        let storage = Self::workspace_storage_summary(workspace);
-        let dirty = self.workspace_has_dirty_root(workspace);
-        let changed_paths = self.changed_paths_since_snapshot_for_gate(&workspace.repository_id);
-        let working_tree_dirty = dirty || !changed_paths.is_empty();
-
-        let index_needs_reindex = !matches!(storage.index_state, WorkspaceStorageIndexState::Ready);
-        if index_needs_reindex {
-            return (
-                WorkspaceGateAction::Reindex,
-                working_tree_dirty,
-                changed_paths,
-                None,
-            );
-        }
-
-        if !watch_active
-            && self
-                .runtime_state
-                .runtime_profile
-                .persistent_state_available()
-        {
-            if working_tree_dirty {
-                return (
-                    WorkspaceGateAction::UseLiveDiskForTouchedFiles,
-                    working_tree_dirty,
-                    changed_paths,
-                    Some(vec!["read_file".to_owned()]),
-                );
-            }
-            return (
-                WorkspaceGateAction::WaitWatch,
-                working_tree_dirty,
-                changed_paths,
-                None,
-            );
-        }
-
-        if working_tree_dirty {
-            return (
-                WorkspaceGateAction::UseLiveDiskForTouchedFiles,
-                working_tree_dirty,
-                changed_paths,
-                Some(vec!["read_file".to_owned(), "read_match".to_owned()]),
-            );
-        }
-
-        (
-            WorkspaceGateAction::Ready,
-            false,
-            Vec::new(),
-            Some(vec![
-                "search_text".to_owned(),
-                "search_symbol".to_owned(),
-                "search_hybrid".to_owned(),
-                "find_references".to_owned(),
-                "go_to_definition".to_owned(),
-                "read_file".to_owned(),
-                "read_match".to_owned(),
-            ]),
+        workspace_freshness::derive_workspace_freshness(
+            &workspace_freshness::WorkspaceFreshnessInput {
+                snapshot_state,
+                storage_available,
+                dirty_scope,
+                changed_paths_since_snapshot,
+                transport: match runtime.profile {
+                    crate::settings::RuntimeProfile::StdioEphemeral
+                    | crate::settings::RuntimeProfile::StdioAttached => {
+                        crate::settings::RuntimeTransportKind::Stdio
+                    }
+                    crate::settings::RuntimeProfile::HttpLoopbackService => {
+                        crate::settings::RuntimeTransportKind::LoopbackHttp
+                    }
+                    crate::settings::RuntimeProfile::HttpRemoteService => {
+                        crate::settings::RuntimeTransportKind::RemoteHttp
+                    }
+                },
+                runtime_profile: runtime.profile,
+                configured_watch_mode: self.config.watch.mode,
+                watch_status,
+                live_tool_names: runtime.tools_exposed.clone(),
+            },
         )
     }
 
