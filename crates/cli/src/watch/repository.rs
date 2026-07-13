@@ -3,7 +3,6 @@
 
 use std::path::{Path, PathBuf};
 
-use ignore::gitignore::Gitignore;
 use notify::EventKind;
 
 use crate::domain::{FriggError, FriggResult};
@@ -12,14 +11,16 @@ use crate::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeCredent
 use crate::storage::{Storage, resolve_provenance_db_path};
 
 use super::scheduler::WatchRefreshClass;
-use crate::workspace_ignores::build_root_ignore_matcher;
+use crate::workspace_ignores::{
+    WorkspaceIgnoreMatcher, build_root_ignore_matcher, is_ignore_rule_file,
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct WatchedRepository {
     pub repository_id: String,
     pub root: PathBuf,
     pub canonical_root: Option<PathBuf>,
-    pub root_ignore_matcher: Gitignore,
+    pub root_ignore_matcher: WorkspaceIgnoreMatcher,
     pub db_path: PathBuf,
 }
 
@@ -202,11 +203,15 @@ pub(super) fn should_ignore_watch_path(repository: &WatchedRepository, path: &Pa
     if matches!(component.as_ref(), ".frigg" | ".git" | "target") {
         return true;
     }
+    if is_ignore_rule_file(path) {
+        return false;
+    }
 
-    repository
-        .root_ignore_matcher
-        .matched_path_or_any_parents(&relative, path.is_dir())
-        .is_ignore()
+    crate::workspace_ignores::should_ignore_runtime_path(
+        &repository.root,
+        &relative,
+        Some(&repository.root_ignore_matcher),
+    )
 }
 
 fn is_root_generated_scip_artifact(relative: &Path) -> bool {

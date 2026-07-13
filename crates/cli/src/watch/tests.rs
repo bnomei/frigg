@@ -1176,6 +1176,40 @@ fn watch_path_filter_respects_root_gitignore_rules() {
 }
 
 #[test]
+fn watch_path_filter_respects_nested_gitignore_rules_and_accepts_rule_edits() {
+    let root = temp_workspace_root("watch-nested-gitignore-filter");
+    let views = root.join("storage/framework/views");
+    fs::create_dir_all(&views).expect("nested views directory should exist");
+    let ignore_path = views.join(".gitignore");
+    fs::write(&ignore_path, "*\n!.gitignore\n").expect("nested ignore file should be writable");
+    let compiled_view = views.join("compiled.php");
+    fs::write(&compiled_view, "<?php").expect("compiled view should be writable");
+
+    let repository = WatchedRepository {
+        repository_id: "repo-001".to_owned(),
+        canonical_root: root.canonicalize().ok(),
+        root_ignore_matcher: build_root_ignore_matcher(&root),
+        root: root.clone(),
+        db_path: root.join(".frigg/storage.sqlite3"),
+    };
+
+    assert!(should_ignore_watch_path(&repository, &compiled_view));
+    assert!(
+        !should_ignore_watch_path(&repository, &ignore_path),
+        "an ignore-rule edit must reach the watcher so the manifest can reconcile"
+    );
+
+    let internal_ignore = root.join(".git/.gitignore");
+    fs::write(&internal_ignore, "*").expect("internal ignore fixture should be writable");
+    assert!(
+        should_ignore_watch_path(&repository, &internal_ignore),
+        "an ignore-rule name must not bypass Frigg's hard exclusions"
+    );
+
+    cleanup_workspace(&root);
+}
+
+#[test]
 fn repository_relative_watch_path_accepts_canonical_root_prefix() {
     let repository = WatchedRepository {
         repository_id: "repo-001".to_owned(),

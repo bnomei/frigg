@@ -5,9 +5,7 @@
 
 use super::*;
 use crate::storage::ManifestEntry;
-use crate::workspace_ignores::{
-    build_root_ignore_matcher, hard_excluded_runtime_path, should_ignore_runtime_path,
-};
+use crate::workspace_ignores::hard_excluded_runtime_path;
 use ignore::WalkState;
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -227,7 +225,6 @@ fn collect_manifest_walk_paths(
     follow_symlinks: bool,
 ) -> (Vec<PathBuf>, Vec<ManifestBuildDiagnostic>) {
     let root = Arc::new(root.to_path_buf());
-    let root_ignore_matcher = Arc::new(build_root_ignore_matcher(root.as_ref()));
     let paths = Arc::new(Mutex::new(Vec::new()));
     let diagnostics = Arc::new(Mutex::new(Vec::new()));
 
@@ -235,7 +232,6 @@ fn collect_manifest_walk_paths(
         .build_parallel()
         .run(|| {
             let root = Arc::clone(&root);
-            let root_ignore_matcher = Arc::clone(&root_ignore_matcher);
             let paths = Arc::clone(&paths);
             let diagnostics = Arc::clone(&diagnostics);
             Box::new(move |dent| {
@@ -246,11 +242,7 @@ fn collect_manifest_walk_paths(
                         }
 
                         let path = entry.path().to_path_buf();
-                        if should_ignore_runtime_path(
-                            root.as_ref(),
-                            &path,
-                            Some(root_ignore_matcher.as_ref()),
-                        ) {
+                        if hard_excluded_runtime_path(root.as_ref(), &path) {
                             return WalkState::Continue;
                         }
                         paths
