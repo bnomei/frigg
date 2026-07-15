@@ -95,7 +95,10 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_init_command_with_output(&config, &cli_output)?
             }
-            Command::Index { changed } => {
+            Command::Index {
+                changed,
+                validate_embeddings,
+            } => {
                 let config = resolve_command_config(&cli, command.clone())?;
                 cli_output.progress_event(
                     OutputLevel::Info,
@@ -109,7 +112,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     None,
                 )?;
                 run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
-                run_index_command_with_output(&config, changed, &cli_output)?
+                run_index_command_with_output(&config, changed, validate_embeddings, &cli_output)?
             }
             Command::RepairStorage => {
                 let config = resolve_command_config(&cli, command.clone())?;

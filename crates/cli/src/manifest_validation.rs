@@ -17,7 +17,9 @@ use crate::indexer::{
 };
 use crate::languages::semantic_chunk_language_for_path;
 use crate::settings::SemanticRuntimeConfig;
-use crate::storage::{ManifestEntry, RepositoryManifestSnapshot, Storage};
+use crate::storage::{
+    DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, RepositoryManifestSnapshot, Storage,
+};
 
 #[cfg(test)]
 pub(crate) fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
@@ -618,6 +620,10 @@ where
         model,
     };
 
+    // This is deliberately a schema/availability probe, not the exact embedding-to-vector
+    // membership audit. The latter is reserved for `frigg index --validate-embeddings`.
+    storage.verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)?;
+
     let has_semantic_eligible_entries = snapshot.entries.iter().any(|entry| {
         let path = Path::new(&entry.path);
         !should_ignore_path(path) && semantic_chunk_language_for_path(path).is_some()
@@ -639,19 +645,10 @@ where
         &semantic_target.provider,
         &semantic_target.model,
     )?;
-    let semantic = if !has_rows {
-        RepositorySemanticFreshness::MissingForActiveModel
+    let semantic = if has_rows {
+        RepositorySemanticFreshness::Ready
     } else {
-        let health = storage.collect_semantic_storage_health_for_repository_model(
-            repository_id,
-            &semantic_target.provider,
-            &semantic_target.model,
-        )?;
-        if health.vector_consistent {
-            RepositorySemanticFreshness::Ready
-        } else {
-            RepositorySemanticFreshness::MissingForActiveModel
-        }
+        RepositorySemanticFreshness::MissingForActiveModel
     };
 
     Ok(RepositoryFreshnessStatus {
@@ -1211,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn repository_freshness_status_rejects_ready_when_vector_partition_drifts() -> FriggResult<()> {
+    fn repository_freshness_status_does_not_audit_vector_membership() -> FriggResult<()> {
         let workspace_root = temp_workspace_root("repository-freshness-vector-drift");
         fs::create_dir_all(&workspace_root)
             .expect("manifest-validation workspace root should be creatable");
@@ -1307,7 +1304,7 @@ mod tests {
             )?,
             "fixture should retain embedding rows while vector partition drifts"
         );
-        let health = storage.collect_semantic_storage_health_for_repository_model(
+        let health = storage.audit_semantic_embedding_partition(
             repository_id,
             "openai",
             "text-embedding-3-small",
@@ -1331,10 +1328,10 @@ mod tests {
         assert_eq!(status.manifest, RepositoryManifestFreshness::Ready);
         assert_eq!(
             status.semantic,
-            RepositorySemanticFreshness::MissingForActiveModel,
-            "semantic freshness must not report Ready when vector partition is inconsistent"
+            RepositorySemanticFreshness::Ready,
+            "runtime freshness must not run the explicit embedding membership audit"
         );
-        assert!(status.should_refresh_watch());
+        assert!(!status.should_refresh_watch());
 
         cleanup_workspace(&workspace_root);
         Ok(())

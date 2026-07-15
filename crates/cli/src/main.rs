@@ -19,6 +19,7 @@ use cli_runtime::{
     StorageMaintenanceCommand, ensure_storage_db_path_for_write, find_enclosing_git_root,
     resolve_command_config, resolve_semantic_runtime_config, resolve_startup_config,
     resolve_storage_db_path, resolve_watch_config, resolve_watch_runtime_config, run_index_command,
+    run_index_command_with_embedding_validation,
     run_semantic_runtime_startup_gate_with_credentials, run_storage_init_command,
     run_storage_maintenance_command, run_strict_startup_vector_readiness_gate,
 };
@@ -696,7 +697,10 @@ mod tests {
     #[test]
     fn utility_commands_default_to_warning_log_filter() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Index { changed: false });
+        cli.command = Some(Command::Index {
+            changed: false,
+            validate_embeddings: false,
+        });
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "warn"
@@ -707,7 +711,10 @@ mod tests {
     fn verbose_flag_enables_info_log_filter_for_utility_commands() {
         let mut cli = base_cli();
         cli.verbose = true;
-        cli.command = Some(Command::Index { changed: false });
+        cli.command = Some(Command::Index {
+            changed: false,
+            validate_embeddings: false,
+        });
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "info"
@@ -749,7 +756,10 @@ mod tests {
     #[test]
     fn quiet_flag_disables_rust_log_override() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Index { changed: false });
+        cli.command = Some(Command::Index {
+            changed: false,
+            validate_embeddings: false,
+        });
         cli.quiet = true;
 
         assert!(!tracing_env_override_allowed(
@@ -771,7 +781,10 @@ mod tests {
     #[test]
     fn non_quiet_utility_commands_keep_rust_log_override() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Index { changed: false });
+        cli.command = Some(Command::Index {
+            changed: false,
+            validate_embeddings: false,
+        });
 
         assert!(tracing_env_override_allowed(
             &cli,
@@ -896,8 +909,14 @@ mod tests {
         cli.semantic_runtime_enabled = Some(true);
         cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
 
-        let config = resolve_command_config(&cli, Command::Index { changed: true })
-            .expect("index command should resolve startup config");
+        let config = resolve_command_config(
+            &cli,
+            Command::Index {
+                changed: true,
+                validate_embeddings: false,
+            },
+        )
+        .expect("index command should resolve startup config");
         assert!(config.semantic_runtime.enabled);
         assert_eq!(
             config.semantic_runtime.provider,
@@ -936,7 +955,25 @@ mod tests {
 
         assert!(matches!(
             cli.command,
-            Some(Command::Index { changed: true })
+            Some(Command::Index {
+                changed: true,
+                validate_embeddings: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn index_command_accepts_embedding_validation_flag() {
+        let cli =
+            <Cli as clap::Parser>::try_parse_from(["frigg", "index", "--validate-embeddings"])
+                .expect("embedding validation flag should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Index {
+                changed: false,
+                validate_embeddings: true,
+            })
         ));
     }
 
@@ -1102,8 +1139,14 @@ mod tests {
         let mut cli = base_cli();
         cli.workspace_roots.clear();
 
-        let config = resolve_command_config(&cli, Command::Index { changed: true })
-            .expect("index command should default to the current directory");
+        let config = resolve_command_config(
+            &cli,
+            Command::Index {
+                changed: true,
+                validate_embeddings: false,
+            },
+        )
+        .expect("index command should default to the current directory");
         assert_eq!(config.workspace_roots, vec![PathBuf::from(".")]);
     }
 
@@ -1346,30 +1389,26 @@ mod tests {
     }
 
     #[test]
-    fn startup_gate_repairs_semantic_vector_partition_drift() {
-        let workspace_root = temp_workspace_root("startup-vector-auto-repair");
+    fn startup_gate_leaves_semantic_vector_partition_drift_for_explicit_validation() {
+        let workspace_root = temp_workspace_root("startup-vector-no-audit");
         create_simple_workspace(&workspace_root);
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
         run_storage_init_command(&config)
-            .expect("init should create storage before startup repair");
+            .expect("init should create storage before startup readiness check");
         let db_path = resolve_storage_db_path(&workspace_root, "startup")
             .expect("storage db path should resolve after init");
         seed_semantic_vector_drift(&db_path);
 
         run_strict_startup_vector_readiness_gate(&config)
-            .expect("startup gate should auto-repair semantic vector drift");
+            .expect("startup gate should not audit semantic vector membership");
 
         let storage = Storage::new(&db_path);
-        let repaired = storage
-            .collect_semantic_storage_health_for_repository_model(
-                "repo-001",
-                "openai",
-                "text-embedding-3-small",
-            )
-            .expect("semantic health should be readable after startup repair");
-        assert!(repaired.vector_consistent);
+        let broken = storage
+            .audit_semantic_embedding_partition("repo-001", "openai", "text-embedding-3-small")
+            .expect("semantic audit should be readable after startup readiness check");
+        assert!(!broken.vector_consistent);
 
         cleanup_workspace(&workspace_root);
     }
@@ -1571,8 +1610,8 @@ mod tests {
 
         run_storage_init_command(&config).expect("init should repair mismatched vector table");
         storage
-            .verify()
-            .expect("storage should verify after init vector repair");
+            .verify_runtime_readiness()
+            .expect("storage should be runtime-ready after init vector repair");
 
         let conn = Connection::open(&db_path).expect("storage db should open for missing fixture");
         conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME};"))
@@ -1588,8 +1627,8 @@ mod tests {
 
         run_storage_init_command(&config).expect("init should repair missing vector table");
         storage
-            .verify()
-            .expect("storage should verify after missing vector repair");
+            .verify_runtime_readiness()
+            .expect("storage should be runtime-ready after missing vector repair");
 
         cleanup_workspace(&workspace_root);
     }
@@ -1610,28 +1649,34 @@ mod tests {
     }
 
     #[test]
-    fn index_command_repairs_semantic_vectors_before_refresh() {
-        let workspace_root = temp_workspace_root("index-vector-auto-repair");
+    fn index_command_validates_semantic_vectors_only_when_requested() {
+        let workspace_root = temp_workspace_root("index-vector-validation");
         create_simple_workspace(&workspace_root);
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
-        run_storage_init_command(&config).expect("init should create storage before index repair");
+        run_storage_init_command(&config)
+            .expect("init should create storage before index validation");
         let db_path = resolve_storage_db_path(&workspace_root, "index")
             .expect("storage db path should resolve after init");
         seed_semantic_vector_drift(&db_path);
 
-        run_index_command(&config, false).expect("index should auto-repair vector drift");
+        run_index_command(&config, false).expect("ordinary index should not audit vector drift");
 
         let storage = Storage::new(&db_path);
-        let repaired = storage
-            .collect_semantic_storage_health_for_repository_model(
-                "repo-001",
-                "openai",
-                "text-embedding-3-small",
-            )
-            .expect("semantic health should be readable after index repair");
-        assert!(repaired.vector_consistent);
+        let broken = storage
+            .audit_semantic_embedding_partition("repo-001", "openai", "text-embedding-3-small")
+            .expect("semantic audit should be readable after ordinary index");
+        assert!(!broken.vector_consistent);
+
+        let error = run_index_command_with_embedding_validation(&config, false)
+            .expect_err("explicit embedding validation should reject vector drift");
+        assert!(
+            error
+                .to_string()
+                .contains("semantic_vector_partition_in_sync"),
+            "unexpected embedding validation error: {error}"
+        );
 
         cleanup_workspace(&workspace_root);
     }
@@ -1732,11 +1777,7 @@ mod tests {
         .expect("vector row corruption fixture should succeed");
 
         let broken = storage
-            .collect_semantic_storage_health_for_repository_model(
-                "repo-001",
-                "openai",
-                "text-embedding-3-small",
-            )
+            .audit_semantic_embedding_partition("repo-001", "openai", "text-embedding-3-small")
             .expect("broken semantic health should be readable");
         assert!(!broken.vector_consistent);
 
@@ -1747,11 +1788,7 @@ mod tests {
         .expect("repair-storage command should succeed");
 
         let repaired = storage
-            .collect_semantic_storage_health_for_repository_model(
-                "repo-001",
-                "openai",
-                "text-embedding-3-small",
-            )
+            .audit_semantic_embedding_partition("repo-001", "openai", "text-embedding-3-small")
             .expect("repaired semantic health should be readable");
         assert!(repaired.vector_consistent);
 
@@ -1877,11 +1914,7 @@ mod tests {
         .expect("vector row drift fixture should succeed");
 
         let broken = storage
-            .collect_semantic_storage_health_for_repository_model(
-                "repo-001",
-                "openai",
-                "text-embedding-3-small",
-            )
+            .audit_semantic_embedding_partition("repo-001", "openai", "text-embedding-3-small")
             .expect("broken semantic health should be readable");
         assert!(!broken.vector_consistent);
     }

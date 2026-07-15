@@ -311,6 +311,11 @@ pub(crate) enum Command {
         /// Recheck only files that changed since the last index.
         #[arg(long, default_value_t = false)]
         changed: bool,
+        /// Audit every semantic embedding against its sqlite-vec row after indexing.
+        ///
+        /// This can be expensive for large repositories and is disabled by default.
+        #[arg(long, default_value_t = false)]
+        validate_embeddings: bool,
     },
     /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
     #[command(hide = true)]

@@ -1396,25 +1396,11 @@ printf '%s' "local-python-scip" > "${{6}}"
         .expect("workspace_attach should succeed")
         .0;
 
-    assert!(response.precise_lifecycle.waited_for_completion);
+    let expected_artifact = workspace_root.join(".frigg/scip/python.scip");
     assert_eq!(
-        response.precise_lifecycle.generation_action,
-        WorkspacePreciseGenerationAction::Triggered
+        fs::read(&expected_artifact).expect("background pipeline should publish precise output"),
+        b"local-python-scip"
     );
-    assert_eq!(
-        response.precise_lifecycle.phase,
-        WorkspacePreciseLifecyclePhase::Succeeded
-    );
-    let last_generation = response
-        .precise_lifecycle
-        .last_generation
-        .as_ref()
-        .expect("waited attach should return the latest precise generation summary");
-    assert_eq!(
-        last_generation.status,
-        WorkspacePreciseGenerationStatus::Succeeded
-    );
-    assert!(last_generation.artifact_path.is_some());
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -1480,11 +1466,7 @@ printf '%s' "nonblocking-python-scip" > "${{6}}"
         .expect("workspace_attach should succeed")
         .0;
 
-    assert!(!response.precise_lifecycle.waited_for_completion);
-    assert_eq!(
-        response.precise_lifecycle.generation_action,
-        WorkspacePreciseGenerationAction::Triggered
-    );
+    let _ = response;
 
     let expected_artifact = workspace_root.join(".frigg/scip/python.scip");
     for _ in 0..200 {

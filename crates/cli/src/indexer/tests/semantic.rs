@@ -169,11 +169,8 @@ fn semantic_indexing_local_provider_persists_local_model_rows_and_projects_short
             && record.embedding.len() == 2
     }));
 
-    let health = storage.collect_semantic_storage_health_for_repository_model(
-        "repo-001",
-        "local",
-        "all-MiniLM-L6-v2",
-    )?;
+    let health =
+        storage.audit_semantic_embedding_partition("repo-001", "local", "all-MiniLM-L6-v2")?;
     assert!(health.vector_consistent);
     assert_eq!(
         health.covered_snapshot_id.as_deref(),
@@ -967,7 +964,7 @@ fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> 
         &FixtureSemanticEmbeddingExecutor,
     )?;
     let storage = Storage::new(&db_path);
-    let baseline_health = storage.collect_semantic_storage_health_for_repository_model(
+    let baseline_health = storage.audit_semantic_embedding_partition(
         "repo-001",
         "openai",
         "text-embedding-3-small",
@@ -1028,7 +1025,7 @@ fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> 
             "stale changed-only content should not survive cycle {idx}"
         );
 
-        let health = storage.collect_semantic_storage_health_for_repository_model(
+        let health = storage.audit_semantic_embedding_partition(
             "repo-001",
             "openai",
             "text-embedding-3-small",

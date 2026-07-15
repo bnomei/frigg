@@ -351,28 +351,25 @@ pub(crate) fn run_storage_maintenance_command_with_output(
 
         match command {
             StorageMaintenanceCommand::RepairSemanticVectorStore => {
-                let repair_summary = match storage.repair_storage_invariants() {
-                    Ok(summary) => summary,
-                    Err(err) => {
-                        report_storage_failure(
-                            output,
-                            command_name,
-                            repositories.len(),
-                            &repo.repository_id.0,
-                            root,
-                            &db_path,
-                            &err,
-                        )?;
-                        return Err(reported_error(format!(
-                            "{command_name} failed for repository_id={} root={} db={}: {err}",
-                            repo.repository_id.0,
-                            root.display(),
-                            db_path.display()
-                        )));
-                    }
-                };
+                if let Err(err) = storage.repair_semantic_vector_store() {
+                    report_storage_failure(
+                        output,
+                        command_name,
+                        repositories.len(),
+                        &repo.repository_id.0,
+                        root,
+                        &db_path,
+                        &err,
+                    )?;
+                    return Err(reported_error(format!(
+                        "{command_name} failed for repository_id={} root={} db={}: {err}",
+                        repo.repository_id.0,
+                        root.display(),
+                        db_path.display()
+                    )));
+                }
 
-                if let Err(err) = storage.verify() {
+                if let Err(err) = storage.verify_runtime_readiness() {
                     report_storage_failure(
                         output,
                         command_name,
@@ -391,11 +388,6 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                 }
 
                 total_repaired += 1;
-                let repaired_categories = if repair_summary.repaired_categories.is_empty() {
-                    "none".to_string()
-                } else {
-                    repair_summary.repaired_categories.join(",")
-                };
                 output.progress_event(
                     OutputLevel::Ok,
                     command_name,
@@ -403,7 +395,7 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                     &[
                         field("status", "ok"),
                         field("repo", &repo.repository_id.0),
-                        field("repaired", repaired_categories),
+                        field("repaired", "semantic_vector_store"),
                         field("db", db_path.display()),
                     ],
                     Some(&root.display().to_string()),

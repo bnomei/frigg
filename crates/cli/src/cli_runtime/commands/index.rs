@@ -14,9 +14,7 @@ use frigg::mcp::FriggMcpServer;
 use frigg::settings::{FriggConfig, SemanticRuntimeCredentials};
 use frigg::storage::Storage;
 
-use super::super::storage_auto_heal::{
-    initialize_storage_with_auto_repair, verify_storage_with_auto_repair,
-};
+use super::super::storage_auto_heal::initialize_storage_with_auto_repair;
 use super::{CliPreciseGenerationCounters, precise_counter_fields, run_cli_precise_generation};
 use crate::cli_runtime::storage_paths::ensure_storage_db_path_for_write;
 use crate::cli_runtime::{
@@ -26,13 +24,22 @@ use crate::cli_runtime::{
 
 #[cfg(test)]
 pub(crate) fn run_index_command(config: &FriggConfig, changed: bool) -> Result<(), Box<dyn Error>> {
-    run_index_command_with_output(config, changed, &CliOutput::normal())
+    run_index_command_with_output(config, changed, false, &CliOutput::normal())
+}
+
+#[cfg(test)]
+pub(crate) fn run_index_command_with_embedding_validation(
+    config: &FriggConfig,
+    changed: bool,
+) -> Result<(), Box<dyn Error>> {
+    run_index_command_with_output(config, changed, true, &CliOutput::normal())
 }
 
 /// Runs full or changed-only indexing for every configured repository and reports structured progress.
 pub(crate) fn run_index_command_with_output(
     config: &FriggConfig,
     changed: bool,
+    validate_embeddings: bool,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let repositories = config.repositories();
@@ -174,13 +181,10 @@ pub(crate) fn run_index_command_with_output(
                 }
             };
 
-        let storage_sanity = if config.semantic_runtime.enabled {
-            verify_storage_with_auto_repair(&storage).map(|_| ())
+        let storage_sanity = if validate_embeddings {
+            storage.validate_embeddings()
         } else {
-            match storage.verify_relational_schema() {
-                Ok(()) => Ok(()),
-                Err(_) => verify_storage_with_auto_repair(&storage).map(|_| ()),
-            }
+            storage.verify_runtime_readiness()
         };
         if let Err(err) = storage_sanity {
             report_storage_failure(

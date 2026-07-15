@@ -514,6 +514,7 @@ impl FriggMcpServer {
             RuntimeTaskKind::SemanticRefresh,
             RuntimeTaskKind::WorkspacePrepare,
             RuntimeTaskKind::WorkspaceIndex,
+            RuntimeTaskKind::PreciseGenerate,
             RuntimeTaskKind::PrecisePrewarm,
         ]
     }
@@ -567,22 +568,11 @@ impl FriggMcpServer {
                 Err(err) => return (false, false, Some(err)),
             };
 
-        if !self.config.semantic_runtime.enabled {
-            return (lexical_ready, true, None);
-        }
-
-        match self.workspace_repository_freshness_status(workspace, &self.config.semantic_runtime) {
-            Ok(status) => {
-                let semantic_ready = matches!(
-                    status.semantic,
-                    RepositorySemanticFreshness::Disabled
-                        | RepositorySemanticFreshness::NoEligibleEntries
-                        | RepositorySemanticFreshness::Ready
-                );
-                (lexical_ready, semantic_ready, None)
-            }
-            Err(err) => (lexical_ready, false, Some(err)),
-        }
+        // Semantic readiness is intentionally not part of the attach gate.  Determining it
+        // requires another repository-wide freshness walk and would make every connection pay
+        // for long-running semantic work.  New or stale lexical substrates enter the durable
+        // pipeline, whose final stage refreshes semantic state in the background.
+        (lexical_ready, true, None)
     }
 
     pub(super) fn workspace_index_lifecycle_summary(
@@ -661,55 +651,7 @@ impl FriggMcpServer {
         let workspace = workspace.clone();
         let semantic_runtime = self.config.semantic_runtime.clone();
         Ok(tokio::task::spawn_blocking(move || {
-            let result = (|| -> Result<crate::indexer::IndexSummary, String> {
-                let db_path = ensure_provenance_db_parent_dir(&workspace.root)
-                    .map_err(|err| err.to_string())?;
-                Storage::new(&db_path)
-                    .initialize_with_auto_repair()
-                    .map_err(|err| err.to_string())?;
-                let credentials = SemanticRuntimeCredentials::from_process_env();
-                let index_result = index_repository_with_runtime_config(
-                    &workspace.runtime_repository_id,
-                    &workspace.root,
-                    &db_path,
-                    IndexMode::ChangedOnly,
-                    &semantic_runtime,
-                    &credentials,
-                );
-                match index_result {
-                    Ok(summary) => Ok(summary),
-                    Err(err) => {
-                        let error = err.to_string();
-                        if semantic_runtime.enabled
-                            && !semantic_runtime.strict_mode
-                            && error.contains("phase=semantic_refresh")
-                        {
-                            warn!(
-                                repository_id = %workspace.repository_id,
-                                error = %error,
-                                "attach semantic index failed; retrying manifest-only index"
-                            );
-                            let mut manifest_only_runtime = semantic_runtime.clone();
-                            manifest_only_runtime.enabled = false;
-                            index_repository_with_runtime_config(
-                                &workspace.runtime_repository_id,
-                                &workspace.root,
-                                &db_path,
-                                IndexMode::ChangedOnly,
-                                &manifest_only_runtime,
-                                &credentials,
-                            )
-                            .map_err(|fallback_err| {
-                                format!(
-                                    "{error}; attach manifest-only retry failed: {fallback_err}"
-                                )
-                            })
-                        } else {
-                            Err(error)
-                        }
-                    }
-                }
-            })();
+            let result = server.run_workspace_attach_pipeline(&workspace, &semantic_runtime);
             server.invalidate_workspace_index_runtime_caches(&workspace, true);
             let (status, detail) = match &result {
                 Ok(_) => (RuntimeTaskStatus::Succeeded, None),
@@ -719,6 +661,92 @@ impl FriggMcpServer {
             task_guard.finish(status, detail);
             result
         }))
+    }
+
+    /// Runs the durable attach preparation pipeline.  The request that started this work may
+    /// time out, but this worker owns all three stages and therefore continues through precise
+    /// generation and semantic refresh without requiring another attach.
+    fn run_workspace_attach_pipeline(
+        &self,
+        workspace: &AttachedWorkspace,
+        semantic_runtime: &crate::settings::SemanticRuntimeConfig,
+    ) -> Result<crate::indexer::IndexSummary, String> {
+        let db_path =
+            ensure_provenance_db_parent_dir(&workspace.root).map_err(|err| err.to_string())?;
+        Storage::new(&db_path)
+            .initialize_with_auto_repair()
+            .map_err(|err| err.to_string())?;
+        let credentials = SemanticRuntimeCredentials::from_process_env();
+
+        // Commit the fast manifest/retrieval substrate before starting any long-running work.
+        // This intentionally leaves semantic disabled for the first pass: agents can use lexical
+        // search immediately, while the durable worker moves on to precise generation.
+        let mut lexical_runtime = semantic_runtime.clone();
+        lexical_runtime.enabled = false;
+        let summary = index_repository_with_runtime_config(
+            &workspace.runtime_repository_id,
+            &workspace.root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &lexical_runtime,
+            &credentials,
+        )
+        .map_err(|err| err.to_string())?;
+
+        let precise_action = self.maybe_spawn_workspace_precise_generation_for_paths(
+            workspace,
+            &summary.changed_paths,
+            &summary.deleted_paths,
+        );
+        tracing::info!(
+            repository_id = %workspace.repository_id,
+            precise_action = ?precise_action,
+            "attach preparation completed lexical stage; waiting for precise generation"
+        );
+        self.wait_for_repository_precise_generation_blocking(&workspace.repository_id);
+
+        // Semantic is deliberately last.  A real provider failure is reported on the internal
+        // task and leaves the prior semantic head/fallback intact; this worker makes no hidden
+        // retry and does not re-run the lexical stage.
+        if semantic_runtime.enabled {
+            index_repository_with_runtime_config(
+                &workspace.runtime_repository_id,
+                &workspace.root,
+                &db_path,
+                IndexMode::ChangedOnly,
+                semantic_runtime,
+                &credentials,
+            )
+            .map_err(|err| err.to_string())?;
+        }
+
+        Ok(summary)
+    }
+
+    fn wait_for_repository_precise_generation_blocking(&self, repository_id: &str) {
+        let mut idle_observations = 0usize;
+        while idle_observations < 2 {
+            let active = self
+                .runtime_state
+                .runtime_task_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .has_active_task_for_repository(RuntimeTaskKind::PreciseGenerate, repository_id);
+            let pending = self
+                .runtime_state
+                .precise_generation_pending_dirty_paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(repository_id);
+            if active || pending {
+                idle_observations = 0;
+            } else {
+                // A finishing generator releases its task before it spawns a queued replay.
+                // Require a second quiet observation so semantic cannot enter that hand-off gap.
+                idle_observations += 1;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub(super) async fn ensure_workspace_index_for_attach(
@@ -731,21 +759,11 @@ impl FriggMcpServer {
         Option<crate::indexer::IndexSummary>,
     ) {
         let started_at = tokio::time::Instant::now();
-        let (lexical_ready, semantic_ready, readiness_error) =
+        let (_lexical_ready, _semantic_ready, readiness_error) =
             self.workspace_index_readiness(workspace);
-        if lexical_ready && semantic_ready {
-            return (
-                self.workspace_index_lifecycle_summary(
-                    workspace,
-                    WorkspaceAttachIndexMode::Ensure,
-                    wait_for_index,
-                    false,
-                    WorkspaceIndexAction::SkippedNoWork,
-                    None,
-                ),
-                None,
-            );
-        }
+        // A ready lexical substrate still enters the coordinator: precise tooling may have
+        // become available since the previous attach, and semantic freshness is background
+        // work rather than an attach-time readiness probe.
         if let Some(error) = readiness_error {
             return (
                 self.workspace_index_lifecycle_summary(

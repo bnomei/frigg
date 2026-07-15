@@ -28,6 +28,6 @@ pub(crate) use storage::{
 };
 
 #[cfg(test)]
-pub(crate) use index::run_index_command;
+pub(crate) use index::{run_index_command, run_index_command_with_embedding_validation};
 #[cfg(test)]
 pub(crate) use storage::{run_storage_init_command, run_storage_maintenance_command};

@@ -35,7 +35,8 @@ pub(crate) use startup_gates::{
 
 #[cfg(test)]
 pub(crate) use commands::{
-    run_index_command, run_storage_init_command, run_storage_maintenance_command,
+    run_index_command, run_index_command_with_embedding_validation, run_storage_init_command,
+    run_storage_maintenance_command,
 };
 #[cfg(test)]
 pub(crate) use config_resolution::{resolve_semantic_runtime_config, resolve_watch_config};

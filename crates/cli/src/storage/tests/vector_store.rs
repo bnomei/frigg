@@ -253,8 +253,8 @@ fn repair_storage_rebuilds_mismatched_vector_table_schema() -> FriggResult<()> {
 }
 
 #[test]
-fn verify_with_auto_repair_rebuilds_mismatched_vector_table_schema() -> FriggResult<()> {
-    let db_path = temp_db_path("vector-schema-verify-auto-repair");
+fn initialize_with_auto_repair_rebuilds_mismatched_vector_table_schema() -> FriggResult<()> {
+    let db_path = temp_db_path("vector-schema-initialize-auto-repair");
     let storage = Storage::new(&db_path);
     storage.initialize()?;
 
@@ -269,12 +269,12 @@ fn verify_with_auto_repair_rebuilds_mismatched_vector_table_schema() -> FriggRes
         create_sqlite_vec_like_table(&conn, DEFAULT_VECTOR_DIMENSIONS + 1)?;
     }
 
-    let repaired_categories = storage.verify_with_auto_repair()?;
+    let repaired_categories = storage.initialize_with_auto_repair()?;
     assert_eq!(
         repaired_categories,
         vec!["semantic_vector_partition_in_sync".to_owned()]
     );
-    storage.verify()?;
+    storage.validate_embeddings()?;
 
     cleanup_db(&db_path);
     Ok(())
@@ -369,17 +369,14 @@ fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
     })?;
     drop(conn);
 
-    let broken = storage.collect_semantic_storage_health_for_repository_model(
-        "repo-1",
-        "openai",
-        "text-embedding-3-small",
-    )?;
+    let broken =
+        storage.audit_semantic_embedding_partition("repo-1", "openai", "text-embedding-3-small")?;
     assert!(!broken.vector_consistent);
     assert_eq!(broken.live_embedding_rows, 2);
     assert_eq!(broken.live_vector_rows, 3);
 
     let err = storage
-        .verify()
+        .validate_embeddings()
         .expect_err("verify should fail when semantic vector partitions drift out of sync");
     let err_message = err.to_string();
     assert!(
@@ -395,17 +392,10 @@ fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
         "unexpected semantic partition details: {err_message}"
     );
 
-    let repair_summary = storage.repair_storage_invariants()?;
-    assert_eq!(
-        repair_summary.repaired_categories,
-        vec!["semantic_vector_partition_in_sync".to_string()]
-    );
+    storage.repair_semantic_vector_store()?;
 
-    let repaired = storage.collect_semantic_storage_health_for_repository_model(
-        "repo-1",
-        "openai",
-        "text-embedding-3-small",
-    )?;
+    let repaired =
+        storage.audit_semantic_embedding_partition("repo-1", "openai", "text-embedding-3-small")?;
     assert!(repaired.vector_consistent);
     assert_eq!(repaired.live_embedding_rows, 2);
     assert_eq!(repaired.live_vector_rows, 2);

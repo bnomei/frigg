@@ -511,7 +511,7 @@ pub enum WorkspaceAttachAction {
     ReusedWorkspace,
 }
 
-/// Parameters for explicit workspace attach that may wait for precise generation readiness.
+/// Parameters for explicit workspace attach.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachParams {
     /// File or directory path to attach.
@@ -522,7 +522,9 @@ pub struct WorkspaceAttachParams {
     pub set_default: Option<bool>,
     /// Workspace resolution strategy.
     pub resolve_mode: Option<WorkspaceResolveMode>,
-    /// Whether to wait for triggered or active precise generation before returning. Omit to default to `true`.
+    /// Legacy compatibility input. Attach preparation always uses the bounded background
+    /// pipeline and never adds a separate precise-generation wait.
+    #[schemars(skip)]
     pub wait_for_precise: Option<bool>,
 }
 
@@ -546,7 +548,8 @@ pub struct WorkspaceResponse {
     pub session_default: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<RepositorySummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub runtime: Option<RuntimeStatusSummary>,
     /// Authoritative freshness state. The following top-level gate fields are compatibility projections.
     pub freshness: WorkspaceFreshnessSummary,
@@ -572,7 +575,8 @@ pub struct WorkspaceResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_ready: Option<bool>,
     /// Semantic index substrate ready or intentionally disabled (not a full health scorecard).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub semantic_ready: Option<bool>,
     /// Opt-in local routing stats when `FRIGG_ROUTING_STATS=1`.
     /// Process-local only; never cloud telemetry.
@@ -580,7 +584,7 @@ pub struct WorkspaceResponse {
     pub routing_stats: Option<crate::mcp::routing_stats::RoutingStatsSnapshot>,
 }
 
-/// Response from `workspace_attach` with storage and precise lifecycle state.
+/// Response from `workspace_attach` with storage and an internal preparation lifecycle.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachResponse {
     pub repository: RepositorySummary,
@@ -589,9 +593,13 @@ pub struct WorkspaceAttachResponse {
     pub session_default: bool,
     pub storage: WorkspaceStorageSummary,
     pub action: WorkspaceAttachAction,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub precise: WorkspacePreciseSummary,
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub precise_lifecycle: WorkspacePreciseLifecycleSummary,
-    #[serde(skip)]
+    #[serde(skip_serializing)]
     #[schemars(skip)]
     pub index_lifecycle: WorkspaceIndexLifecycleSummary,
 }
@@ -687,18 +695,21 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct WorkspaceCurrentParams {}
 
-/// Compact response from `workspace_current` summarizing session adoption and runtime tasks.
+/// Compact response from `workspace_current` summarizing session adoption.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceCurrentResponse {
     pub repository: Option<RepositorySummary>,
     pub session_default: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<RepositorySummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub precise: Option<WorkspacePreciseSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub precise_ingest: Option<WorkspacePreciseIngestSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub runtime: Option<RuntimeStatusSummary>,
 }
 
@@ -1079,7 +1090,8 @@ mod tests {
         assert_eq!(value["working_tree_dirty"], false);
         assert_eq!(value["watch_active"], false);
         assert_eq!(value["lexical_ready"], true);
-        assert_eq!(value["semantic_ready"], false);
+        assert!(value.get("semantic_ready").is_none());
+        assert!(value.get("runtime").is_none());
         assert_eq!(value["freshness"]["snapshot"]["state"], "ready");
         assert!(value.get("changed_paths_since_snapshot").is_none());
         assert!(value.get("fresh_enough_for").is_none());

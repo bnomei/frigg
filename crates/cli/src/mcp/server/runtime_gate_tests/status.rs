@@ -394,7 +394,7 @@ fn server_starts_detached_when_started_without_startup_roots() {
 }
 
 #[test]
-fn workspace_semantic_index_summary_reports_error_when_storage_health_probe_fails() {
+fn workspace_semantic_index_summary_reports_error_when_vector_store_is_missing() {
     let workspace_root = temp_workspace_root("semantic-health-probe-failure");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace src directory");
@@ -441,7 +441,7 @@ fn workspace_semantic_index_summary_reports_error_when_storage_health_probe_fail
     let conn = rusqlite::Connection::open(&workspace.db_path)
         .expect("workspace storage db should open for corruption fixture");
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME}"))
-        .expect("vector table drop should corrupt semantic health probe");
+        .expect("vector table drop should corrupt the explicit embedding audit fixture");
     drop(conn);
 
     let semantic = server.workspace_semantic_index_summary(&workspace, &storage);
@@ -450,11 +450,14 @@ fn workspace_semantic_index_summary_reports_error_when_storage_health_probe_fail
         semantic
             .reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("failed to count semantic vector rows")),
-        "semantic health probe failure should surface storage error detail, got {:?}",
-        semantic.reason
+            .is_some_and(|reason| reason.contains("missing vector table"))
     );
     assert_eq!(semantic.snapshot_id.as_deref(), Some("snapshot-001"));
+
+    let error = Storage::new(&workspace.db_path)
+        .validate_embeddings()
+        .expect_err("explicit embedding validation should detect the missing vector table");
+    assert!(error.to_string().contains("missing vector table"));
 
     let _ = fs::remove_dir_all(workspace_root);
 }

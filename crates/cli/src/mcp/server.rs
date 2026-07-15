@@ -136,15 +136,16 @@ use crate::mcp::types::{
     WorkspaceFreshnessSummary, WorkspaceIndexAction, WorkspaceIndexComponentState,
     WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspaceIndexLifecyclePhase,
     WorkspaceIndexLifecycleSummary, WorkspaceIndexParams, WorkspaceIndexResponse, WorkspaceParams,
-    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
-    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
-    WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
-    WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
-    WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseState,
-    WorkspacePreciseSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
-    WorkspaceRecommendedAction, WorkspaceResolveMode, WorkspaceResponse,
-    WorkspaceSnapshotFreshnessState, WorkspaceStorageIndexState, WorkspaceStorageSummary,
-    ZeroHitDiagnostics, ZeroHitIndex, ZeroHitInput, ZeroHitReason, ZeroHitScope,
+    WorkspacePostEditStrategy, WorkspacePreciseArtifactFailureSummary,
+    WorkspacePreciseCoverageMode, WorkspacePreciseGenerationAction,
+    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
+    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
+    WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
+    WorkspacePreciseLifecycleSummary, WorkspacePreciseState, WorkspacePreciseSummary,
+    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
+    WorkspaceResolveMode, WorkspaceResponse, WorkspaceSnapshotFreshnessState,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary, ZeroHitDiagnostics, ZeroHitIndex,
+    ZeroHitInput, ZeroHitReason, ZeroHitScope,
 };
 #[cfg(feature = "playbook")]
 use crate::mcp::types::{
@@ -646,9 +647,6 @@ impl FriggMcpServer {
         let compatibility = freshness.compatibility_projection();
         let routing_stats = crate::mcp::routing_stats::routing_stats_enabled()
             .then(crate::mcp::routing_stats::snapshot);
-        let (lexical_ready, semantic_ready) =
-            self.workspace_substrate_ready_flags(current_workspace.as_ref());
-
         WorkspaceResponse {
             repository,
             session_default: current_workspace.is_some(),
@@ -661,31 +659,10 @@ impl FriggMcpServer {
             changed_paths_since_snapshot: freshness.changed_paths_since_snapshot.clone(),
             watch_active: Some(watch_active),
             fresh_enough_for: Some(compatibility.fresh_enough_for),
-            lexical_ready,
-            semantic_ready,
+            lexical_ready: None,
+            semantic_ready: None,
             routing_stats,
         }
-    }
-
-    /// Optional lexical/semantic ready flags for agent health vocabulary (not full scorecards).
-    fn workspace_substrate_ready_flags(
-        &self,
-        current_workspace: Option<&AttachedWorkspace>,
-    ) -> (Option<bool>, Option<bool>) {
-        use crate::mcp::types::WorkspaceIndexComponentState;
-
-        let Some(workspace) = current_workspace else {
-            return (None, None);
-        };
-        let storage = Self::workspace_storage_summary(workspace);
-        let lexical = self.workspace_lexical_index_summary(workspace, &storage);
-        let semantic = self.workspace_semantic_index_summary(workspace, &storage);
-        let lexical_ready = Some(matches!(lexical.state, WorkspaceIndexComponentState::Ready));
-        let semantic_ready = Some(matches!(
-            semantic.state,
-            WorkspaceIndexComponentState::Ready | WorkspaceIndexComponentState::Disabled
-        ));
-        (lexical_ready, semantic_ready)
     }
 
     /// Captures handler facts once, then delegates all public freshness and compatibility state
@@ -737,7 +714,7 @@ impl FriggMcpServer {
             .clone()
             .expect("runtime status always captures watch status");
 
-        workspace_freshness::derive_workspace_freshness(
+        let mut freshness = workspace_freshness::derive_workspace_freshness(
             &workspace_freshness::WorkspaceFreshnessInput {
                 snapshot_state,
                 storage_available,
@@ -760,7 +737,24 @@ impl FriggMcpServer {
                 watch_status,
                 live_tool_names: runtime.tools_exposed.clone(),
             },
-        )
+        );
+        let preparation_active = current_workspace.is_some_and(|workspace| {
+            runtime.active_tasks.iter().any(|task| {
+                task.kind == RuntimeTaskKind::WorkspaceIndex
+                    && (task.repository_id == workspace.repository_id
+                        || task.repository_id == workspace.runtime_repository_id)
+            })
+        });
+        if preparation_active {
+            // The attach coordinator owns recovery. Do not teach the next agent turn that it
+            // must run a redundant CLI index while that coordinator is still making progress.
+            freshness.snapshot.state = WorkspaceSnapshotFreshnessState::Ready;
+            freshness.snapshot.storage_available = Some(true);
+            freshness.post_edit.strategy = WorkspacePostEditStrategy::UseSnapshot;
+            freshness.dirty_scope = WorkspaceDirtyScope::Clean;
+            freshness.changed_paths_since_snapshot.clear();
+        }
+        freshness
     }
 
     /// Best-effort index freshness block for zero-hit recovery.
@@ -955,30 +949,9 @@ impl FriggMcpServer {
             let repository_id = outcome.response.repository.repository_id.clone();
             if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
                 let (index_lifecycle, index_summary) = self
-                    .ensure_workspace_index_for_attach(
-                        &workspace,
-                        true,
-                        Duration::from_millis(30_000),
-                    )
+                    .ensure_workspace_index_for_attach(&workspace, true, Duration::from_secs(10))
                     .await;
-                if matches!(index_lifecycle.phase, WorkspaceIndexLifecyclePhase::Ready) {
-                    match index_summary.as_ref() {
-                        Some(summary) => {
-                            self.maybe_spawn_workspace_precise_generation_for_paths(
-                                &workspace,
-                                &summary.changed_paths,
-                                &summary.deleted_paths,
-                            );
-                        }
-                        None => {
-                            self.maybe_spawn_workspace_precise_generation_for_paths(
-                                &workspace,
-                                &[],
-                                &[],
-                            );
-                        }
-                    }
-                }
+                let _ = (index_lifecycle, index_summary);
             }
             if let Some(guard) = outcome.rollback_guard {
                 guard.disarm();
@@ -1008,30 +981,9 @@ impl FriggMcpServer {
             let repository_id = outcome.response.repository.repository_id.clone();
             if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
                 let (index_lifecycle, index_summary) = self
-                    .ensure_workspace_index_for_attach(
-                        &workspace,
-                        true,
-                        Duration::from_millis(30_000),
-                    )
+                    .ensure_workspace_index_for_attach(&workspace, true, Duration::from_secs(10))
                     .await;
-                if matches!(index_lifecycle.phase, WorkspaceIndexLifecyclePhase::Ready) {
-                    match index_summary.as_ref() {
-                        Some(summary) => {
-                            self.maybe_spawn_workspace_precise_generation_for_paths(
-                                &workspace,
-                                &summary.changed_paths,
-                                &summary.deleted_paths,
-                            );
-                        }
-                        None => {
-                            self.maybe_spawn_workspace_precise_generation_for_paths(
-                                &workspace,
-                                &[],
-                                &[],
-                            );
-                        }
-                    }
-                }
+                let _ = (index_lifecycle, index_summary);
             }
             if let Some(guard) = outcome.rollback_guard {
                 guard.disarm();
@@ -1214,10 +1166,9 @@ impl FriggMcpServer {
         let params = params.0;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
-        let wait_for_precise = params.wait_for_precise.unwrap_or(true);
         let index_mode = WorkspaceAttachIndexMode::Ensure;
         let wait_for_index = true;
-        let index_timeout = Duration::from_millis(30_000);
+        let index_timeout = Duration::from_secs(10);
         let started_at = Instant::now();
         info!(
             requested_path = params.path.as_deref().unwrap_or(""),
@@ -1257,25 +1208,8 @@ impl FriggMcpServer {
                     .ensure_workspace_index_for_attach(&workspace, wait_for_index, index_timeout)
                     .await;
                 response.index_lifecycle = index_lifecycle;
-                let precise_generation_action = if matches!(
-                    response.index_lifecycle.phase,
-                    WorkspaceIndexLifecyclePhase::Ready
-                ) {
-                    match index_summary.as_ref() {
-                        Some(summary) => self.maybe_spawn_workspace_precise_generation_for_paths(
-                            &workspace,
-                            &summary.changed_paths,
-                            &summary.deleted_paths,
-                        ),
-                        None => self.maybe_spawn_workspace_precise_generation_for_paths(
-                            &workspace,
-                            &[],
-                            &[],
-                        ),
-                    }
-                } else {
-                    WorkspacePreciseGenerationAction::NotApplicable
-                };
+                let _ = index_summary;
+                let precise_generation_action = WorkspacePreciseGenerationAction::NotApplicable;
                 let mut repository = self.public_repository_summary(&workspace);
                 let storage = repository
                     .storage
@@ -1295,36 +1229,6 @@ impl FriggMcpServer {
                     &precise,
                     false,
                     false,
-                );
-            }
-        }
-        if wait_for_precise {
-            let repository_id = response.repository.repository_id.clone();
-            let completed = self
-                .wait_for_repository_precise_generation(&repository_id, Duration::from_secs(30))
-                .await;
-            if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
-                let mut repository = self.public_repository_summary(&workspace);
-                let storage = repository
-                    .storage
-                    .clone()
-                    .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
-                repository.storage = None;
-                let generation_action = response
-                    .precise
-                    .generation_action
-                    .unwrap_or(WorkspacePreciseGenerationAction::NotApplicable);
-                let precise = self
-                    .workspace_precise_summary_for_workspace(&workspace, Some(generation_action));
-                response.repository = repository;
-                response.storage = storage;
-                response.precise = precise.clone();
-                response.precise_lifecycle = self.workspace_precise_lifecycle_summary(
-                    &workspace,
-                    generation_action,
-                    &precise,
-                    true,
-                    !completed,
                 );
             }
         }

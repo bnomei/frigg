@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.9.2 - 2026-07-15
+
+- Made workspace attachment acknowledge within a short grace period while lexical, precise, and semantic preparation continues in the background.
+- Restricted exact embedding membership validation to `frigg index --validate-embeddings`.
+
 ## 0.9.1 - 2026-07-13
 
 - Fixed live-watch filtering to honor nested `.gitignore` and `.ignore` rules, preventing

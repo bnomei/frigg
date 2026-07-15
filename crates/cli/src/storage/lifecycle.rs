@@ -30,11 +30,21 @@ impl Storage {
         self.initialize_with_vector_store(true)
     }
 
-    /// Initializes storage and auto-repairs regenerable invariants when verification fails.
+    /// Initializes storage and repairs a missing or incompatible vector table when possible.
+    ///
+    /// This deliberately does not compare every semantic embedding with the sqlite-vec
+    /// projection. That audit is explicit-only; see [`Self::validate_embeddings`].
     pub fn initialize_with_auto_repair(&self) -> FriggResult<Vec<String>> {
         match self.initialize() {
-            Ok(()) => self.verify_with_auto_repair(),
-            Err(original_err) => self.repair_then_verify(original_err),
+            Ok(()) => Ok(Vec::new()),
+            Err(original_err) if vector_store_error_is_repairable(&original_err.to_string()) => {
+                self.repair_semantic_vector_store()?;
+                self.initialize()?;
+                Ok(vec![
+                    INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC.to_string(),
+                ])
+            }
+            Err(original_err) => Err(original_err),
         }
     }
 
@@ -162,42 +172,38 @@ impl Storage {
         read_schema_version(&conn)
     }
 
-    /// Verifies schema version, required tables, and storage invariants.
-    pub fn verify(&self) -> FriggResult<()> {
+    /// Verifies cheap schema and sqlite-vec readiness required by normal runtime paths.
+    ///
+    /// This never scans semantic row membership. Use [`Self::validate_embeddings`] only for
+    /// the explicit `frigg index --validate-embeddings` audit.
+    pub fn verify_runtime_readiness(&self) -> FriggResult<()> {
         let mut conn = open_existing_connection(&self.db_path)?;
         self.require_current_schema_on_connection(&conn)?;
         self.verify_required_tables_on_connection(&conn)?;
 
         run_repository_roundtrip_probe(&mut conn)?;
         verify_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
-        self.verify_storage_invariants_with_connection(&conn)?;
-
+        self.verify_relational_invariants_with_connection(&conn)?;
         Ok(())
     }
 
-    /// Verifies storage invariants and attempts one repair pass before surfacing the original error.
-    pub fn verify_with_auto_repair(&self) -> FriggResult<Vec<String>> {
-        match self.verify() {
-            Ok(()) => Ok(Vec::new()),
-            Err(original_err) => self.repair_then_verify(original_err),
-        }
+    /// Audits every semantic embedding/vector membership pair.
+    ///
+    /// This may scan a large sqlite-vec table and is intentionally reserved for
+    /// `frigg index --validate-embeddings`.
+    pub fn validate_embeddings(&self) -> FriggResult<()> {
+        self.verify_runtime_readiness()?;
+        let conn = self.open_current_schema_connection()?;
+        self.verify_embedding_membership_with_connection(&conn)
     }
 
-    fn repair_then_verify(&self, original_err: FriggError) -> FriggResult<Vec<String>> {
-        let repair_summary = self.repair_storage_invariants()?;
-        match self.verify() {
-            Ok(()) => Ok(repair_summary.repaired_categories),
-            Err(_) if repair_summary.repaired_categories.is_empty() => Err(original_err),
-            Err(err) => Err(err),
-        }
-    }
-
+    /// Verifies cheap relational schema readiness for workspace/status responses.
     pub fn verify_relational_schema(&self) -> FriggResult<()> {
         let mut conn = open_existing_connection(&self.db_path)?;
         self.require_current_schema_on_connection(&conn)?;
         self.verify_required_tables_on_connection(&conn)?;
         run_repository_roundtrip_probe(&mut conn)?;
-        self.verify_storage_invariants_with_connection(&conn)?;
+        self.verify_relational_invariants_with_connection(&conn)?;
         Ok(())
     }
 
@@ -238,18 +244,16 @@ impl Storage {
             Err(err) => return Err(err),
         }
 
-        let inconsistent_partitions = self.semantic_vector_partition_violations(&conn)?;
-        if !inconsistent_partitions.is_empty() {
-            self.repair_semantic_vector_store()?;
-            repaired_categories.push(INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC.to_string());
-        }
-
         Ok(StorageInvariantRepairSummary {
             repaired_categories,
         })
     }
 
-    fn verify_storage_invariants_with_connection(&self, conn: &Connection) -> FriggResult<()> {
+    /// Validates relational invariants with indexed count queries only.
+    ///
+    /// Keep this separate from embedding membership validation: normal runtime readiness needs
+    /// these integrity checks, but must not enumerate sqlite-vec row membership.
+    fn verify_relational_invariants_with_connection(&self, conn: &Connection) -> FriggResult<()> {
         let invalid_manifest_rows: i64 = conn
             .query_row(
                 r#"
@@ -300,6 +304,14 @@ impl Storage {
             )));
         }
 
+        Ok(())
+    }
+
+    /// Performs the potentially expensive exact sqlite-vec membership audit.
+    ///
+    /// This is reached only by [`Self::validate_embeddings`], which is wired exclusively to
+    /// `frigg index --validate-embeddings`.
+    fn verify_embedding_membership_with_connection(&self, conn: &Connection) -> FriggResult<()> {
         let inconsistent_partitions = self.semantic_vector_partition_violations(conn)?;
         if !inconsistent_partitions.is_empty() {
             return Err(FriggError::Internal(format!(
@@ -351,11 +363,8 @@ impl Storage {
                     INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC
                 ))
             })?;
-            let health = self.collect_semantic_storage_health_for_repository_model(
-                &repository_id,
-                &provider,
-                &model,
-            )?;
+            let health =
+                self.audit_semantic_embedding_partition(&repository_id, &provider, &model)?;
             if !health.vector_consistent {
                 partitions.push(format!("{repository_id}:{provider}:{model}"));
             }

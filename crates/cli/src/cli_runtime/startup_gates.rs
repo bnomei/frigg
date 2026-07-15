@@ -16,7 +16,6 @@ use frigg::settings::{
 use frigg::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend};
 use tracing::info;
 
-use super::storage_auto_heal::verify_storage_with_auto_repair;
 use crate::cli_runtime::storage_paths::resolve_storage_db_path;
 use crate::cli_runtime::{
     CliOutput, OutputField, OutputLevel, field, format_output_event_line, reported_io_error,
@@ -114,44 +113,26 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
             return Err(reported_io_error(err_message));
         }
         let storage = Storage::new(&db_path);
-        let repaired_categories = match verify_storage_with_auto_repair(&storage) {
-            Ok(categories) => categories,
-            Err(err) => {
-                let err_message = format!(
-                    "startup strict vector readiness failed repository_id={} root={} db={}: {err}",
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display()
-                );
-                output.error_event(
-                    "startup",
-                    "failed",
-                    &[
-                        field("status", "failed"),
-                        field("repos", repositories.len()),
-                        field("repo", &repo.repository_id.0),
-                        field("db", db_path.display()),
-                        field("error", &err_message),
-                    ],
-                    Some(&root.display().to_string()),
-                )?;
-                return Err(reported_io_error(err_message));
-            }
-        };
-        if !repaired_categories.is_empty() {
-            output.progress_event(
-                OutputLevel::Warn,
-                "storage",
-                "auto_repair",
+        if let Err(err) = storage.verify_runtime_readiness() {
+            let err_message = format!(
+                "startup strict vector readiness failed repository_id={} root={} db={}: {err}",
+                repo.repository_id.0,
+                root.display(),
+                db_path.display()
+            );
+            output.error_event(
+                "startup",
+                "failed",
                 &[
-                    field("status", "ok"),
-                    field("command", "startup"),
+                    field("status", "failed"),
+                    field("repos", repositories.len()),
                     field("repo", &repo.repository_id.0),
-                    field("repaired", repaired_categories.join(",")),
                     field("db", db_path.display()),
+                    field("error", &err_message),
                 ],
                 Some(&root.display().to_string()),
             )?;
+            return Err(reported_io_error(err_message));
         }
         let status = storage
             .verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)

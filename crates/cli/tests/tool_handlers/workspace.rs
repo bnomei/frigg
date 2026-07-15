@@ -267,6 +267,8 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         serialized.get("index_lifecycle").is_none(),
         "workspace_attach index_lifecycle is internal-only and intentionally omitted from the wire shape"
     );
+    assert!(serialized.get("precise").is_none());
+    assert!(serialized.get("precise_lifecycle").is_none());
     assert!(
         serialized
             .get("repository")

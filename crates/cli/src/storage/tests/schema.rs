@@ -258,7 +258,7 @@ fn verify_succeeds_after_initialize() -> FriggResult<()> {
     let storage = Storage::new(&db_path);
 
     storage.initialize()?;
-    storage.verify()?;
+    storage.validate_embeddings()?;
 
     cleanup_db(&db_path);
     Ok(())
@@ -270,7 +270,7 @@ fn verify_missing_db_fails_without_creating_file() {
     let storage = Storage::new(&db_path);
 
     let err = storage
-        .verify()
+        .validate_embeddings()
         .expect_err("verify should fail when the storage db file is missing");
     let message = err.to_string();
     assert!(
@@ -303,7 +303,7 @@ fn verify_fails_when_required_table_missing() -> FriggResult<()> {
     }
 
     let err = storage
-        .verify()
+        .validate_embeddings()
         .expect_err("verify should fail when schema table is missing");
     let err_message = err.to_string();
     assert!(
@@ -355,7 +355,7 @@ fn verify_fails_when_manifest_rows_reference_non_manifest_snapshots() -> FriggRe
     }
 
     let err = storage
-        .verify()
+        .validate_embeddings()
         .expect_err("verify should fail when file_manifest rows reference non-manifest snapshots");
     let err_message = err.to_string();
     assert!(

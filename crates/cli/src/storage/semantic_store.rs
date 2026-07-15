@@ -82,7 +82,11 @@ impl Storage {
         )
     }
 
-    pub fn collect_semantic_storage_health_for_repository_model(
+    /// Performs the explicit, potentially expensive membership audit for one semantic partition.
+    ///
+    /// Normal serving and workspace status paths must not call this; use it only from
+    /// [`Storage::validate_embeddings`].
+    pub fn audit_semantic_embedding_partition(
         &self,
         repository_id: &str,
         provider: &str,

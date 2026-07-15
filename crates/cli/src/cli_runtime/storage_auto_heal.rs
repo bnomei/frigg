@@ -6,12 +6,10 @@
 use frigg::domain::FriggResult;
 use frigg::storage::Storage;
 
-/// Initializes storage and auto-repairs regenerable invariants when verification fails.
+/// Initializes storage and repairs only a missing or incompatible sqlite-vec table.
+///
+/// Full embedding membership validation is intentionally opt-in through
+/// `frigg index --validate-embeddings`.
 pub(crate) fn initialize_storage_with_auto_repair(storage: &Storage) -> FriggResult<Vec<String>> {
     storage.initialize_with_auto_repair()
-}
-
-/// Verifies storage invariants and attempts one repair pass before surfacing the original error.
-pub(crate) fn verify_storage_with_auto_repair(storage: &Storage) -> FriggResult<Vec<String>> {
-    storage.verify_with_auto_repair()
 }

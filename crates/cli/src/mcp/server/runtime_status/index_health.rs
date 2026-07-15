@@ -4,6 +4,7 @@
 //! reporting.
 
 use super::*;
+use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
 
 impl FriggMcpServer {
     fn response_freshness_cache_eligible(&self, workspaces: &[AttachedWorkspace]) -> bool {
@@ -693,34 +694,15 @@ impl FriggMcpServer {
                 let snapshot_id = freshness
                     .snapshot_id
                     .expect("ready semantic freshness should carry a snapshot id");
-                let semantic_health = match storage_reader
-                    .collect_semantic_storage_health_for_repository_model(
-                        &workspace.runtime_repository_id,
-                        provider_ref,
-                        model_ref,
-                    ) {
-                    Ok(health) => health,
-                    Err(err) => {
-                        return WorkspaceIndexComponentSummary {
-                            state: WorkspaceIndexComponentState::Error,
-                            reason: Some(err.to_string()),
-                            snapshot_id: Some(snapshot_id),
-                            compatible_snapshot_id: None,
-                            provider: provider.clone(),
-                            model: model.clone(),
-                            artifact_count: None,
-                        };
-                    }
-                };
-                if !semantic_health.vector_consistent {
+                if let Err(err) = storage_reader.verify_vector_store(DEFAULT_VECTOR_DIMENSIONS) {
                     return WorkspaceIndexComponentSummary {
                         state: WorkspaceIndexComponentState::Error,
-                        reason: Some("semantic_vector_partition_out_of_sync".to_owned()),
+                        reason: Some(err.to_string()),
                         snapshot_id: Some(snapshot_id),
                         compatible_snapshot_id: None,
-                        provider: provider.clone(),
-                        model: model.clone(),
-                        artifact_count: Some(semantic_health.live_embedding_rows),
+                        provider,
+                        model,
+                        artifact_count: None,
                     };
                 }
                 WorkspaceIndexComponentSummary {
@@ -730,16 +712,14 @@ impl FriggMcpServer {
                     compatible_snapshot_id: None,
                     provider: provider.clone(),
                     model: model.clone(),
-                    artifact_count: Some(semantic_health.live_embedding_rows).or_else(|| {
-                        storage_reader
-                            .count_semantic_embeddings_for_repository_snapshot_model(
-                                &workspace.runtime_repository_id,
-                                &snapshot_id,
-                                provider_ref,
-                                model_ref,
-                            )
-                            .ok()
-                    }),
+                    artifact_count: storage_reader
+                        .count_semantic_embeddings_for_repository_snapshot_model(
+                            &workspace.runtime_repository_id,
+                            &snapshot_id,
+                            provider_ref,
+                            model_ref,
+                        )
+                        .ok(),
                 }
             }
             RepositorySemanticFreshness::MissingForActiveModel => {
