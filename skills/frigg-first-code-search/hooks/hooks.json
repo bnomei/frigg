@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob|Bash|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "frigg hook pretooluse",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

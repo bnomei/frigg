@@ -341,3 +341,95 @@ fn adopt_cli_force_replaces_diverged_frigg_mcp_entry() {
     assert_eq!(value["mcpServers"]["other"]["command"], "other");
     cleanup_workspace(&root);
 }
+
+/// The Claude skills-directory plugin already carries an MCP server and a PreToolUse hook.
+/// Combining it with the standalone project targets double-registers both, so adopt must say so —
+/// and must stay quiet when there is no overlap.
+#[test]
+fn adopt_cli_warns_only_when_claude_plugin_overlaps_project_targets() {
+    let root = temp_workspace_root("claude-plugin-overlap");
+    let home = root.join("fake-home");
+    fs::create_dir_all(home.join(".claude/skills")).expect("create claude skills parent");
+    let skill_source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("skills/frigg-first-code-search");
+    if !skill_source.join(".claude-plugin/plugin.json").is_file() {
+        cleanup_workspace(&root);
+        return;
+    }
+
+    let run = |args: &[&str]| -> Output {
+        Command::new(frigg_bin())
+            .arg("--workspace-root")
+            .arg(&root)
+            .args(args)
+            .env("HOME", &home)
+            .env("FRIGG_SKILL_SOURCE", &skill_source)
+            .output()
+            .expect("run frigg binary")
+    };
+
+    const WARNING: &str = "claude-duplicate-wiring";
+
+    // Plugin only: nothing to collide with.
+    let plugin_only = run(&[
+        "adopt",
+        "--target",
+        "claude-md",
+        "--skill-provider",
+        "claude",
+    ]);
+    assert_success(&plugin_only);
+    assert!(
+        !stdout(&plugin_only).contains(WARNING),
+        "plugin alone must not warn\nstdout:\n{}",
+        stdout(&plugin_only)
+    );
+
+    // Plugin plus the targets it already provides: warn.
+    let overlapping = run(&[
+        "adopt",
+        "--target",
+        "mcp-project",
+        "--target",
+        "hook",
+        "--skill-provider",
+        "claude",
+    ]);
+    assert_success(&overlapping);
+    let overlap_output = stdout(&overlapping);
+    assert!(
+        overlap_output.contains(WARNING),
+        "overlapping wiring must warn\nstdout:\n{overlap_output}"
+    );
+    assert!(
+        overlap_output.contains("mcp-project") && overlap_output.contains("hook"),
+        "warning should name the overlapping targets\nstdout:\n{overlap_output}"
+    );
+
+    // Wiring left by an EARLIER run, with no target passed now. `hook` is excluded from marker
+    // detection, so this is invisible to the plan and must be detected on disk instead.
+    fs::remove_dir_all(home.join(".claude/skills/frigg-first-code-search"))
+        .expect("remove installed plugin");
+    let hook_first = run(&["adopt", "--target", "hook"]);
+    assert_success(&hook_first);
+    let plugin_after_hook = run(&["adopt", "--skill-provider", "claude"]);
+    assert_success(&plugin_after_hook);
+    let after_hook_output = stdout(&plugin_after_hook);
+    assert!(
+        after_hook_output.contains(WARNING) && after_hook_output.contains("hook"),
+        "a hook adopted by an earlier run must still be reported\nstdout:\n{after_hook_output}"
+    );
+
+    // Same targets without the plugin: nothing to collide with.
+    let _ = fs::remove_dir_all(home.join(".claude/skills/frigg-first-code-search"));
+    let targets_only = run(&["adopt", "--target", "mcp-project", "--target", "hook"]);
+    assert_success(&targets_only);
+    assert!(
+        !stdout(&targets_only).contains(WARNING),
+        "targets without the plugin must not warn\nstdout:\n{}",
+        stdout(&targets_only)
+    );
+
+    cleanup_workspace(&root);
+}

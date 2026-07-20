@@ -75,6 +75,7 @@ pub(crate) fn run_adopt_command_with_output(
         mcp_server_url,
     )?;
     let skill_plans = build_skill_plans(config, &skill_providers, uninstall);
+    warn_on_duplicate_claude_wiring(output, config, &plan, &skill_plans, uninstall)?;
     let pending_changes = plan.pending_changes()
         + skill_plans
             .iter()
@@ -195,6 +196,101 @@ pub(crate) fn run_adopt_command_with_output(
     )?;
 
     Ok(())
+}
+
+/// Warn when the Claude plugin and the standalone project targets would both wire Claude up.
+///
+/// The skills-directory plugin already carries an MCP server and a PreToolUse hook. Adding
+/// `--target mcp-project` or `--target hook` on top registers a second Frigg server under a
+/// separate plugin namespace and a second copy of the nudge, which doubles the tool surface in
+/// context — the opposite of what Frigg is for. Advisory only: both configurations still work.
+fn warn_on_duplicate_claude_wiring(
+    output: &CliOutput,
+    config: &FriggConfig,
+    plan: &AdoptPlan,
+    skill_plans: &[SkillInstallPlan],
+    uninstall: bool,
+) -> Result<(), Box<dyn Error>> {
+    if uninstall {
+        return Ok(());
+    }
+
+    // Present after this run, not merely written by it: the overlap matters just as much when the
+    // plugin is already current and the user is adding the standalone targets on a later invocation.
+    let claude_plugin_present = skill_plans.iter().any(|skill_plan| {
+        skill_plan.provider == SkillProvider::Claude
+            && matches!(
+                skill_plan.action,
+                SkillInstallAction::Create
+                    | SkillInstallAction::Update
+                    | SkillInstallAction::Unchanged
+            )
+    });
+    if !claude_plugin_present {
+        return Ok(());
+    }
+
+    // Two sources of overlap: a target in this run's plan, and wiring an earlier run already left
+    // on disk. The second is the common case and the plan alone cannot see it — `Hook` is excluded
+    // from marker detection, so a previously adopted hook never appears in `plan.entries`.
+    let mut overlapping: Vec<&'static str> = Vec::new();
+    for (target, label) in [
+        (AdoptTarget::McpProject, "mcp-project"),
+        (AdoptTarget::Hook, "hook"),
+    ] {
+        let planned = plan.entries.iter().any(|entry| entry.target == target);
+        let already_installed = config
+            .repositories()
+            .iter()
+            .any(|repository| target_is_already_wired(Path::new(&repository.root_path), target));
+        if planned || already_installed {
+            overlapping.push(label);
+        }
+    }
+
+    if overlapping.is_empty() {
+        return Ok(());
+    }
+
+    // A result event, not a progress event: progress output is suppressed unless verbose, and a
+    // user who is about to double their tool surface needs to see this by default.
+    output.result_event(
+        OutputLevel::Warn,
+        "adopt",
+        "claude-duplicate-wiring",
+        &[
+            field("skill_provider", "claude"),
+            field("also_targets", overlapping.join(",")),
+            field(
+                "detail",
+                "claude plugin already provides the MCP server and PreToolUse hook; \
+                 these targets add a second copy",
+            ),
+        ],
+        None,
+    )?;
+
+    Ok(())
+}
+
+/// True when a Frigg-managed entry for `target` is already present on disk under `root`.
+///
+/// Read-only: a missing or unparseable file simply means "not wired".
+fn target_is_already_wired(root: &Path, target: AdoptTarget) -> bool {
+    let Ok(contents) = fs::read_to_string(root.join(target.path())) else {
+        return false;
+    };
+    match target {
+        AdoptTarget::Hook => matches!(
+            json_merge::classify_claude_hook(&contents),
+            Ok(json_merge::ClaudeHookState::Desired | json_merge::ClaudeHookState::Diverged)
+        ),
+        AdoptTarget::McpProject => matches!(
+            json_merge::classify_mcp_entry_for_uninstall(&contents),
+            Ok(json_merge::McpEntryState::Desired | json_merge::McpEntryState::Diverged)
+        ),
+        _ => false,
+    }
 }
 
 fn emit_skill_plan_event(

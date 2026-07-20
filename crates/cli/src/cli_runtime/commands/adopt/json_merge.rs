@@ -880,6 +880,53 @@ mod tests {
         assert!(err.to_string().contains("invalid JSON"));
     }
 
+    /// Path to a file in the bundled skill tree, or None when the tree is not next to the crate.
+    fn bundled_skill_file(rel: &str) -> Option<String> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("skills/frigg-first-code-search")
+            .join(rel);
+        std::fs::read_to_string(path).ok()
+    }
+
+    /// SSOT: the bundled Claude plugin must declare the same PreToolUse wiring adopt writes into
+    /// `.claude/settings.json`. Two sources of truth would silently diverge on the next matcher
+    /// change, leaving plugin users on stale tool coverage.
+    #[test]
+    fn bundled_claude_plugin_hook_matches_the_managed_hook() {
+        let Some(contents) = bundled_skill_file("hooks/hooks.json") else {
+            return;
+        };
+        let value: Value = serde_json::from_str(&contents).expect("plugin hooks.json must be JSON");
+
+        let entry = &value["hooks"]["PreToolUse"][0];
+        assert_eq!(
+            entry["matcher"],
+            super::CLAUDE_HOOK_MATCHER,
+            "plugin hook matcher drifted from CLAUDE_HOOK_MATCHER"
+        );
+        assert_eq!(
+            entry["hooks"][0],
+            desired_claude_hook_command(),
+            "plugin hook command drifted from the managed hook command"
+        );
+    }
+
+    /// SSOT: the bundled plugin's MCP entry must match the entry adopt writes to `.mcp.json`.
+    #[test]
+    fn bundled_claude_plugin_mcp_entry_matches_the_managed_entry() {
+        let Some(contents) = bundled_skill_file(".mcp.json") else {
+            return;
+        };
+        let value: Value = serde_json::from_str(&contents).expect("plugin .mcp.json must be JSON");
+
+        assert_eq!(
+            value["mcpServers"][MCP_SERVER_KEY],
+            desired_mcp_server(DEFAULT_MCP_SERVER_URL),
+            "plugin MCP entry drifted from the managed HTTP entry"
+        );
+    }
+
     /// An install written by an older Frigg still uses the narrower matcher. It must report as
     /// diverged so `adopt` (and `adopt --check`) sees pending work rather than calling it current.
     #[test]

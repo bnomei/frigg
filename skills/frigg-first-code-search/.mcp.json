@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "frigg": {
+      "type": "http",
+      "url": "http://127.0.0.1:37444/mcp"
+    }
+  }
+}

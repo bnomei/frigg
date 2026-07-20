@@ -1,0 +1,23 @@
+{
+  "name": "frigg-first-code-search",
+  "displayName": "Frigg First Code Search",
+  "description": "Route code discovery, search, navigation, and bounded source reads through Frigg's local MCP service instead of shell grep/find/cat.",
+  "version": "0.9.2",
+  "author": {
+    "name": "Frigg Contributors",
+    "url": "https://github.com/bnomei/frigg"
+  },
+  "homepage": "https://github.com/bnomei/frigg",
+  "repository": "https://github.com/bnomei/frigg",
+  "license": "MIT AND MPL-2.0",
+  "keywords": [
+    "mcp",
+    "code-search",
+    "code-navigation",
+    "tree-sitter",
+    "semantic-search"
+  ],
+  "skills": [
+    "./"
+  ]
+}

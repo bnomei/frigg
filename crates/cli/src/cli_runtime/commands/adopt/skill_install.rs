@@ -338,7 +338,26 @@ pub(crate) fn apply_skill_install(plan: &SkillInstallPlan) -> io::Result<()> {
 /// reads neither that filename nor that shape (it wants `.mcp.json` with an `mcpServers` wrapper,
 /// and does not implement `includeTools` at all), so shipping it to other hosts installs a file
 /// they will never read. Assets absent from this table go to every provider.
-const PROVIDER_SCOPED_ASSETS: &[(&str, SkillProvider)] = &[("mcp.json", SkillProvider::Amp)];
+/// The Claude entries turn the copied tree into a skills-directory plugin: Claude Code loads any
+/// folder under a skills dir that holds `.claude-plugin/plugin.json` as a plugin, picking up the
+/// sibling `.mcp.json` and `hooks/hooks.json` with it. One `--skill-provider claude` therefore
+/// wires skill, MCP server, and PreToolUse hook together. Other hosts ignore all three.
+const PROVIDER_SCOPED_ASSETS: &[(&str, SkillProvider)] = &[
+    ("mcp.json", SkillProvider::Amp),
+    (".claude-plugin/plugin.json", SkillProvider::Claude),
+    (".mcp.json", SkillProvider::Claude),
+    ("hooks/hooks.json", SkillProvider::Claude),
+];
+
+/// Assets withheld from one host while still shipping to every other host.
+///
+/// `agents/openai.yaml` is the OpenAI prompt variant. Claude reads it as nothing, but `agents/` is
+/// a default Claude plugin component directory, and a plugin that has both a default folder and a
+/// manifest key overriding it makes Claude Code report an ignored folder in `claude plugin list`
+/// and the `/plugin` view. Withholding the file leaves the Claude install with no `agents/` at
+/// all, so no override is needed and no warning appears. Hosts that already receive it keep it.
+const PROVIDER_EXCLUDED_ASSETS: &[(&str, SkillProvider)] =
+    &[("agents/openai.yaml", SkillProvider::Claude)];
 
 /// The provider a bundled skill asset belongs to, when it is not meant for every host.
 fn asset_owner(rel: &Path) -> Option<SkillProvider> {
@@ -347,6 +366,16 @@ fn asset_owner(rel: &Path) -> Option<SkillProvider> {
         .iter()
         .find(|(path, _)| *path == key)
         .map(|(_, owner)| *owner)
+}
+
+/// True when this asset is explicitly withheld from `provider`.
+fn asset_is_excluded_for(provider: SkillProvider, rel: &Path) -> bool {
+    let Some(key) = relative_asset_key(rel) else {
+        return false;
+    };
+    PROVIDER_EXCLUDED_ASSETS
+        .iter()
+        .any(|(path, excluded)| *path == key && *excluded == provider)
 }
 
 /// Normalize a relative path into a `/`-separated lookup key.
@@ -368,6 +397,9 @@ fn relative_asset_key(rel: &Path) -> Option<String> {
 
 /// True when `provider` should receive the bundled asset at repository-relative `rel`.
 fn provider_includes_asset(provider: SkillProvider, rel: &Path) -> bool {
+    if asset_is_excluded_for(provider, rel) {
+        return false;
+    }
     asset_owner(rel).is_none_or(|owner| owner == provider)
 }
 
@@ -535,6 +567,7 @@ pub(crate) fn resolve_home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Amp is the one host that reads `mcp.json`, so it must still receive it byte-for-byte, and
@@ -551,7 +584,13 @@ mod tests {
         fs::write(source.join("mcp.json"), "{\"frigg\":{}}\n").expect("skill mcp");
 
         let plan = plan_skill_install(SkillProvider::Amp, &root, Some(&home), Some(&source), false);
-        assert_eq!(plan.action, SkillInstallAction::Create);
+        assert_eq!(
+            plan.action,
+            SkillInstallAction::Create,
+            "reason={} parent={:?}",
+            plan.reason,
+            plan.skills_parent
+        );
         apply_skill_install(&plan).expect("apply");
 
         let dest = home.join(".config/agents/skills").join(SKILL_DIR_NAME);
@@ -637,13 +676,55 @@ mod tests {
             return;
         }
 
-        for (rel, _owner) in PROVIDER_SCOPED_ASSETS {
+        for (rel, _provider) in PROVIDER_SCOPED_ASSETS
+            .iter()
+            .chain(PROVIDER_EXCLUDED_ASSETS)
+        {
             assert!(
                 bundled.join(rel).is_file(),
                 "scoped asset {rel} is not in the bundled tree; the key would silently fail open \
                  and install for every provider"
             );
         }
+    }
+
+    /// Guards the manifest fields that are easy to get silently wrong: a version pin that drifts
+    /// from the crate, and the skills path that older Claude Code needs to load the root SKILL.md.
+    #[test]
+    fn bundled_claude_plugin_manifest_is_well_formed() {
+        let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(WORKSPACE_SKILL_REL);
+        let Ok(contents) = fs::read_to_string(bundled.join(".claude-plugin/plugin.json")) else {
+            return;
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&contents).expect("plugin.json must be JSON");
+
+        assert_eq!(
+            value["name"], SKILL_DIR_NAME,
+            "plugin name must match the installed directory name"
+        );
+        assert_eq!(
+            value["version"],
+            env!("CARGO_PKG_VERSION"),
+            "plugin version must track the crate version; a stale pin suppresses plugin updates"
+        );
+        assert!(
+            value["agents"].is_null(),
+            "no agents key should be needed: agents/openai.yaml is withheld from Claude, so there \
+             is no default agents/ folder for a manifest key to override"
+        );
+        assert_eq!(
+            value["skills"].as_array().map(Vec::len),
+            Some(1),
+            "an explicit skills path keeps the root SKILL.md loading on Claude Code < 2.1.142, \
+             where the single-skill-plugin layout is not auto-detected"
+        );
+        assert!(
+            bundled.join("SKILL.md").is_file() && !bundled.join("skills").exists(),
+            "single-skill-plugin layout: SKILL.md at root and no skills/ subdirectory"
+        );
     }
 
     /// Lookup keys are `/`-separated regardless of the platform separator.
@@ -831,11 +912,21 @@ mod tests {
         fs::remove_dir_all(home).ok();
     }
 
+    /// Unique temp path per call.
+    ///
+    /// A timestamp alone is not enough: these tests run on parallel threads and the system clock
+    /// is coarser than nanoseconds, so two concurrent calls can read the same value and hand two
+    /// tests the same directory. The pid and counter make collisions impossible.
     fn temp_dir(stem: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        std::env::temp_dir().join(format!("frigg-{stem}-{unique}"))
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "frigg-{stem}-{}-{unique}-{sequence}",
+            std::process::id()
+        ))
     }
 }
