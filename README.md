@@ -155,14 +155,32 @@ frigg serve \
 
 ### 4. Add client configuration
 
-Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a project:
+Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a project. Name the client you use and let Frigg pick its files:
 
 ```bash
-frigg adopt --target agents-md --target mcp-project --dry-run
+frigg adopt --client claude --dry-run
+frigg adopt --client claude
+```
+
+`--client` accepts `claude`, `codex`, `amp`, `cursor`, and `copilot`, is repeatable, and is additive with `--target` and `--skill-provider`. Each client expands to the files it actually reads, plus a copy of the `frigg-first-code-search` skill where the host supports one:
+
+| Client | Managed files | Skill copy | MCP |
+| --- | --- | --- | --- |
+| `claude` | `CLAUDE.md` | `~/.claude/skills` | from the installed plugin |
+| `codex` | `AGENTS.md` | `~/.codex/skills` | `codex mcp add` |
+| `amp` | `AGENTS.md` | Amp skills dir | from the bundled skill `mcp.json` |
+| `cursor` | `.cursor/rules/frigg.mdc`, `.cursor/mcp.json` | `.cursor/skills` | `.cursor/mcp.json` |
+| `copilot` | `.github/copilot-instructions.md` | `.github/skills` | editor-managed |
+
+`--client claude` deliberately does not add `--target mcp-project` or `--target hook`: the Claude skill copy is a skills-directory plugin that already carries both. Combining it with `--all` re-adds the MCP entry and adopt will warn about the duplicate.
+
+To choose files directly instead, `--target` accepts `agents-md`, `claude-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and opt-in `hook`:
+
+```bash
 frigg adopt --target agents-md --target mcp-project
 ```
 
-Useful targets include `agents-md`, `claude-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and opt-in `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
+Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
 
 Managed markdown defaults to a lightweight Frigg-first pointer to the `frigg-first-code-search` skill. To embed a compact routing policy instead, run:
 

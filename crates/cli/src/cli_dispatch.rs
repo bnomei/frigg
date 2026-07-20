@@ -14,7 +14,7 @@ use frigg::searcher::ValidatedManifestCandidateCache;
 use frigg::settings::{RuntimeTransportKind, runtime_profile_for_transport};
 use frigg::watch::{WatchEvent, WatchEventReporter, maybe_start_watch_runtime_with_reporter};
 
-use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
+use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent, expand_adopt_clients};
 use crate::cli_runtime::{
     CliOutput, OutputField, OutputLevel, StorageMaintenanceCommand, emit_index_plan_events,
     emit_index_progress_event, field, resolve_command_config, resolve_startup_config,
@@ -65,6 +65,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
             Command::Serve => {}
             Command::Adopt {
                 target,
+                client,
                 all,
                 policy,
                 skill_provider,
@@ -78,6 +79,10 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     io::Error::other("adopt could not resolve the MCP HTTP endpoint")
                 })?;
                 let mcp_server_url = mcp_http_endpoint_url(adopt_mcp_http.bind_addr);
+                // `--client` is sugar over the two explicit lists, so expand it here and let the
+                // command see one already-merged set rather than two selection mechanisms.
+                let (target, skill_provider) =
+                    expand_adopt_clients(&client, target, skill_provider);
                 run_adopt_command_with_output(
                     &config,
                     target,

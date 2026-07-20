@@ -50,6 +50,17 @@ pub(crate) fn detect_known_project_client_markers(root: &Path) -> Vec<AdoptTarge
         }
     }
 
+    // `.claude/` on its own is a weak signal. It shows up for local settings, slash commands, and
+    // for the hook `frigg adopt --target hook` installs — so Frigg can create the very directory
+    // that changes its own later detection. Before the directory counted, such a repo matched
+    // nothing and fell through to DEFAULT_TARGETS, which includes the cross-agent AGENTS.md.
+    // Recognizing Claude must not silently stop managing that file.
+    let claude_inferred_from_directory_only =
+        targets == [AdoptTarget::ClaudeMd] && !root.join(AdoptTarget::ClaudeMd.path()).exists();
+    if claude_inferred_from_directory_only {
+        push_unique(&mut targets, AdoptTarget::AgentsMd);
+    }
+
     if targets.is_empty() {
         targets.extend(DEFAULT_TARGETS);
     }
@@ -62,6 +73,10 @@ fn target_marker_exists(root: &Path, target: AdoptTarget) -> bool {
         AdoptTarget::Cursor => {
             root.join(".cursor/rules").is_dir() || root.join(target.path()).exists()
         }
+        // A repo can be set up for Claude without a CLAUDE.md: `.claude/` holds settings, skills,
+        // and commands. Keying detection on the doc file alone missed those repos entirely, the
+        // same way keying Cursor on its rule file alone would miss `.cursor/rules`.
+        AdoptTarget::ClaudeMd => root.join(".claude").is_dir() || root.join(target.path()).exists(),
         _ => root.join(target.path()).exists(),
     }
 }
@@ -114,6 +129,60 @@ mod tests {
         let targets = detect_known_project_client_markers(&root);
 
         assert_eq!(targets, vec![AdoptTarget::Cursor]);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    /// A repo can be Claude-configured through `.claude/` alone, with no CLAUDE.md.
+    #[test]
+    fn adopt_detects_claude_directory_without_claude_md() {
+        let root = temp_dir("adopt-detect-claude-dir");
+        fs::create_dir_all(root.join(".claude")).expect("create .claude dir");
+
+        let targets = detect_known_project_client_markers(&root);
+
+        assert!(
+            targets.contains(&AdoptTarget::ClaudeMd),
+            "detection must not depend on the doc file existing"
+        );
+        assert!(
+            targets.contains(&AdoptTarget::AgentsMd),
+            "the directory alone must not drop the cross-agent doc the default would have written"
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    /// Frigg's own `--target hook` creates `.claude/`. That must not change what a later bare
+    /// `frigg adopt` manages in the same repo.
+    #[test]
+    fn frigg_created_claude_dir_does_not_narrow_the_default_target_set() {
+        let root = temp_dir("adopt-claude-dir-feedback");
+        fs::create_dir_all(&root).expect("create temp root");
+        let before = detect_known_project_client_markers(&root);
+
+        // Simulate `frigg adopt --target hook`.
+        fs::create_dir_all(root.join(".claude")).expect("create .claude dir");
+        fs::write(root.join(".claude/settings.json"), "{}").expect("write settings");
+        let after = detect_known_project_client_markers(&root);
+
+        for target in &before {
+            assert!(
+                after.contains(target),
+                "{target:?} was managed before the hook install and must still be after"
+            );
+        }
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    /// A real CLAUDE.md is a deliberate choice, so it does not pull in AGENTS.md.
+    #[test]
+    fn claude_md_file_alone_stays_a_claude_only_target_set() {
+        let root = temp_dir("adopt-claude-md-only");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("CLAUDE.md"), "").expect("write claude md");
+
+        let targets = detect_known_project_client_markers(&root);
+
+        assert_eq!(targets, vec![AdoptTarget::ClaudeMd]);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

@@ -268,6 +268,17 @@ pub(crate) enum Command {
             default_missing_value = "hook"
         )]
         target: Vec<AdoptTarget>,
+        /// Set up a named agent client, choosing its files and skill copy for you.
+        ///
+        /// Repeatable, and additive with `--target` and `--skill-provider`. Prefer this over
+        /// naming files: `--client claude` installs `CLAUDE.md` and the skills-directory plugin,
+        /// which already carries the MCP server and the PreToolUse hook.
+        ///
+        /// Combining this with `--all` defeats the point: `--all` selects every docs and MCP
+        /// target, so `--client claude --all` writes the `.mcp.json` entry the plugin already
+        /// provides and adopt will warn about the duplicate.
+        #[arg(long = "client", value_enum)]
+        client: Vec<AdoptClient>,
         /// Update every supported docs and MCP target.
         #[arg(long, default_value_t = false)]
         all: bool,
@@ -386,6 +397,82 @@ impl From<AdoptAgentsPolicy> for frigg::agent_directive::AgentsPolicy {
     }
 }
 
+/// An agent client to set up, named by intent rather than by the files it happens to use.
+///
+/// `--target` names files; picking the right ones means knowing that Claude wants three of the
+/// seven and which three. `--client` names the tool and lets Frigg answer that question, which
+/// also keeps the answer current as a host's integration shape changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AdoptClient {
+    /// `CLAUDE.md` plus the skills-directory plugin, which carries the MCP server and hook.
+    Claude,
+    /// `AGENTS.md` and `.mcp.json`, plus the Codex skill copy.
+    Codex,
+    /// `AGENTS.md` plus the Amp skill copy, which carries Amp's bundled MCP config.
+    Amp,
+    /// Cursor rules and Cursor MCP config.
+    Cursor,
+    /// Copilot instructions and `.mcp.json`.
+    Copilot,
+}
+
+impl AdoptClient {
+    /// Files this client needs Frigg to manage.
+    pub(crate) fn targets(self) -> &'static [AdoptTarget] {
+        match self {
+            // No mcp-project or hook: the plugin installed below already provides both, and
+            // adding them again registers a second server and a second nudge.
+            Self::Claude => &[AdoptTarget::ClaudeMd],
+            // No mcp-project: Codex registers MCP servers through its own CLI
+            // (`codex mcp add frigg --url …`), not a project `.mcp.json`.
+            Self::Codex => &[AdoptTarget::AgentsMd],
+            Self::Amp => &[AdoptTarget::AgentsMd],
+            Self::Cursor => &[AdoptTarget::Cursor, AdoptTarget::McpCursor],
+            // No mcp-project: Copilot reads MCP config from its editor's own location, not
+            // `.mcp.json`. Instructions are the part Frigg can manage as a project file.
+            Self::Copilot => &[AdoptTarget::Copilot],
+        }
+    }
+
+    /// Skill directory this client should receive a copy of the bundled skill in, if any.
+    pub(crate) fn skill_provider(self) -> Option<SkillProvider> {
+        match self {
+            Self::Claude => Some(SkillProvider::Claude),
+            Self::Codex => Some(SkillProvider::Codex),
+            Self::Amp => Some(SkillProvider::Amp),
+            // Both have skill directories Frigg already knows how to target, so they get the same
+            // routing skill as the rest. The copy stays best-effort: nothing happens unless the
+            // host's skills directory is already there.
+            Self::Cursor => Some(SkillProvider::Cursor),
+            Self::Copilot => Some(SkillProvider::Copilot),
+        }
+    }
+}
+
+/// Merge `--client` selections into the explicit `--target` / `--skill-provider` lists.
+///
+/// Additive and order-preserving: an explicitly named target or provider is kept, and a client
+/// only contributes what is not already present. Passing both is therefore never a conflict.
+pub(crate) fn expand_adopt_clients(
+    clients: &[AdoptClient],
+    mut targets: Vec<AdoptTarget>,
+    mut skill_providers: Vec<SkillProvider>,
+) -> (Vec<AdoptTarget>, Vec<SkillProvider>) {
+    for client in clients {
+        for target in client.targets() {
+            if !targets.contains(target) {
+                targets.push(*target);
+            }
+        }
+        if let Some(provider) = client.skill_provider()
+            && !skill_providers.contains(&provider)
+        {
+            skill_providers.push(provider);
+        }
+    }
+    (targets, skill_providers)
+}
+
 /// Project files and configs that `frigg adopt` can install or remove managed Frigg entries in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum AdoptTarget {
@@ -437,8 +524,8 @@ mod tests {
     use clap::Parser;
 
     use super::{
-        AdoptAgentsPolicy, AdoptTarget, Cli, Command, HiddenHookCli, HiddenHookCommand, HookEvent,
-        SkillProvider,
+        AdoptAgentsPolicy, AdoptClient, AdoptTarget, Cli, Command, HiddenHookCli,
+        HiddenHookCommand, HookEvent, SkillProvider, expand_adopt_clients,
     };
 
     #[test]
@@ -468,6 +555,7 @@ mod tests {
         match cli.command {
             Some(Command::Adopt {
                 target,
+                client,
                 all,
                 policy,
                 skill_provider,
@@ -484,6 +572,7 @@ mod tests {
                         AdoptTarget::Hook
                     ]
                 );
+                assert!(client.is_empty());
                 assert!(!all);
                 assert_eq!(policy, AdoptAgentsPolicy::Lightweight);
                 assert!(skill_provider.is_empty());
@@ -547,5 +636,94 @@ mod tests {
         match cli.command {
             HiddenHookCommand::Hook { event } => assert_eq!(event, HookEvent::Pretooluse),
         }
+    }
+
+    /// `--client claude` must not pull in mcp-project or hook: the plugin it installs already
+    /// provides both, and adding them registers a second server and a second nudge.
+    #[test]
+    fn adopt_client_claude_expands_to_doc_plus_plugin_only() {
+        assert_eq!(AdoptClient::Claude.targets(), &[AdoptTarget::ClaudeMd]);
+        assert_eq!(
+            AdoptClient::Claude.skill_provider(),
+            Some(SkillProvider::Claude)
+        );
+        for excluded in [AdoptTarget::McpProject, AdoptTarget::Hook] {
+            assert!(
+                !AdoptClient::Claude.targets().contains(&excluded),
+                "{excluded:?} duplicates what the Claude plugin already provides"
+            );
+        }
+    }
+
+    /// Every client must name at least one managed file or a skill copy, or it does nothing.
+    #[test]
+    fn every_adopt_client_does_something() {
+        for client in [
+            AdoptClient::Claude,
+            AdoptClient::Codex,
+            AdoptClient::Amp,
+            AdoptClient::Cursor,
+            AdoptClient::Copilot,
+        ] {
+            assert!(
+                !client.targets().is_empty() || client.skill_provider().is_some(),
+                "{client:?} expands to no work at all"
+            );
+        }
+    }
+
+    /// The merge is additive: explicit choices survive and a client only adds what is missing.
+    #[test]
+    fn expand_adopt_clients_is_additive_and_deduplicates() {
+        let (targets, providers) = expand_adopt_clients(
+            &[AdoptClient::Claude],
+            vec![AdoptTarget::McpProject],
+            vec![SkillProvider::Amp],
+        );
+
+        assert_eq!(
+            targets,
+            vec![AdoptTarget::McpProject, AdoptTarget::ClaudeMd],
+            "explicit target kept first, client target appended"
+        );
+        assert_eq!(providers, vec![SkillProvider::Amp, SkillProvider::Claude]);
+    }
+
+    /// Naming a client whose target you also passed explicitly must not plan that file twice.
+    #[test]
+    fn expand_adopt_clients_does_not_duplicate_an_explicit_target() {
+        let (targets, providers) = expand_adopt_clients(
+            &[AdoptClient::Claude, AdoptClient::Claude],
+            vec![AdoptTarget::ClaudeMd],
+            vec![SkillProvider::Claude],
+        );
+
+        assert_eq!(targets, vec![AdoptTarget::ClaudeMd]);
+        assert_eq!(providers, vec![SkillProvider::Claude]);
+    }
+
+    #[test]
+    fn expand_adopt_clients_without_clients_is_identity() {
+        let (targets, providers) =
+            expand_adopt_clients(&[], vec![AdoptTarget::AgentsMd], vec![SkillProvider::Codex]);
+
+        assert_eq!(targets, vec![AdoptTarget::AgentsMd]);
+        assert_eq!(providers, vec![SkillProvider::Codex]);
+    }
+
+    /// Frigg only claims a project MCP file for hosts documented to read one.
+    #[test]
+    fn only_documented_hosts_get_the_project_mcp_target() {
+        for client in [AdoptClient::Codex, AdoptClient::Copilot] {
+            assert!(
+                !client.targets().contains(&AdoptTarget::McpProject),
+                "{client:?} configures MCP through its own tooling, not .mcp.json"
+            );
+        }
+        assert!(
+            AdoptClient::Cursor
+                .targets()
+                .contains(&AdoptTarget::McpCursor)
+        );
     }
 }
