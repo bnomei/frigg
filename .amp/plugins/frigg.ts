@@ -342,34 +342,26 @@ function formatStatus(
 ): string {
   if (!result.ok) {
     return [
-      `Frigg unavailable at ${result.endpoint}: ${result.reason}`,
+      `✗ Frigg unavailable · ${shortText(result.reason, 80)}`,
       typeof localStatus === "object"
-        ? formatLocalStatus(localStatus)
-        : localStatus,
-      "Run `frigg serve` in this workspace.",
-    ]
-      .filter(Boolean)
-      .join("\n");
+        ? formatLocalStatusLine(localStatus)
+        : (localStatus ?? `Endpoint: ${result.endpoint}`),
+      "Run `frigg serve` and retry.",
+    ].join("\n");
   }
 
   const { status } = result;
-  const ready = status.repositories.filter(
-    (repository) => repository.storage?.index_state === "ready",
-  ).length;
   const watch =
     status.runtime.watch_status?.reason ??
     (status.runtime.watch_active ? "active" : "off");
+  const activeTasks = status.runtime.active_tasks?.length ?? 0;
 
   return [
-    `Frigg ${status.frigg_version} — ${result.endpoint}`,
-    status.repositories.length === 0
-      ? "Startup repositories: none configured"
-      : `Startup repositories: ${ready}/${status.repositories.length} ready`,
+    `✓ Frigg ${status.frigg_version} · ${status.runtime.profile.replaceAll("_", " ")}`,
     typeof localStatus === "object"
-      ? formatLocalStatus(localStatus)
-      : localStatus,
-    `Runtime: ${status.runtime.profile}; watch ${watch}; ${status.runtime.tool_surface_profile} tools (${status.runtime.tools_exposed.length})`,
-    `Active tasks: ${status.runtime.active_tasks?.length ?? 0}`,
+      ? formatLocalStatusLine(localStatus)
+      : (localStatus ?? `Endpoint: ${result.endpoint}`),
+    `Watch: ${watch.replaceAll("_", " ")} · ${status.runtime.tools_exposed.length} tools${activeTasks > 0 ? ` · ${activeTasks} active tasks` : ""}`,
   ].join("\n");
 }
 
@@ -462,34 +454,50 @@ async function inspectLocalStatus(
 
 function formatLocalStatusFailure(detail: string): string {
   if (/unrecognized subcommand\s+['"]status['"]/i.test(detail)) {
-    return "✗ Local workspace: installed Frigg CLI does not support `status`; update or reinstall Frigg.";
+    return "✗ Local index: update Frigg CLI (`status` missing)";
   }
 
   const summary = detail
     .split("\n")
     .map((line) => line.trim())
     .find(Boolean);
-  return `✗ Local workspace: status check failed${summary ? ` (${summary.slice(0, 160)})` : ""}.`;
+  return `✗ Local index: status failed${summary ? ` · ${shortText(summary, 80)}` : ""}`;
 }
 
 function formatLocalStatus(status: LocalStatus): string {
   const ready = status.repositories.filter(
     (repository) => repository.storage.index_state === "ready",
   ).length;
-  const names = status.repositories
-    .map(
-      (repository) =>
-        `${repository.display_name}: ${repository.storage.index_state}`,
-    )
-    .join(", ");
-  return `Local workspace: ${ready}/${status.repositories.length} ready${names ? ` (${names})` : ""}; configured watch ${status.watch.configured_mode}`;
+  const readiness =
+    status.repositories.length === 1
+      ? status.repositories[0]!.storage.index_state
+      : `${ready}/${status.repositories.length} ready`;
+  return `Local index: ${readiness} · watch ${status.watch.configured_mode}`;
+}
+
+function formatLocalStatusLine(status: LocalStatus): string {
+  return `${localStatusIsReady(status) ? "✓" : "✗"} ${formatLocalStatus(status)}`;
 }
 
 function formatLocalSetupStatus(status: LocalStatus): string {
-  const ready = status.repositories.every(
-    (repository) => repository.storage.index_state === "ready",
-  );
+  const ready = localStatusIsReady(status);
   return `${ready ? "✓" : "✗"} ${formatLocalStatus(status)}${ready ? "" : "; run `frigg index` before searching."}`;
+}
+
+function localStatusIsReady(status: LocalStatus): boolean {
+  return (
+    status.repositories.length > 0 &&
+    status.repositories.every(
+      (repository) => repository.storage.index_state === "ready",
+    )
+  );
+}
+
+function shortText(value: string, maxLength: number): string {
+  const firstLine = value.split("\n", 1)[0]!.trim();
+  return firstLine.length <= maxLength
+    ? firstLine
+    : `${firstLine.slice(0, maxLength - 1)}…`;
 }
 
 async function inspectSkillInstallation(
