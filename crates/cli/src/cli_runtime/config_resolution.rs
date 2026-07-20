@@ -52,7 +52,8 @@ pub(crate) fn resolve_command_config(
         | Command::Init
         | Command::RepairStorage
         | Command::PruneStorage { .. }
-        | Command::Stats { .. } => resolve_base_config(cli, true, None),
+        | Command::Stats { .. }
+        | Command::Status { .. } => resolve_base_config(cli, true, None),
         Command::Hash => resolve_base_config(cli, false, None),
         Command::Index { .. } => {
             let mut config = resolve_base_config(cli, true, Some(RuntimeTransportKind::Stdio))?;

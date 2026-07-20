@@ -359,6 +359,12 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Inspect local Frigg storage without starting a server or changing workspace state.
+    Status {
+        /// Print the stable machine-readable status snapshot.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 /// Managed markdown policy size for `frigg adopt` agent-doc targets.

@@ -31,8 +31,9 @@ use db_runtime::{
     load_latest_manifest_snapshot_for_repository, load_latest_manifest_snapshot_id_for_repository,
     load_manifest_entries_for_snapshot, load_manifest_metadata_entries_for_snapshot,
     load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
-    open_connection, open_existing_connection, option_u64_to_option_i64, read_schema_version,
-    run_repository_roundtrip_probe, set_schema_version, table_exists, u64_to_i64, usize_to_i64,
+    open_connection, open_existing_connection, open_existing_read_only_connection,
+    option_u64_to_option_i64, read_schema_version, run_repository_roundtrip_probe,
+    set_schema_version, table_exists, u64_to_i64, usize_to_i64,
 };
 pub use provenance_path::{
     ensure_provenance_db_parent_dir, resolve_provenance_db_path,
@@ -61,6 +62,13 @@ const INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC: &str = "semantic_vector_parti
 #[derive(Debug, Clone)]
 pub struct Storage {
     db_path: PathBuf,
+}
+
+/// Side-effect-free storage facts used by CLI and HTTP status surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageRepositoryInspection {
+    pub schema_version: i64,
+    pub has_manifest: bool,
 }
 
 /// SQLite connection reused across one index pass to avoid per-phase open/schema probes.

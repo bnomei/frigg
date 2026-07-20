@@ -180,6 +180,30 @@ pub(super) fn open_connection(path: &Path) -> FriggResult<Connection> {
 }
 
 pub(super) fn open_existing_connection(path: &Path) -> FriggResult<Connection> {
+    validate_existing_db_file(path)?;
+
+    open_connection_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+}
+
+/// Opens an existing SQLite database without write capability or mutation-oriented pragmas.
+pub(super) fn open_existing_read_only_connection(path: &Path) -> FriggResult<Connection> {
+    validate_existing_db_file(path)?;
+    let conn =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to open sqlite db read-only '{}': {err}",
+                path.display()
+            ))
+        })?;
+    let busy_timeout_ms = sqlite_busy_timeout_ms()?;
+    conn.busy_timeout(Duration::from_millis(busy_timeout_ms))
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to configure sqlite busy timeout: {err}"))
+        })?;
+    Ok(conn)
+}
+
+fn validate_existing_db_file(path: &Path) -> FriggResult<()> {
     match path.metadata() {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => {
@@ -196,8 +220,7 @@ pub(super) fn open_existing_connection(path: &Path) -> FriggResult<Connection> {
         }
         Err(err) => return Err(FriggError::Io(err)),
     }
-
-    open_connection_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    Ok(())
 }
 
 fn open_connection_with_flags(path: &Path, flags: OpenFlags) -> FriggResult<Connection> {

@@ -172,6 +172,31 @@ impl Storage {
         read_schema_version(&conn)
     }
 
+    /// Inspects schema and manifest readiness through a strictly read-only SQLite connection.
+    pub fn inspect_repository_read_only(
+        &self,
+        repository_id: &str,
+    ) -> FriggResult<StorageRepositoryInspection> {
+        let conn = open_existing_read_only_connection(&self.db_path)?;
+        if !table_exists(&conn, "schema_version")? {
+            return Ok(StorageRepositoryInspection {
+                schema_version: 0,
+                has_manifest: false,
+            });
+        }
+
+        let schema_version = read_schema_version(&conn)?;
+        let has_manifest = if schema_version == CURRENT_SCHEMA_VERSION {
+            load_latest_manifest_snapshot_for_repository(&conn, repository_id)?.is_some()
+        } else {
+            false
+        };
+        Ok(StorageRepositoryInspection {
+            schema_version,
+            has_manifest,
+        })
+    }
+
     /// Verifies cheap schema and sqlite-vec readiness required by normal runtime paths.
     ///
     /// This never scans semantic row membership. Use [`Self::validate_embeddings`] only for

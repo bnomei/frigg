@@ -22,7 +22,8 @@ use crate::cli_runtime::{
     run_hash_command, run_index_command_with_output, run_pretooluse_hook_command,
     run_semantic_runtime_startup_gate_with_output,
     run_semantic_runtime_startup_gate_with_stderr_prepare_output, run_stats_command,
-    run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
+    run_status_command, run_storage_init_command_with_output,
+    run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
 };
 use crate::http_runtime::{
@@ -145,6 +146,10 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 })?;
                 let endpoint_url = routing_stats_http_endpoint_url(stats_http.bind_addr);
                 run_stats_command(json, &endpoint_url, stats_http.auth_token.as_deref()).await?
+            }
+            Command::Status { json } => {
+                let config = resolve_command_config(&cli, command.clone())?;
+                run_status_command(&config, json)?
             }
         }
         if !matches!(command, Command::Serve) {

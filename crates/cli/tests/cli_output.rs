@@ -372,6 +372,31 @@ fn context_summary_defaults_to_compact_saved_percent_and_json_alias_keeps_full_s
 }
 
 #[test]
+fn status_json_reports_missing_storage_without_creating_it() {
+    let root = temp_workspace_root("status-missing-storage");
+    create_simple_workspace(&root);
+
+    let output = run_frigg(&root, &["status", "--json"]);
+
+    assert_success(&output);
+    assert_eq!(stderr(&output), "");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("status JSON should parse");
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["frigg_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["repositories"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        value["repositories"][0]["storage"]["index_state"],
+        "missing_db"
+    );
+    assert!(
+        !root.join(".frigg").exists(),
+        "status must not create storage"
+    );
+    cleanup_workspace(&root);
+}
+
+#[test]
 fn quiet_verbose_conflict_fails_before_machine_output() {
     let mut command = frigg_command();
     let output = command
