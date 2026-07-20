@@ -200,15 +200,38 @@ pub(super) async fn serve_http(
             bearer_auth_middleware,
         ));
 
-    // Side effect: ctrl-c cancels the streamable HTTP service before axum shuts down.
+    // Side effect: process shutdown signals cancel the MCP service before Axum shuts down.
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            wait_for_shutdown_signal().await;
             shutdown.cancel();
         })
         .await?;
 
     Ok(())
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to register SIGTERM handler; waiting for ctrl-c only");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 async fn routing_stats_http_handler() -> impl IntoResponse {
