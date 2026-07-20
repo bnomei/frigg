@@ -20,7 +20,19 @@ impl FriggMcpServer {
         }
 
         let storage = Storage::new(&workspace.db_path);
-        match storage.inspect_repository_read_only(&workspace.repository_id) {
+        let inspection = storage
+            .inspect_repository_read_only(&workspace.repository_id)
+            .and_then(|mut inspection| {
+                if !inspection.has_manifest
+                    && workspace.runtime_repository_id != workspace.repository_id
+                {
+                    let legacy = storage
+                        .inspect_repository_read_only(&workspace.runtime_repository_id)?;
+                    inspection.has_manifest = legacy.has_manifest;
+                }
+                Ok(inspection)
+            });
+        match inspection {
             Ok(inspection) if inspection.schema_version == 0 => WorkspaceStorageSummary {
                 db_path: workspace.db_path.display().to_string(),
                 exists: true,
