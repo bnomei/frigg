@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-07-20
+
+- Added first-class Amp support: an Amp skill provider with bundled MCP configuration and a
+  project plugin for concise setup/status commands, documentation access, and conservative
+  Frigg-first source-discovery nudges.
+- Added side-effect-free `frigg status --json` plus authenticated HTTP `/healthz` and `/status`
+  endpoints for plugin and operator readiness checks without adopting an MCP session or acquiring
+  a watch lease.
+- Made HTTP serving shut down gracefully on Ctrl-C and SIGTERM, and preserved legacy repository
+  status aliases for compatibility.
+- Expanded skill packaging with a Claude plugin manifest, provider-scoped assets, recursive skill
+  installation, and creation of `~/.claude/skills` when Claude's config directory already exists.
+- Made adopt target selection client-aware instead of inferring clients only from output filenames.
+- Expanded the opt-in Claude PreToolUse hook to file discovery/read operations and added an `ask`
+  mode that requests user permission without hard-denying or auto-approving shell tools.
+- Changed markdown uninstall to preserve files that become empty after removing Frigg-managed
+  content; repeated uninstall is now an unchanged no-op.
+
 ## 0.9.2 - 2026-07-15
 
 - Made workspace attachment acknowledge within a short grace period while lexical, precise, and semantic preparation continues in the background.
