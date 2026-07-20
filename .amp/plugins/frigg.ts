@@ -362,7 +362,9 @@ function formatStatus(
 
   return [
     `Frigg ${status.frigg_version} — ${result.endpoint}`,
-    `Startup repositories: ${ready}/${status.repositories.length} ready`,
+    status.repositories.length === 0
+      ? "Startup repositories: none configured"
+      : `Startup repositories: ${ready}/${status.repositories.length} ready`,
     typeof localStatus === "object"
       ? formatLocalStatus(localStatus)
       : localStatus,
@@ -446,7 +448,7 @@ async function inspectLocalStatus(
     const result =
       await ctx.$`${config.binary} --workspace-root ${workspace} status --json`;
     if (result.exitCode !== 0) {
-      return `✗ Workspace: Frigg status failed; ${result.stderr.trim() || "run `frigg index` and retry."}`;
+      return formatLocalStatusFailure(result.stderr);
     }
     const status = JSON.parse(result.stdout) as LocalStatus;
     if (!isLocalStatus(status)) {
@@ -454,8 +456,20 @@ async function inspectLocalStatus(
     }
     return status;
   } catch (error) {
-    return `✗ Workspace: unable to inspect local status (${errorMessage(error)}).`;
+    return formatLocalStatusFailure(errorMessage(error));
   }
+}
+
+function formatLocalStatusFailure(detail: string): string {
+  if (/unrecognized subcommand\s+['"]status['"]/i.test(detail)) {
+    return "✗ Local workspace: installed Frigg CLI does not support `status`; update or reinstall Frigg.";
+  }
+
+  const summary = detail
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  return `✗ Local workspace: status check failed${summary ? ` (${summary.slice(0, 160)})` : ""}.`;
 }
 
 function formatLocalStatus(status: LocalStatus): string {
