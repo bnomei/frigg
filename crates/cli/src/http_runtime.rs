@@ -10,12 +10,14 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
+use axum::Json;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use frigg::mcp::{FriggMcpServer, routing_stats};
 use frigg::settings::RuntimeTransportKind;
 use rmcp::transport::StreamableHttpServerConfig;
+use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::Cli;
@@ -52,6 +54,18 @@ pub(super) fn mcp_http_endpoint_url(bind_addr: SocketAddr) -> String {
 /// Builds the live routing-stats URL for the resolved serve bind address.
 pub(super) fn routing_stats_http_endpoint_url(bind_addr: SocketAddr) -> String {
     format!("http://{bind_addr}/stats/routing")
+}
+
+/// Builds the process-liveness URL for a running Frigg HTTP service.
+#[cfg(test)]
+pub(super) fn health_http_endpoint_url(bind_addr: SocketAddr) -> String {
+    format!("http://{bind_addr}/healthz")
+}
+
+/// Builds the side-effect-free service-status URL for a running Frigg HTTP service.
+#[cfg(test)]
+pub(super) fn status_http_endpoint_url(bind_addr: SocketAddr) -> String {
+    format!("http://{bind_addr}/status")
 }
 
 /// Resolves optional HTTP transport settings from CLI flags and serve intent.
@@ -120,6 +134,7 @@ pub(super) async fn serve_http(
     let mut config = StreamableHttpServerConfig::default();
     config.stateful_mode = true;
     let shutdown = config.cancellation_token.clone();
+    let status_server = server.clone();
     let service = server.streamable_http_service(config);
 
     info!(
@@ -170,6 +185,11 @@ pub(super) async fn serve_http(
     }
 
     let router = Router::new()
+        .route("/healthz", get(health_http_handler))
+        .route(
+            "/status",
+            get(move || status_http_handler(status_server.clone())),
+        )
         .route("/stats/routing", get(routing_stats_http_handler))
         .nest_service("/mcp", service)
         .layer(middleware::from_fn_with_state(
@@ -196,6 +216,27 @@ async fn routing_stats_http_handler() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "application/json")],
         routing_stats::snapshot_json(),
     )
+}
+
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    schema_version: u32,
+    status: &'static str,
+    frigg_version: &'static str,
+}
+
+async fn health_http_handler() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        schema_version: 1,
+        status: "ok",
+        frigg_version: env!("CARGO_PKG_VERSION"),
+    })
+}
+
+async fn status_http_handler(
+    server: FriggMcpServer,
+) -> Json<frigg::mcp::types::ServiceStatusResponse> {
+    Json(server.service_status_snapshot())
 }
 
 async fn bearer_auth_middleware(

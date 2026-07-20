@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::search::SearchSymbolPathClass;
-use super::workspace::WorkspacePreciseGeneratorSummary;
+use super::workspace::{RuntimeStatusSummary, WorkspacePreciseGeneratorSummary};
 
 /// Per-session workspace adoption state for one known repository.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -40,6 +40,15 @@ pub struct RepositorySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListRepositoriesResponse {
     pub repositories: Vec<RepositorySummary>,
+}
+
+/// Side-effect-free process status returned by the HTTP `/status` endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ServiceStatusResponse {
+    pub schema_version: u32,
+    pub frigg_version: String,
+    pub repositories: Vec<RepositorySummary>,
+    pub runtime: RuntimeStatusSummary,
 }
 
 /// Empty parameter object for `list_repositories`.

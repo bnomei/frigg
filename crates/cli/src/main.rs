@@ -35,8 +35,9 @@ use frigg::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, Storage};
 #[cfg(test)]
 use http_runtime::{
     HttpRuntimeConfig, allowed_authorities_for_bind, authority_allowed, constant_time_equals,
-    host_header_allowed, origin_header_allowed, parse_host_authority, parse_origin_authority,
-    resolve_http_runtime_config, routing_stats_http_endpoint_url, typed_access_denied_response,
+    health_http_endpoint_url, host_header_allowed, origin_header_allowed, parse_host_authority,
+    parse_origin_authority, resolve_http_runtime_config, routing_stats_http_endpoint_url,
+    status_http_endpoint_url, typed_access_denied_response,
 };
 #[cfg(test)]
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -204,6 +205,19 @@ mod tests {
         assert_eq!(
             routing_stats_http_endpoint_url(bind),
             "http://127.0.0.1:4000/stats/routing"
+        );
+    }
+
+    #[test]
+    fn health_and_status_http_endpoints_use_service_routes() {
+        let bind = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000);
+        assert_eq!(
+            health_http_endpoint_url(bind),
+            "http://127.0.0.1:4000/healthz"
+        );
+        assert_eq!(
+            status_http_endpoint_url(bind),
+            "http://127.0.0.1:4000/status"
         );
     }
 

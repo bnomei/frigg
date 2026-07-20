@@ -20,15 +20,17 @@ impl FriggMcpServer {
         }
 
         let storage = Storage::new(&workspace.db_path);
-        match storage.schema_version() {
-            Ok(0) => WorkspaceStorageSummary {
+        match storage.inspect_repository_read_only(&workspace.repository_id) {
+            Ok(inspection) if inspection.schema_version == 0 => WorkspaceStorageSummary {
                 db_path: workspace.db_path.display().to_string(),
                 exists: true,
                 initialized: false,
                 index_state: WorkspaceStorageIndexState::Uninitialized,
                 error: None,
             },
-            Ok(version) if version != crate::storage::latest_storage_schema_version() => {
+            Ok(inspection)
+                if inspection.schema_version != crate::storage::latest_storage_schema_version() =>
+            {
                 WorkspaceStorageSummary {
                     db_path: workspace.db_path.display().to_string(),
                     exists: true,
@@ -37,45 +39,21 @@ impl FriggMcpServer {
                     error: Some(format!(
                         "storage schema is incompatible (found {version}, expected {}); delete '{}' and rerun `frigg init` or `frigg index` to regenerate storage",
                         crate::storage::latest_storage_schema_version(),
-                        workspace.db_path.display()
+                        workspace.db_path.display(),
+                        version = inspection.schema_version,
                     )),
                 }
             }
-            Ok(_) => match storage.verify_relational_schema() {
-                Ok(_) => {
-                    match storage
-                        .load_latest_manifest_for_repository(&workspace.runtime_repository_id)
-                    {
-                        Ok(Some(_)) => WorkspaceStorageSummary {
-                            db_path: workspace.db_path.display().to_string(),
-                            exists: true,
-                            initialized: true,
-                            index_state: WorkspaceStorageIndexState::Ready,
-                            error: None,
-                        },
-                        Ok(None) => WorkspaceStorageSummary {
-                            db_path: workspace.db_path.display().to_string(),
-                            exists: true,
-                            initialized: true,
-                            index_state: WorkspaceStorageIndexState::Uninitialized,
-                            error: None,
-                        },
-                        Err(err) => WorkspaceStorageSummary {
-                            db_path: workspace.db_path.display().to_string(),
-                            exists: true,
-                            initialized: true,
-                            index_state: WorkspaceStorageIndexState::Error,
-                            error: Some(err.to_string()),
-                        },
-                    }
-                }
-                Err(err) => WorkspaceStorageSummary {
-                    db_path: workspace.db_path.display().to_string(),
-                    exists: true,
-                    initialized: true,
-                    index_state: WorkspaceStorageIndexState::Error,
-                    error: Some(err.to_string()),
+            Ok(inspection) => WorkspaceStorageSummary {
+                db_path: workspace.db_path.display().to_string(),
+                exists: true,
+                initialized: true,
+                index_state: if inspection.has_manifest {
+                    WorkspaceStorageIndexState::Ready
+                } else {
+                    WorkspaceStorageIndexState::Uninitialized
                 },
+                error: None,
             },
             Err(err) => WorkspaceStorageSummary {
                 db_path: workspace.db_path.display().to_string(),

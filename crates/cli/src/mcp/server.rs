@@ -129,8 +129,9 @@ use crate::mcp::types::{
     SearchBatchParams, SearchBatchResponse, SearchHybridChannelWeightsParams, SearchHybridMatch,
     SearchHybridParams, SearchHybridResponse, SearchPatternType, SearchStructuralParams,
     SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse,
-    SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM,
-    WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction, WorkspaceAttachIndexMode,
+    SearchTextParams, SearchTextResponse, ServiceStatusResponse, SyntaxTreeNodeItem,
+    WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction,
+    WorkspaceAttachIndexMode,
     WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
     WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceDirtyScope,
     WorkspaceFreshnessSummary, WorkspaceIndexAction, WorkspaceIndexComponentState,
@@ -607,6 +608,21 @@ impl FriggMcpServer {
             .into_iter()
             .map(|tool| tool.name.into_owned())
             .collect::<Vec<_>>()
+    }
+
+    /// Returns process and startup-repository status without adopting a session or changing leases.
+    pub fn service_status_snapshot(&self) -> ServiceStatusResponse {
+        let repositories = self
+            .startup_workspaces()
+            .into_iter()
+            .map(|workspace| self.public_repository_summary(&workspace))
+            .collect();
+        ServiceStatusResponse {
+            schema_version: 1,
+            frigg_version: env!("CARGO_PKG_VERSION").to_owned(),
+            repositories,
+            runtime: self.runtime_status_summary(),
+        }
     }
 
     pub fn runtime_tool_surface_parity(
