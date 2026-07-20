@@ -182,6 +182,19 @@ frigg adopt --target agents-md --target mcp-project
 
 Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
 
+The opt-in `hook` target installs a Claude Code `PreToolUse` hook that reacts when an agent reaches for `Grep`, `Glob`, a whole-file `Read`, or a shell search/read command. `--hook-mode` chooses how firmly it steers:
+
+| Mode | Behavior |
+| --- | --- |
+| `nudge` (default) | Attaches advisory context naming the Frigg tool that replaces the call. Never blocks, never auto-approves. |
+| `ask` | Turns the call into a permission prompt with the same reason. Never `deny`: Frigg cannot serve every case the matcher catches, so you stay able to approve. |
+
+```bash
+frigg adopt --target hook --hook-mode ask
+```
+
+`--hook-mode` applies to the `hook` target only. The Claude plugin installed by `--client claude` bundles the advisory hook, so pair it with `--target hook` if you want the mode-aware one; adopt warns when a mode you asked for cannot reach the install it would apply to.
+
 Managed markdown defaults to a lightweight Frigg-first pointer to the `frigg-first-code-search` skill. To embed a compact routing policy instead, run:
 
 ```bash

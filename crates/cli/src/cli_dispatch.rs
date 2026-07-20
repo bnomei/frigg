@@ -37,8 +37,8 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
     if let Some(event) = parse_hidden_hook_event() {
         startup_trace(startup_trace_enabled, "async_main: hidden hook parsed");
         match event {
-            HookEvent::Pretooluse => {
-                run_pretooluse_hook_command(std::io::stdin(), std::io::stdout())?
+            HookEvent::Pretooluse { mode } => {
+                run_pretooluse_hook_command(std::io::stdin(), std::io::stdout(), mode)?
             }
         }
         startup_trace(startup_trace_enabled, "async_main: hidden hook complete");
@@ -69,6 +69,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 all,
                 policy,
                 skill_provider,
+                hook_mode,
                 uninstall,
                 check,
                 dry_run,
@@ -89,6 +90,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     all,
                     policy.into(),
                     skill_provider,
+                    hook_mode,
                     uninstall,
                     check,
                     dry_run,

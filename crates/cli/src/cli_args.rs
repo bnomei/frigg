@@ -244,7 +244,30 @@ pub(crate) enum HiddenHookCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub(crate) enum HookEvent {
     #[command(name = "pretooluse")]
-    Pretooluse,
+    Pretooluse {
+        /// How firmly the hook should steer the tool call.
+        #[arg(long = "mode", value_enum, default_value_t = HookMode::Nudge)]
+        mode: HookMode,
+    },
+}
+
+/// How firmly Frigg's PreToolUse hook should steer a tool call it can serve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub(crate) enum HookMode {
+    /// Attach advisory context and let the call proceed. Never blocks or auto-approves.
+    #[default]
+    Nudge,
+    /// Turn the call into a permission prompt naming the Frigg tool that replaces it.
+    Ask,
+}
+
+impl HookMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Nudge => "nudge",
+            Self::Ask => "ask",
+        }
+    }
 }
 
 /// Utility and serve subcommands exposed by the `frigg` binary.
@@ -296,6 +319,13 @@ pub(crate) enum Command {
         /// `skills/frigg-first-code-search` tree (or `FRIGG_SKILL_SOURCE`).
         #[arg(long = "skill-provider", value_enum)]
         skill_provider: Vec<SkillProvider>,
+        /// How firmly the installed PreToolUse hook should steer tool calls.
+        ///
+        /// `nudge` (default) attaches advisory context and never blocks. `ask` turns a call
+        /// Frigg can serve into a permission prompt, for teams that want the routing enforced
+        /// rather than suggested. Only affects the `hook` target.
+        #[arg(long = "hook-mode", value_enum, default_value_t = HookMode::Nudge)]
+        hook_mode: HookMode,
         /// Remove Frigg-managed entries instead.
         #[arg(long, default_value_t = false)]
         uninstall: bool,
@@ -559,6 +589,7 @@ mod tests {
                 all,
                 policy,
                 skill_provider,
+                hook_mode,
                 uninstall,
                 check,
                 dry_run,
@@ -573,6 +604,7 @@ mod tests {
                     ]
                 );
                 assert!(client.is_empty());
+                assert_eq!(hook_mode, super::HookMode::Nudge);
                 assert!(!all);
                 assert_eq!(policy, AdoptAgentsPolicy::Lightweight);
                 assert!(skill_provider.is_empty());
@@ -634,7 +666,14 @@ mod tests {
             .expect("hidden hook command should parse");
 
         match cli.command {
-            HiddenHookCommand::Hook { event } => assert_eq!(event, HookEvent::Pretooluse),
+            HiddenHookCommand::Hook { event } => {
+                assert_eq!(
+                    event,
+                    HookEvent::Pretooluse {
+                        mode: super::HookMode::Nudge
+                    }
+                )
+            }
         }
     }
 

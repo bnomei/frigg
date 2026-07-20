@@ -8,29 +8,47 @@ use std::io::{self, Read, Write};
 use frigg::agent_directive::HOOK_NUDGE;
 use serde_json::{Value, json};
 
+use crate::cli_args::HookMode;
+
 /// Handles the hidden Claude Code PreToolUse hook and may append Frigg navigation nudges to stdout.
 pub(crate) fn run_pretooluse_hook_command<R: Read, W: Write>(
     mut stdin: R,
     mut stdout: W,
+    mode: HookMode,
 ) -> io::Result<()> {
     let mut input = String::new();
     stdin.read_to_string(&mut input)?;
-    if let Some(output) = render_pretooluse_hook_output(&input) {
+    if let Some(output) = render_pretooluse_hook_output(&input, mode) {
         stdout.write_all(output.as_bytes())?;
         stdout.write_all(b"\n")?;
     }
     Ok(())
 }
 
-fn render_pretooluse_hook_output(input: &str) -> Option<String> {
+fn render_pretooluse_hook_output(input: &str, mode: HookMode) -> Option<String> {
     let value = serde_json::from_str::<Value>(input).ok()?;
     should_nudge_pretooluse(&value).then(|| {
-        json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": HOOK_NUDGE,
-            }
-        })
+        match mode {
+            // Advisory only: attach context and let the call through. Never blocks, never
+            // auto-approves, so a wrong guess costs the agent nothing but a few tokens.
+            HookMode::Nudge => json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": HOOK_NUDGE,
+                }
+            }),
+            // Opt-in enforcement: turn the call into a permission prompt. Still `ask` rather
+            // than `deny`, because Frigg cannot serve every case the matcher catches and the
+            // user has to stay able to say yes.
+            HookMode::Ask => json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "ask",
+                    "permissionDecisionReason": HOOK_NUDGE,
+                    "additionalContext": HOOK_NUDGE,
+                }
+            }),
+        }
         .to_string()
     })
 }
@@ -384,12 +402,13 @@ mod tests {
     use frigg::agent_directive::HOOK_NUDGE;
     use serde_json::{Value, json};
 
-    use super::{render_pretooluse_hook_output, run_pretooluse_hook_command};
+    use super::{HookMode, render_pretooluse_hook_output, run_pretooluse_hook_command};
 
     #[test]
     fn pretooluse_grep_emits_hook_specific_nudge() {
         let output = render_pretooluse_hook_output(
             r#"{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"needle"}}"#,
+            HookMode::Nudge,
         )
         .expect("grep should produce output");
         let value = serde_json::from_str::<Value>(&output).expect("hook output should be json");
@@ -436,7 +455,7 @@ mod tests {
             .to_string();
 
             assert!(
-                render_pretooluse_hook_output(&input).is_some(),
+                render_pretooluse_hook_output(&input, HookMode::Nudge).is_some(),
                 "expected nudge for command: {command}"
             );
         }
@@ -451,7 +470,7 @@ mod tests {
         })
         .to_string();
 
-        assert!(render_pretooluse_hook_output(&input).is_some());
+        assert!(render_pretooluse_hook_output(&input, HookMode::Nudge).is_some());
     }
 
     #[test]
@@ -495,7 +514,10 @@ mod tests {
         ];
 
         for input in cases {
-            assert_eq!(render_pretooluse_hook_output(&input.to_string()), None);
+            assert_eq!(
+                render_pretooluse_hook_output(&input.to_string(), HookMode::Nudge),
+                None
+            );
         }
     }
 
@@ -509,7 +531,7 @@ mod tests {
         })
         .to_string();
 
-        assert!(render_pretooluse_hook_output(&input).is_some());
+        assert!(render_pretooluse_hook_output(&input, HookMode::Nudge).is_some());
     }
 
     /// The skill claims `find`/`fd` and the read family, not just the grep family.
@@ -539,7 +561,7 @@ mod tests {
             .to_string();
 
             assert!(
-                render_pretooluse_hook_output(&input).is_some(),
+                render_pretooluse_hook_output(&input, HookMode::Nudge).is_some(),
                 "expected nudge for command: {command}"
             );
         }
@@ -574,7 +596,7 @@ mod tests {
             .to_string();
 
             assert_eq!(
-                render_pretooluse_hook_output(&input),
+                render_pretooluse_hook_output(&input, HookMode::Nudge),
                 None,
                 "expected silence for command: {command}"
             );
@@ -586,10 +608,74 @@ mod tests {
         for input in ["", "not json", r#"{"tool_name":12}"#] {
             let mut stdout = Vec::new();
 
-            run_pretooluse_hook_command(input.as_bytes(), &mut stdout)
+            run_pretooluse_hook_command(input.as_bytes(), &mut stdout, HookMode::Nudge)
                 .expect("invalid hook input should not fail");
 
             assert!(stdout.is_empty(), "stdout should be empty for {input:?}");
         }
+    }
+
+    /// `ask` turns the call into a permission prompt. Still `ask`, never `deny`: Frigg cannot
+    /// serve every case the matcher catches, so the user has to stay able to say yes.
+    #[test]
+    fn ask_mode_requests_permission_and_keeps_the_reason() {
+        let input = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Grep",
+            "tool_input": { "pattern": "needle" },
+        })
+        .to_string();
+
+        let output = render_pretooluse_hook_output(&input, HookMode::Ask).expect("ask output");
+        let value = serde_json::from_str::<Value>(&output).expect("hook output should be json");
+        let hook_output = value["hookSpecificOutput"].clone();
+
+        assert_eq!(
+            hook_output["permissionDecision"].as_str(),
+            Some("ask"),
+            "ask mode must prompt, not decide for the user"
+        );
+        assert_ne!(
+            hook_output["permissionDecision"].as_str(),
+            Some("deny"),
+            "frigg must never block a tool call outright"
+        );
+        assert_eq!(
+            hook_output["permissionDecisionReason"].as_str(),
+            Some(HOOK_NUDGE),
+            "the prompt should say which Frigg tool replaces the call"
+        );
+    }
+
+    /// The default stays advisory, so an install that never opts in cannot start prompting.
+    #[test]
+    fn nudge_mode_never_emits_a_permission_decision() {
+        let input = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Glob",
+            "tool_input": { "pattern": "**/*.rs" },
+        })
+        .to_string();
+
+        let output = render_pretooluse_hook_output(&input, HookMode::Nudge).expect("nudge output");
+        let value = serde_json::from_str::<Value>(&output).expect("hook output should be json");
+
+        assert!(
+            value["hookSpecificOutput"]["permissionDecision"].is_null(),
+            "nudge must stay advisory: {output}"
+        );
+    }
+
+    /// A call Frigg cannot serve is silent in every mode.
+    #[test]
+    fn ask_mode_stays_silent_for_calls_frigg_does_not_replace() {
+        let input = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "cargo test" },
+        })
+        .to_string();
+
+        assert_eq!(render_pretooluse_hook_output(&input, HookMode::Ask), None);
     }
 }

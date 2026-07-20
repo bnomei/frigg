@@ -12,7 +12,7 @@ use frigg::agent_directive::AgentsPolicy;
 use frigg::settings::FriggConfig;
 use frigg::storage::resolve_workspace_relative_write_path;
 
-use crate::cli_args::{AdoptTarget, SkillProvider};
+use crate::cli_args::{AdoptTarget, HookMode, SkillProvider};
 use crate::cli_runtime::{
     CliOutput, OutputField, OutputLevel, field, format_output_event_line, reported_error,
 };
@@ -38,6 +38,7 @@ pub(crate) fn run_adopt_command_with_output(
     all: bool,
     policy: AgentsPolicy,
     skill_providers: Vec<SkillProvider>,
+    hook_mode: HookMode,
     uninstall: bool,
     check: bool,
     dry_run: bool,
@@ -73,9 +74,11 @@ pub(crate) fn run_adopt_command_with_output(
         uninstall,
         force,
         mcp_server_url,
+        hook_mode,
     )?;
     let skill_plans = build_skill_plans(config, &skill_providers, uninstall);
     warn_on_duplicate_claude_wiring(output, config, &plan, &skill_plans, uninstall)?;
+    warn_when_hook_mode_cannot_reach_the_plugin(output, &plan, &skill_plans, hook_mode, uninstall)?;
     let pending_changes = plan.pending_changes()
         + skill_plans
             .iter()
@@ -174,7 +177,7 @@ pub(crate) fn run_adopt_command_with_output(
         emit_skill_plan_event(output, skill_plan)?;
     }
 
-    let writes = apply_plan_entries(&plan, policy, uninstall, force, mcp_server_url)?;
+    let writes = apply_plan_entries(&plan, policy, uninstall, force, mcp_server_url, hook_mode)?;
     let skill_writes = apply_skill_plans(&skill_plans)?;
     output.summary_event(
         adopt_level_for_status(status),
@@ -281,8 +284,11 @@ fn target_is_already_wired(root: &Path, target: AdoptTarget) -> bool {
         return false;
     };
     match target {
+        // The mode is irrelevant here: this asks whether a Frigg hook is present at all, and
+        // both Desired and Diverged mean yes. An ask-mode install reads as Diverged under Nudge
+        // and is still detected. Narrowing this to Desired would silently miss those installs.
         AdoptTarget::Hook => matches!(
-            json_merge::classify_claude_hook(&contents),
+            json_merge::classify_claude_hook(&contents, HookMode::Nudge),
             Ok(json_merge::ClaudeHookState::Desired | json_merge::ClaudeHookState::Diverged)
         ),
         AdoptTarget::McpProject => matches!(
@@ -291,6 +297,59 @@ fn target_is_already_wired(root: &Path, target: AdoptTarget) -> bool {
         ),
         _ => false,
     }
+}
+
+/// Warn when `--hook-mode` was asked for but the install it would apply to is the plugin.
+///
+/// The plugin's `hooks/hooks.json` is a bundled file copied byte-for-byte, so it always carries
+/// the advisory command. Rewriting it per mode would make the installed tree differ from its
+/// source and the skill install would never settle on Unchanged. Until that is templated, a mode
+/// the plugin cannot honor is stated rather than dropped.
+fn warn_when_hook_mode_cannot_reach_the_plugin(
+    output: &CliOutput,
+    plan: &AdoptPlan,
+    skill_plans: &[SkillInstallPlan],
+    hook_mode: HookMode,
+    uninstall: bool,
+) -> Result<(), Box<dyn Error>> {
+    if uninstall || hook_mode == HookMode::Nudge {
+        return Ok(());
+    }
+
+    let installs_claude_plugin = skill_plans.iter().any(|skill_plan| {
+        skill_plan.provider == SkillProvider::Claude
+            && matches!(
+                skill_plan.action,
+                SkillInstallAction::Create
+                    | SkillInstallAction::Update
+                    | SkillInstallAction::Unchanged
+            )
+    });
+    let writes_hook_target = plan
+        .entries
+        .iter()
+        .any(|entry| entry.target == AdoptTarget::Hook);
+
+    if !installs_claude_plugin || writes_hook_target {
+        return Ok(());
+    }
+
+    output.result_event(
+        OutputLevel::Warn,
+        "adopt",
+        "hook-mode-not-applied",
+        &[
+            field("hook_mode", hook_mode.as_str()),
+            field(
+                "detail",
+                "the claude plugin ships the advisory hook; add --target hook to install a \
+                 mode-aware hook in .claude/settings.json",
+            ),
+        ],
+        None,
+    )?;
+
+    Ok(())
 }
 
 fn emit_skill_plan_event(
@@ -459,6 +518,8 @@ fn adopt_level_for_action(action: AdoptPlanAction) -> OutputLevel {
     }
 }
 
+// Same shape as `run_adopt_command_with_output` above: one knob per adopt flag, threaded down.
+#[allow(clippy::too_many_arguments)]
 fn build_adopt_plan(
     config: &FriggConfig,
     requested_targets: &[AdoptTarget],
@@ -467,6 +528,7 @@ fn build_adopt_plan(
     uninstall: bool,
     force: bool,
     mcp_server_url: &str,
+    hook_mode: HookMode,
 ) -> io::Result<AdoptPlan> {
     let repositories = config.repositories();
     let mut entries = Vec::new();
@@ -489,8 +551,15 @@ fn build_adopt_plan(
             })?;
 
         for target in select_targets(root, requested_targets, all) {
-            let (action, reason) =
-                classify_target_action(root, target, policy, uninstall, force, mcp_server_url);
+            let (action, reason) = classify_target_action(
+                root,
+                target,
+                policy,
+                uninstall,
+                force,
+                mcp_server_url,
+                hook_mode,
+            );
             entries.push(AdoptPlanEntry {
                 repository_id: repo.repository_id.0.clone(),
                 root: root.to_path_buf(),
@@ -512,6 +581,7 @@ fn classify_target_action(
     uninstall: bool,
     force: bool,
     mcp_server_url: &str,
+    hook_mode: HookMode,
 ) -> (AdoptPlanAction, Option<String>) {
     let contents = match read_existing_target_contents(root, target) {
         Ok(Some(contents)) => contents,
@@ -522,7 +592,7 @@ fn classify_target_action(
     };
 
     if matches!(target, AdoptTarget::Hook) {
-        classify_claude_hook_target(&contents, uninstall)
+        classify_claude_hook_target(&contents, uninstall, hook_mode)
     } else if matches!(target, AdoptTarget::McpProject | AdoptTarget::McpCursor) {
         classify_mcp_target(&contents, uninstall, force, mcp_server_url)
     } else {
@@ -670,6 +740,7 @@ fn apply_plan_entries(
     uninstall: bool,
     force: bool,
     mcp_server_url: &str,
+    hook_mode: HookMode,
 ) -> Result<usize, Box<dyn Error>> {
     let mut writes = 0;
     let mut rollback_edits = Vec::new();
@@ -686,7 +757,7 @@ fn apply_plan_entries(
             let contents = read_existing_target_contents(&entry.root, entry.target)?;
             let write_path = resolve_entry_write_path(entry)?;
             let edit = if matches!(entry.target, AdoptTarget::Hook) {
-                apply_claude_hook_edit(contents.as_deref(), uninstall)
+                apply_claude_hook_edit(contents.as_deref(), uninstall, hook_mode)
             } else if matches!(
                 entry.target,
                 AdoptTarget::McpProject | AdoptTarget::McpCursor
@@ -800,6 +871,7 @@ fn apply_mcp_json_entries(
         uninstall,
         force,
         mcp_server_url,
+        HookMode::Nudge,
     )
     .map_err(|err| io::Error::other(err.to_string()))
 }
@@ -872,6 +944,7 @@ fn apply_mcp_json_edit(
 fn apply_claude_hook_edit(
     contents: Option<&str>,
     uninstall: bool,
+    hook_mode: HookMode,
 ) -> Result<AdoptApplyEdit, Box<dyn Error>> {
     let edit = if uninstall {
         match contents {
@@ -879,7 +952,7 @@ fn apply_claude_hook_edit(
             None => Ok(json_merge::McpJsonEdit::Unchanged),
         }
     } else {
-        json_merge::upsert_claude_hook(contents)
+        json_merge::upsert_claude_hook(contents, hook_mode)
     }?;
 
     Ok(match edit {
@@ -946,8 +1019,9 @@ fn classify_mcp_target(
 fn classify_claude_hook_target(
     contents: &str,
     uninstall: bool,
+    hook_mode: HookMode,
 ) -> (AdoptPlanAction, Option<String>) {
-    let state = match json_merge::classify_claude_hook(contents) {
+    let state = match json_merge::classify_claude_hook(contents, hook_mode) {
         Ok(state) => state,
         Err(err) => return (AdoptPlanAction::Error, Some(format!("invalid-json:{err}"))),
     };
@@ -1009,6 +1083,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1039,6 +1114,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1066,6 +1142,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1093,6 +1170,7 @@ mod tests {
             true,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1114,6 +1192,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1145,6 +1224,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1154,7 +1234,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply markdown"),
             1
@@ -1183,6 +1264,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1192,7 +1274,8 @@ mod tests {
                 AgentsPolicy::Expanded,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply expanded markdown"),
             1
@@ -1228,6 +1311,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1254,6 +1338,7 @@ mod tests {
             true,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1263,7 +1348,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 true,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply uninstall"),
             1
@@ -1291,6 +1377,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1329,6 +1416,7 @@ mod tests {
             true,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1364,6 +1452,7 @@ mod tests {
             true,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1399,6 +1488,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Update);
@@ -1412,7 +1502,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply hook"),
             1
@@ -1426,7 +1517,10 @@ mod tests {
             .as_array()
             .expect("hook array");
         assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0], super::json_merge::desired_claude_hook_command());
+        assert_eq!(
+            hooks[0],
+            super::json_merge::desired_claude_hook_command(crate::cli_args::HookMode::Nudge)
+        );
 
         let plan = build_adopt_plan(
             &config,
@@ -1436,6 +1530,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
@@ -1462,6 +1557,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Update);
@@ -1475,7 +1571,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply hook"),
             1
@@ -1489,7 +1586,10 @@ mod tests {
             .as_array()
             .expect("hook array");
         assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0], super::json_merge::desired_claude_hook_command());
+        assert_eq!(
+            hooks[0],
+            super::json_merge::desired_claude_hook_command(crate::cli_args::HookMode::Nudge)
+        );
 
         let plan = build_adopt_plan(
             &config,
@@ -1499,6 +1599,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
@@ -1520,6 +1621,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
@@ -1529,7 +1631,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply hook"),
             1
@@ -1541,7 +1644,7 @@ mod tests {
         .expect("parse settings");
         assert_eq!(
             value["hooks"]["PreToolUse"][0]["hooks"][0],
-            super::json_merge::desired_claude_hook_command()
+            super::json_merge::desired_claude_hook_command(crate::cli_args::HookMode::Nudge)
         );
 
         let plan = build_adopt_plan(
@@ -1552,6 +1655,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
@@ -1561,7 +1665,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("reapply hook"),
             0
@@ -1584,6 +1689,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
         assert!(
@@ -1598,6 +1704,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("apply all with hook");
         let value: serde_json::Value = serde_json::from_str(
@@ -1606,7 +1713,7 @@ mod tests {
         .expect("parse settings");
         assert_eq!(
             value["hooks"]["PreToolUse"][0]["hooks"][0],
-            super::json_merge::desired_claude_hook_command()
+            super::json_merge::desired_claude_hook_command(crate::cli_args::HookMode::Nudge)
         );
         fs::remove_dir_all(root).expect("remove temp root");
     }
@@ -1630,6 +1737,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1639,7 +1747,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 false,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply hook"),
             1
@@ -1659,7 +1768,7 @@ mod tests {
         );
         assert_eq!(
             value["hooks"]["PreToolUse"][1]["hooks"][0],
-            super::json_merge::desired_claude_hook_command()
+            super::json_merge::desired_claude_hook_command(crate::cli_args::HookMode::Nudge)
         );
         fs::remove_dir_all(root).expect("remove temp root");
     }
@@ -1683,6 +1792,7 @@ mod tests {
             true,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1692,7 +1802,8 @@ mod tests {
                 AgentsPolicy::Lightweight,
                 true,
                 false,
-                TEST_MCP_SERVER_URL
+                TEST_MCP_SERVER_URL,
+                crate::cli_args::HookMode::Nudge
             )
             .expect("apply hook uninstall"),
             1
@@ -1709,7 +1820,7 @@ mod tests {
         assert_eq!(value["hooks"]["PreToolUse"][1]["matcher"], "Write");
         assert_eq!(
             value["hooks"]["PreToolUse"][1]["hooks"][0],
-            super::json_merge::desired_claude_hook_command()
+            super::json_merge::desired_claude_hook_command(crate::cli_args::HookMode::Nudge)
         );
         assert_eq!(
             value["hooks"]["PreToolUse"][1]["hooks"][1]["command"],
@@ -1756,6 +1867,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect_err("later invalid managed block should fail apply");
         assert!(
@@ -1791,12 +1903,17 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Error);
 
-        let err = super::apply_claude_hook_edit(Some("{not json"), false)
-            .expect_err("apply should reject malformed JSON");
+        let err = super::apply_claude_hook_edit(
+            Some("{not json"),
+            false,
+            crate::cli_args::HookMode::Nudge,
+        )
+        .expect_err("apply should reject malformed JSON");
         assert!(err.to_string().contains("invalid JSON"));
         assert_eq!(
             fs::read_to_string(&settings_path).expect("read settings"),
@@ -1827,6 +1944,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1873,6 +1991,7 @@ mod tests {
             false,
             true,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect_err("symlinked target escape should fail before reading");
 
@@ -1907,6 +2026,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect("build adopt plan");
 
@@ -1916,6 +2036,7 @@ mod tests {
             false,
             false,
             TEST_MCP_SERVER_URL,
+            crate::cli_args::HookMode::Nudge,
         )
         .expect_err("symlinked parent escape should fail");
 

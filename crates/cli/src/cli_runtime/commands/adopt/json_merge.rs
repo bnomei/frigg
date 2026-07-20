@@ -5,6 +5,8 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::cli_args::HookMode;
+
 #[cfg(test)]
 pub(crate) const DEFAULT_MCP_SERVER_URL: &str = "http://127.0.0.1:37444/mcp";
 pub(crate) const MCP_SERVER_KEY: &str = "frigg";
@@ -264,33 +266,47 @@ pub(crate) fn remove_mcp_server(
     serialize_if_changed(Value::Object(root), contents)
 }
 
-pub(crate) fn desired_claude_hook_command() -> Value {
+pub(crate) fn desired_claude_hook_command(mode: HookMode) -> Value {
     json!({
         "type": "command",
-        "command": CLAUDE_HOOK_COMMAND,
+        "command": claude_hook_command_for(mode),
         "timeout": 5,
     })
 }
 
-fn desired_claude_pre_tool_use_entry() -> Value {
+/// The hook command line for `mode`.
+///
+/// Nudge stays bare so an install written before hook modes existed keeps comparing equal and is
+/// not rewritten for no reason.
+fn claude_hook_command_for(mode: HookMode) -> String {
+    match mode {
+        HookMode::Nudge => CLAUDE_HOOK_COMMAND.to_owned(),
+        HookMode::Ask => format!("{CLAUDE_HOOK_COMMAND} --mode {}", mode.as_str()),
+    }
+}
+
+fn desired_claude_pre_tool_use_entry(mode: HookMode) -> Value {
     json!({
         "matcher": CLAUDE_HOOK_MATCHER,
-        "hooks": [desired_claude_hook_command()],
+        "hooks": [desired_claude_hook_command(mode)],
     })
 }
 
 /// Classifies whether the Frigg PreToolUse hook is present in Claude settings JSON.
-pub(crate) fn classify_claude_hook(contents: &str) -> Result<ClaudeHookState, McpJsonError> {
+pub(crate) fn classify_claude_hook(
+    contents: &str,
+    mode: HookMode,
+) -> Result<ClaudeHookState, McpJsonError> {
     let root = parse_object_root(contents)?;
     let value = Value::Object(root);
     if value
         .get(CLAUDE_HOOKS_KEY)
         .and_then(|hooks| hooks.get(CLAUDE_PRE_TOOL_USE_KEY))
         .and_then(Value::as_array)
-        .is_some_and(|pre_tool_use| pre_tool_use_contains_diverged_frigg_hook(pre_tool_use))
+        .is_some_and(|pre_tool_use| pre_tool_use_contains_diverged_frigg_hook(pre_tool_use, mode))
     {
         Ok(ClaudeHookState::Diverged)
-    } else if contains_desired_claude_hook(&value) {
+    } else if contains_desired_claude_hook(&value, mode) {
         Ok(ClaudeHookState::Desired)
     } else {
         Ok(ClaudeHookState::Missing)
@@ -298,11 +314,14 @@ pub(crate) fn classify_claude_hook(contents: &str) -> Result<ClaudeHookState, Mc
 }
 
 /// Inserts the Frigg PreToolUse hook command while preserving sibling Claude settings and hooks.
-pub(crate) fn upsert_claude_hook(contents: Option<&str>) -> Result<McpJsonEdit, McpJsonError> {
+pub(crate) fn upsert_claude_hook(
+    contents: Option<&str>,
+    mode: HookMode,
+) -> Result<McpJsonEdit, McpJsonError> {
     let Some(contents) = contents else {
         return serialize_changed(json!({
             CLAUDE_HOOKS_KEY: {
-                CLAUDE_PRE_TOOL_USE_KEY: [desired_claude_pre_tool_use_entry()],
+                CLAUDE_PRE_TOOL_USE_KEY: [desired_claude_pre_tool_use_entry(mode)],
             },
         }));
     };
@@ -327,7 +346,7 @@ pub(crate) fn upsert_claude_hook(contents: Option<&str>) -> Result<McpJsonEdit, 
                 .iter()
                 .filter(|hook| is_frigg_pretooluse_hook(hook))
                 .collect::<Vec<_>>();
-            frigg_hooks.len() == 1 && frigg_hooks[0] == &desired_claude_hook_command()
+            frigg_hooks.len() == 1 && frigg_hooks[0] == &desired_claude_hook_command(mode)
         };
 
         // Report Unchanged only when the entry is already desired AND no legacy entry was stripped
@@ -339,10 +358,10 @@ pub(crate) fn upsert_claude_hook(contents: Option<&str>) -> Result<McpJsonEdit, 
         }
         if !already_desired {
             hooks.retain(|hook| !is_frigg_pretooluse_hook(hook));
-            hooks.push(desired_claude_hook_command());
+            hooks.push(desired_claude_hook_command(mode));
         }
     } else {
-        pre_tool_use.push(desired_claude_pre_tool_use_entry());
+        pre_tool_use.push(desired_claude_pre_tool_use_entry(mode));
     }
 
     serialize_if_changed(Value::Object(root), contents)
@@ -391,11 +410,11 @@ fn parse_object_root(contents: &str) -> Result<Map<String, Value>, McpJsonError>
     ))
 }
 
-fn contains_desired_claude_hook(root: &Value) -> bool {
+fn contains_desired_claude_hook(root: &Value, mode: HookMode) -> bool {
     root.get(CLAUDE_HOOKS_KEY)
         .and_then(|hooks| hooks.get(CLAUDE_PRE_TOOL_USE_KEY))
         .and_then(Value::as_array)
-        .is_some_and(|pre_tool_use| pre_tool_use_contains_desired_hook(pre_tool_use))
+        .is_some_and(|pre_tool_use| pre_tool_use_contains_desired_hook(pre_tool_use, mode))
 }
 
 fn is_frigg_http_mcp_entry(entry: &Value) -> bool {
@@ -405,13 +424,20 @@ fn is_frigg_http_mcp_entry(entry: &Value) -> bool {
     })
 }
 
+/// True for a Frigg PreToolUse hook in any mode.
+///
+/// Matching the bare command as a prefix keeps uninstall and de-duplication working across modes:
+/// a tree installed with `--hook-mode ask` must still be recognized as Frigg's.
 fn is_frigg_pretooluse_hook(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| command == CLAUDE_HOOK_COMMAND)
+        .is_some_and(|command| {
+            command == CLAUDE_HOOK_COMMAND
+                || command.starts_with(&format!("{CLAUDE_HOOK_COMMAND} "))
+        })
 }
 
-fn pre_tool_use_contains_desired_hook(pre_tool_use: &[Value]) -> bool {
+fn pre_tool_use_contains_desired_hook(pre_tool_use: &[Value], mode: HookMode) -> bool {
     pre_tool_use.iter().any(|entry| {
         entry
             .get("matcher")
@@ -423,7 +449,7 @@ fn pre_tool_use_contains_desired_hook(pre_tool_use: &[Value]) -> bool {
                 .is_some_and(|hooks| {
                     hooks
                         .iter()
-                        .any(|hook| *hook == desired_claude_hook_command())
+                        .any(|hook| *hook == desired_claude_hook_command(mode))
                 })
     })
 }
@@ -434,7 +460,7 @@ fn pre_tool_use_contains_frigg_pretooluse_hook(pre_tool_use: &[Value]) -> bool {
         .any(entry_has_frigg_hook_under_managed_matcher)
 }
 
-fn pre_tool_use_contains_diverged_frigg_hook(pre_tool_use: &[Value]) -> bool {
+fn pre_tool_use_contains_diverged_frigg_hook(pre_tool_use: &[Value], mode: HookMode) -> bool {
     pre_tool_use.iter().any(|entry| {
         let Some(matcher) = entry.get("matcher").and_then(Value::as_str) else {
             return false;
@@ -452,7 +478,7 @@ fn pre_tool_use_contains_diverged_frigg_hook(pre_tool_use: &[Value]) -> bool {
                     }
                     // A byte-identical command still counts as diverged under a legacy matcher:
                     // the entry has to move to `CLAUDE_HOOK_MATCHER` to pick up new tool coverage.
-                    matcher != CLAUDE_HOOK_MATCHER || *hook != desired_claude_hook_command()
+                    matcher != CLAUDE_HOOK_MATCHER || *hook != desired_claude_hook_command(mode)
                 })
             })
     })
@@ -524,10 +550,10 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_claude_hook,
-        classify_mcp_entry, classify_mcp_entry_for_uninstall, desired_claude_hook_command,
-        desired_mcp_config, desired_mcp_server, remove_claude_hook, remove_mcp_server,
-        upsert_claude_hook, upsert_mcp_server,
+        DEFAULT_MCP_SERVER_URL, HookMode, MCP_SERVER_KEY, McpEntryState, McpJsonEdit,
+        classify_claude_hook, classify_mcp_entry, classify_mcp_entry_for_uninstall,
+        desired_claude_hook_command, desired_mcp_config, desired_mcp_server, remove_claude_hook,
+        remove_mcp_server, upsert_claude_hook, upsert_mcp_server,
     };
 
     #[test]
@@ -750,9 +776,12 @@ mod tests {
 
     #[test]
     fn adopt_json_merge_adds_claude_hook_and_preserves_siblings() {
-        let edit = upsert_claude_hook(Some(
-            r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"other"}]}],"PostToolUse":[{"matcher":"Bash","hooks":[]}]}}"#,
-        ))
+        let edit = upsert_claude_hook(
+            Some(
+                r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"other"}]}],"PostToolUse":[{"matcher":"Bash","hooks":[]}]}}"#,
+            ),
+            HookMode::Nudge,
+        )
         .expect("merge claude settings");
 
         let McpJsonEdit::Changed(updated) = edit else {
@@ -768,7 +797,7 @@ mod tests {
         );
         assert_eq!(
             value["hooks"]["PreToolUse"][1]["hooks"][0],
-            desired_claude_hook_command()
+            desired_claude_hook_command(HookMode::Nudge)
         );
     }
 
@@ -777,11 +806,11 @@ mod tests {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
 
         assert_eq!(
-            classify_claude_hook(contents).expect("classify claude hook"),
+            classify_claude_hook(contents, HookMode::Nudge).expect("classify claude hook"),
             super::ClaudeHookState::Desired
         );
         assert_eq!(
-            upsert_claude_hook(Some(contents)).expect("upsert claude hook"),
+            upsert_claude_hook(Some(contents), HookMode::Nudge).expect("upsert claude hook"),
             McpJsonEdit::Unchanged
         );
     }
@@ -791,7 +820,7 @@ mod tests {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":10}]}]}}"#;
 
         assert_eq!(
-            classify_claude_hook(contents).expect("classify diverged claude hook"),
+            classify_claude_hook(contents, HookMode::Nudge).expect("classify diverged claude hook"),
             super::ClaudeHookState::Diverged
         );
     }
@@ -801,7 +830,8 @@ mod tests {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5},{"type":"command","command":"frigg hook pretooluse","timeout":10}]}]}}"#;
 
         assert_eq!(
-            classify_claude_hook(contents).expect("classify mixed duplicate claude hooks"),
+            classify_claude_hook(contents, HookMode::Nudge)
+                .expect("classify mixed duplicate claude hooks"),
             super::ClaudeHookState::Diverged
         );
     }
@@ -810,7 +840,8 @@ mod tests {
     fn upsert_claude_hook_replaces_diverged_frigg_hook() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"other"},{"type":"command","command":"frigg hook pretooluse","timeout":10}]}]}}"#;
 
-        let edit = upsert_claude_hook(Some(contents)).expect("replace diverged claude hook");
+        let edit = upsert_claude_hook(Some(contents), HookMode::Nudge)
+            .expect("replace diverged claude hook");
         let McpJsonEdit::Changed(updated) = edit else {
             panic!("expected changed edit");
         };
@@ -820,14 +851,15 @@ mod tests {
             .expect("hook array");
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0]["command"], "other");
-        assert_eq!(hooks[1], desired_claude_hook_command());
+        assert_eq!(hooks[1], desired_claude_hook_command(HookMode::Nudge));
     }
 
     #[test]
     fn upsert_claude_hook_deduplicates_existing_frigg_pretooluse_commands() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":10},{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
 
-        let edit = upsert_claude_hook(Some(contents)).expect("deduplicate diverged claude hooks");
+        let edit = upsert_claude_hook(Some(contents), HookMode::Nudge)
+            .expect("deduplicate diverged claude hooks");
         let McpJsonEdit::Changed(updated) = edit else {
             panic!("expected changed edit");
         };
@@ -836,7 +868,7 @@ mod tests {
             .as_array()
             .expect("hook array");
         assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0], desired_claude_hook_command());
+        assert_eq!(hooks[0], desired_claude_hook_command(HookMode::Nudge));
     }
 
     #[test]
@@ -865,7 +897,7 @@ mod tests {
         assert_eq!(value["hooks"]["PreToolUse"][1]["matcher"], "Write");
         assert_eq!(
             value["hooks"]["PreToolUse"][1]["hooks"][0],
-            desired_claude_hook_command()
+            desired_claude_hook_command(HookMode::Nudge)
         );
         assert_eq!(
             value["hooks"]["PreToolUse"][1]["hooks"][1]["command"],
@@ -875,7 +907,8 @@ mod tests {
 
     #[test]
     fn adopt_json_merge_rejects_malformed_claude_settings_without_output() {
-        let err = upsert_claude_hook(Some("{not json")).expect_err("reject malformed JSON");
+        let err = upsert_claude_hook(Some("{not json"), HookMode::Nudge)
+            .expect_err("reject malformed JSON");
 
         assert!(err.to_string().contains("invalid JSON"));
     }
@@ -907,7 +940,7 @@ mod tests {
         );
         assert_eq!(
             entry["hooks"][0],
-            desired_claude_hook_command(),
+            desired_claude_hook_command(HookMode::Nudge),
             "plugin hook command drifted from the managed hook command"
         );
     }
@@ -934,7 +967,7 @@ mod tests {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
 
         assert_eq!(
-            classify_claude_hook(contents).expect("classify legacy claude hook"),
+            classify_claude_hook(contents, HookMode::Nudge).expect("classify legacy claude hook"),
             super::ClaudeHookState::Diverged
         );
     }
@@ -944,7 +977,8 @@ mod tests {
     fn upsert_migrates_legacy_matcher_without_leaving_a_duplicate_entry() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
 
-        let edit = upsert_claude_hook(Some(contents)).expect("migrate legacy matcher");
+        let edit =
+            upsert_claude_hook(Some(contents), HookMode::Nudge).expect("migrate legacy matcher");
 
         let McpJsonEdit::Changed(updated) = edit else {
             panic!("expected changed edit");
@@ -959,7 +993,10 @@ mod tests {
             "legacy entry should be rewritten, not duplicated: {updated}"
         );
         assert_eq!(pre_tool_use[0]["matcher"], "Grep|Glob|Bash|Read");
-        assert_eq!(pre_tool_use[0]["hooks"][0], desired_claude_hook_command());
+        assert_eq!(
+            pre_tool_use[0]["hooks"][0],
+            desired_claude_hook_command(HookMode::Nudge)
+        );
     }
 
     /// Migration must not discard a non-Frigg hook the user parked under the legacy matcher.
@@ -967,7 +1004,8 @@ mod tests {
     fn upsert_migration_preserves_sibling_hooks_under_legacy_matcher() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5},{"type":"command","command":"audit-log"}]}]}}"#;
 
-        let edit = upsert_claude_hook(Some(contents)).expect("migrate legacy matcher");
+        let edit =
+            upsert_claude_hook(Some(contents), HookMode::Nudge).expect("migrate legacy matcher");
 
         let McpJsonEdit::Changed(updated) = edit else {
             panic!("expected changed edit");
@@ -981,7 +1019,10 @@ mod tests {
         assert_eq!(pre_tool_use[0]["hooks"].as_array().unwrap().len(), 1);
         assert_eq!(pre_tool_use[0]["hooks"][0]["command"], "audit-log");
         assert_eq!(pre_tool_use[1]["matcher"], "Grep|Glob|Bash|Read");
-        assert_eq!(pre_tool_use[1]["hooks"][0], desired_claude_hook_command());
+        assert_eq!(
+            pre_tool_use[1]["hooks"][0],
+            desired_claude_hook_command(HookMode::Nudge)
+        );
     }
 
     /// Regression: a Frigg hook under BOTH matchers used to classify Diverged while upsert returned
@@ -991,12 +1032,13 @@ mod tests {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]},{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
 
         assert_eq!(
-            classify_claude_hook(contents).expect("classify"),
+            classify_claude_hook(contents, HookMode::Nudge).expect("classify"),
             super::ClaudeHookState::Diverged,
             "a lingering legacy entry is pending work"
         );
 
-        let McpJsonEdit::Changed(updated) = upsert_claude_hook(Some(contents)).expect("upsert")
+        let McpJsonEdit::Changed(updated) =
+            upsert_claude_hook(Some(contents), HookMode::Nudge).expect("upsert")
         else {
             panic!("upsert must write the migration, not report Unchanged");
         };
@@ -1014,11 +1056,11 @@ mod tests {
 
         // Second run must settle.
         assert_eq!(
-            classify_claude_hook(&updated).expect("reclassify"),
+            classify_claude_hook(&updated, HookMode::Nudge).expect("reclassify"),
             super::ClaudeHookState::Desired
         );
         assert_eq!(
-            upsert_claude_hook(Some(&updated)).expect("second upsert"),
+            upsert_claude_hook(Some(&updated), HookMode::Nudge).expect("second upsert"),
             McpJsonEdit::Unchanged,
             "adopt must converge on the second run"
         );
@@ -1029,7 +1071,8 @@ mod tests {
     fn upsert_preserves_user_authored_empty_legacy_entry() {
         let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[]}]}}"#;
 
-        let McpJsonEdit::Changed(updated) = upsert_claude_hook(Some(contents)).expect("upsert")
+        let McpJsonEdit::Changed(updated) =
+            upsert_claude_hook(Some(contents), HookMode::Nudge).expect("upsert")
         else {
             panic!("expected the frigg entry to be added");
         };
@@ -1064,9 +1107,120 @@ mod tests {
             "frigg hook should be gone from the legacy entry: {updated}"
         );
         assert_eq!(
-            classify_claude_hook(&updated).expect("reclassify"),
+            classify_claude_hook(&updated, HookMode::Nudge).expect("reclassify"),
             super::ClaudeHookState::Missing,
             "uninstall must converge on Missing"
         );
+    }
+
+    /// The bare command is what nudge installs, so an install predating hook modes stays current.
+    #[test]
+    fn nudge_mode_keeps_the_bare_hook_command() {
+        let command = desired_claude_hook_command(HookMode::Nudge);
+        assert_eq!(
+            command.get("command").and_then(Value::as_str),
+            Some("frigg hook pretooluse")
+        );
+    }
+
+    /// Ask mode carries the flag, and switching modes is a pending change rather than a no-op.
+    #[test]
+    fn ask_mode_installs_the_flag_and_reports_a_mode_switch_as_diverged() {
+        let command = desired_claude_hook_command(super::HookMode::Ask);
+        assert_eq!(
+            command.get("command").and_then(Value::as_str),
+            Some("frigg hook pretooluse --mode ask")
+        );
+
+        let nudged = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
+        assert_eq!(
+            classify_claude_hook(nudged, super::HookMode::Ask).expect("classify"),
+            super::ClaudeHookState::Diverged,
+            "asking for a different mode is pending work"
+        );
+
+        let McpJsonEdit::Changed(updated) =
+            upsert_claude_hook(Some(nudged), super::HookMode::Ask).expect("switch mode")
+        else {
+            panic!("expected a rewrite");
+        };
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("parse");
+        let hooks = value["hooks"]["PreToolUse"][0]["hooks"]
+            .as_array()
+            .expect("hooks array");
+        assert_eq!(
+            hooks.len(),
+            1,
+            "mode switch must replace, not append: {updated}"
+        );
+        assert_eq!(
+            classify_claude_hook(&updated, super::HookMode::Ask).expect("reclassify"),
+            super::ClaudeHookState::Desired,
+            "mode switch must converge"
+        );
+    }
+
+    /// Uninstall has to recognize a hook installed in any mode, or `--uninstall` never converges.
+    #[test]
+    fn remove_cleans_an_ask_mode_install() {
+        let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse --mode ask","timeout":5}]}]}}"#;
+
+        let McpJsonEdit::Changed(updated) =
+            remove_claude_hook(contents).expect("remove ask-mode hook")
+        else {
+            panic!("expected removal");
+        };
+        assert_eq!(
+            classify_claude_hook(&updated, super::HookMode::Ask).expect("reclassify"),
+            super::ClaudeHookState::Missing
+        );
+    }
+
+    /// Migrating a legacy matcher and switching mode happen in the same rewrite. Both must land,
+    /// and the result must be one entry rather than the duplicated nudge migration exists to stop.
+    #[test]
+    fn legacy_matcher_migration_and_mode_switch_collapse_to_one_entry() {
+        let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
+
+        let McpJsonEdit::Changed(updated) =
+            upsert_claude_hook(Some(contents), super::HookMode::Ask).expect("migrate and switch")
+        else {
+            panic!("expected a rewrite");
+        };
+
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("parse");
+        let pre_tool_use = value["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("PreToolUse array");
+        assert_eq!(pre_tool_use.len(), 1, "one entry, not two: {updated}");
+        assert_eq!(pre_tool_use[0]["matcher"], "Grep|Glob|Bash|Read");
+        assert_eq!(
+            pre_tool_use[0]["hooks"][0]["command"],
+            "frigg hook pretooluse --mode ask"
+        );
+        assert_eq!(
+            classify_claude_hook(&updated, super::HookMode::Ask).expect("reclassify"),
+            super::ClaudeHookState::Desired
+        );
+    }
+
+    /// Frigg owns its own command line in any form, so a hand-tweaked invocation is reclaimed
+    /// rather than left to sit beside a second canonical copy.
+    #[test]
+    fn a_hand_tweaked_frigg_hook_command_is_replaced_not_duplicated() {
+        let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Glob|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse --mode ask 2>/dev/null","timeout":5}]}]}}"#;
+
+        let McpJsonEdit::Changed(updated) =
+            upsert_claude_hook(Some(contents), HookMode::Nudge).expect("reclaim")
+        else {
+            panic!("expected a rewrite");
+        };
+
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("parse");
+        let hooks = value["hooks"]["PreToolUse"][0]["hooks"]
+            .as_array()
+            .expect("hooks array");
+        assert_eq!(hooks.len(), 1, "reclaimed, not duplicated: {updated}");
+        assert_eq!(hooks[0], desired_claude_hook_command(HookMode::Nudge));
     }
 }
