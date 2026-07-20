@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::cli_args::SkillProvider;
 
@@ -249,7 +249,7 @@ pub(crate) fn plan_skill_install(
         };
     }
 
-    if trees_match(source, &dest) {
+    if trees_match(source, &dest, provider) {
         return SkillInstallPlan {
             provider,
             skills_parent: Some(skills_parent),
@@ -327,18 +327,65 @@ pub(crate) fn apply_skill_install(plan: &SkillInstallPlan) -> io::Result<()> {
                     ),
                 ));
             }
-            copy_skill_tree_atomic(source, dest, parent)
+            copy_skill_tree_atomic(source, dest, parent, plan.provider)
         }
     }
 }
 
-/// True when dest exists and every relative file under source matches dest bytes
+/// Bundled assets that belong to a single host, keyed by `/`-separated relative path.
+///
+/// `mcp.json` is Amp's config shape: a flat `{"frigg": {...}}` map with `includeTools`. Claude
+/// reads neither that filename nor that shape (it wants `.mcp.json` with an `mcpServers` wrapper,
+/// and does not implement `includeTools` at all), so shipping it to other hosts installs a file
+/// they will never read. Assets absent from this table go to every provider.
+const PROVIDER_SCOPED_ASSETS: &[(&str, SkillProvider)] = &[("mcp.json", SkillProvider::Amp)];
+
+/// The provider a bundled skill asset belongs to, when it is not meant for every host.
+fn asset_owner(rel: &Path) -> Option<SkillProvider> {
+    let key = relative_asset_key(rel)?;
+    PROVIDER_SCOPED_ASSETS
+        .iter()
+        .find(|(path, _)| *path == key)
+        .map(|(_, owner)| *owner)
+}
+
+/// Normalize a relative path into a `/`-separated lookup key.
+///
+/// `collect_relative_files` builds paths from `read_dir`, so on Windows a nested asset arrives as
+/// `.claude-plugin\plugin.json`. Comparing that against a `/`-separated table entry would never
+/// match, and the miss would fail open: a host-specific file would install for every provider.
+fn relative_asset_key(rel: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str()?),
+            // A bundled asset path is always a plain relative chain of names.
+            _ => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// True when `provider` should receive the bundled asset at repository-relative `rel`.
+fn provider_includes_asset(provider: SkillProvider, rel: &Path) -> bool {
+    asset_owner(rel).is_none_or(|owner| owner == provider)
+}
+
+/// Relative files from the bundled tree that `provider` should receive.
+fn provider_source_files(source: &Path, provider: SkillProvider) -> io::Result<Vec<PathBuf>> {
+    Ok(collect_relative_files(source)?
+        .into_iter()
+        .filter(|rel| provider_includes_asset(provider, rel))
+        .collect())
+}
+
+/// True when dest exists and every relative file this provider should receive matches dest bytes
 /// (and dest has no extra files). Symlinks are ignored on both sides.
-fn trees_match(source: &Path, dest: &Path) -> bool {
+fn trees_match(source: &Path, dest: &Path, provider: SkillProvider) -> bool {
     if !dest.is_dir() {
         return false;
     }
-    let Ok(source_files) = collect_relative_files(source) else {
+    let Ok(source_files) = provider_source_files(source, provider) else {
         return false;
     };
     let Ok(dest_files) = collect_relative_files(dest) else {
@@ -393,9 +440,17 @@ fn collect_relative_files_rec(
     Ok(())
 }
 
-/// Stage a full skill tree under the existing skills parent, then rename into place.
-/// Leaves the previous dest intact if staging fails.
-fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> io::Result<()> {
+/// Stage the assets this provider should receive under the existing skills parent, then
+/// rename into place. Leaves the previous dest intact if staging fails.
+///
+/// Promotion swaps the whole directory, so an asset a previous Frigg installed but this provider
+/// no longer owns is dropped rather than merged forward.
+fn copy_skill_tree_atomic(
+    source: &Path,
+    dest: &Path,
+    skills_parent: &Path,
+    provider: SkillProvider,
+) -> io::Result<()> {
     let staging_name = format!(".{SKILL_DIR_NAME}.staging-{}", std::process::id());
     let staging = skills_parent.join(&staging_name);
     if staging.exists() {
@@ -416,7 +471,7 @@ fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> i
         )
     })?;
 
-    if let Err(err) = copy_dir_recursive(source, &staging) {
+    if let Err(err) = copy_provider_assets(source, &staging, provider) {
         let _ = fs::remove_dir_all(&staging);
         return Err(err);
     }
@@ -457,18 +512,17 @@ fn copy_skill_tree_atomic(source: &Path, dest: &Path, skills_parent: &Path) -> i
     Ok(())
 }
 
-fn copy_dir_recursive(source: &Path, dest: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let from = entry.path();
-        let to = dest.join(entry.file_name());
-        if file_type.is_dir() {
-            fs::create_dir(&to)?;
-            copy_dir_recursive(&from, &to)?;
-        } else if file_type.is_file() {
-            fs::copy(&from, &to)?;
+/// Copy the assets `provider` should receive, recreating intermediate directories as needed.
+///
+/// Files only: an empty source directory is not replicated. `trees_match` likewise compares only
+/// files, so the two stay in agreement and the install still converges.
+fn copy_provider_assets(source: &Path, dest: &Path, provider: SkillProvider) -> io::Result<()> {
+    for rel in provider_source_files(source, provider)? {
+        let to = dest.join(&rel);
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)?;
         }
+        fs::copy(source.join(&rel), &to)?;
     }
     Ok(())
 }
@@ -482,6 +536,173 @@ pub(crate) fn resolve_home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Amp is the one host that reads `mcp.json`, so it must still receive it byte-for-byte, and
+    /// the install must settle on Unchanged rather than rewriting every run.
+    #[test]
+    fn amp_still_receives_bundled_mcp_json_and_converges() {
+        let root = temp_dir("skill-amp-root");
+        let home = temp_dir("skill-amp-home");
+        let source = temp_dir("skill-amp-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".config/agents/skills")).expect("skills parent");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+        fs::write(source.join("mcp.json"), "{\"frigg\":{}}\n").expect("skill mcp");
+
+        let plan = plan_skill_install(SkillProvider::Amp, &root, Some(&home), Some(&source), false);
+        assert_eq!(plan.action, SkillInstallAction::Create);
+        apply_skill_install(&plan).expect("apply");
+
+        let dest = home.join(".config/agents/skills").join(SKILL_DIR_NAME);
+        assert_eq!(
+            fs::read_to_string(dest.join("mcp.json")).expect("read skill mcp"),
+            "{\"frigg\":{}}\n"
+        );
+
+        let plan2 =
+            plan_skill_install(SkillProvider::Amp, &root, Some(&home), Some(&source), false);
+        assert_eq!(
+            plan2.action,
+            SkillInstallAction::Unchanged,
+            "amp install must converge"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// The upgrade path: an older Frigg copied the whole tree, so an existing install carries an
+    /// asset this provider no longer owns. Adopting again must drop it and then settle.
+    #[test]
+    fn install_drops_asset_left_by_a_previous_unfiltered_install() {
+        let root = temp_dir("skill-stale-root");
+        let home = temp_dir("skill-stale-home");
+        let source = temp_dir("skill-stale-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".claude/skills")).expect("skills parent");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+        fs::write(source.join("mcp.json"), "{\"frigg\":{}}\n").expect("skill mcp");
+
+        // What an older, unfiltered Frigg would have left behind.
+        let dest = home.join(".claude/skills").join(SKILL_DIR_NAME);
+        fs::create_dir_all(&dest).expect("dest");
+        fs::write(dest.join("SKILL.md"), "version=test-skill\n").expect("stale skill md");
+        fs::write(dest.join("mcp.json"), "{\"frigg\":{}}\n").expect("stale mcp");
+
+        let plan = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(
+            plan.action,
+            SkillInstallAction::Update,
+            "a stale unowned asset is pending work"
+        );
+        apply_skill_install(&plan).expect("apply");
+
+        assert!(
+            !dest.join("mcp.json").exists(),
+            "the unowned asset must be gone, not merged forward"
+        );
+        assert!(dest.join("SKILL.md").is_file());
+
+        let plan2 = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(plan2.action, SkillInstallAction::Unchanged);
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// A typo in a scoped-asset key fails open to "shared with everyone", which is silent. Assert
+    /// every entry names a file that actually exists in the bundled tree.
+    #[test]
+    fn provider_scoped_asset_table_matches_the_bundled_tree() {
+        let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(WORKSPACE_SKILL_REL);
+        if !bundled.is_dir() {
+            return;
+        }
+
+        for (rel, _owner) in PROVIDER_SCOPED_ASSETS {
+            assert!(
+                bundled.join(rel).is_file(),
+                "scoped asset {rel} is not in the bundled tree; the key would silently fail open \
+                 and install for every provider"
+            );
+        }
+    }
+
+    /// Lookup keys are `/`-separated regardless of the platform separator.
+    #[test]
+    fn nested_asset_keys_normalize_across_platform_separators() {
+        let nested: PathBuf = [".claude-plugin", "plugin.json"].iter().collect();
+        assert_eq!(
+            relative_asset_key(&nested).as_deref(),
+            Some(".claude-plugin/plugin.json")
+        );
+        assert_eq!(
+            relative_asset_key(Path::new("mcp.json")).as_deref(),
+            Some("mcp.json")
+        );
+    }
+
+    /// A provider-scoped asset must not make the non-owning host churn: the freshly written tree
+    /// has to compare equal on the next run even though the source has a file it did not receive.
+    #[test]
+    fn non_owning_provider_install_converges_without_owned_asset() {
+        let root = temp_dir("skill-converge-root");
+        let home = temp_dir("skill-converge-home");
+        let source = temp_dir("skill-converge-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".codex/skills")).expect("skills parent");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+        fs::write(source.join("mcp.json"), "{\"frigg\":{}}\n").expect("skill mcp");
+
+        let plan = plan_skill_install(
+            SkillProvider::Codex,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(plan.action, SkillInstallAction::Create);
+        apply_skill_install(&plan).expect("apply");
+
+        let dest = home.join(".codex/skills").join(SKILL_DIR_NAME);
+        assert!(!dest.join("mcp.json").exists());
+
+        let plan2 = plan_skill_install(
+            SkillProvider::Codex,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(
+            plan2.action,
+            SkillInstallAction::Unchanged,
+            "codex install must converge, not re-Update forever"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
 
     #[test]
     fn skips_when_skills_parent_missing() {
@@ -523,9 +744,9 @@ mod tests {
 
         let dest = home.join(".claude/skills").join(SKILL_DIR_NAME);
         assert!(dest.join("SKILL.md").is_file());
-        assert_eq!(
-            fs::read_to_string(dest.join("mcp.json")).expect("read skill mcp"),
-            "{\"frigg\":{}}\n"
+        assert!(
+            !dest.join("mcp.json").exists(),
+            "mcp.json is Amp's config shape and filename; Claude never reads it"
         );
         assert!(dest.join("references/a.md").is_file());
 
