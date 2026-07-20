@@ -36,8 +36,10 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
    - Do NOT invent workspace_reindex / bridge_health / fake tools to "fix" registration
    - (Invented names / extended-only tools missing while other Frigg tools work → surface honesty,
      not inheritance — see tool-surface rules)
-3. Parent session success does NOT imply child Task success — re-probe every delegation.
-4. Prefer loopback HTTP + frigg serve when multiple clients/subagents should share one Frigg
+3. If the initial Frigg workspace is the wrong repository, attach the task repository with
+   workspace(path=...) before falling back to local tools.
+4. Parent session success does NOT imply child Task success — re-probe every delegation.
+5. Prefer loopback HTTP + frigg serve when multiple clients/subagents should share one Frigg
    *after* each spawn actually has Frigg registered; HTTP shares state when registration works —
    it does not create child registration by itself.
 ```
