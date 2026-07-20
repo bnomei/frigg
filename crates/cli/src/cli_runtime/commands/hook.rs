@@ -45,7 +45,8 @@ fn should_nudge_pretooluse(value: &Value) -> bool {
     }
 
     match value.get("tool_name").and_then(Value::as_str) {
-        Some("Grep") => true,
+        // `Glob` is the host's file-finding tool, the case `list_files` replaces.
+        Some("Grep" | "Glob") => true,
         Some("Bash") => value
             .get("tool_input")
             .and_then(|input| input.get("command"))
@@ -57,49 +58,73 @@ fn should_nudge_pretooluse(value: &Value) -> bool {
 }
 
 fn contains_grep_like_command(command: &str) -> bool {
-    let mut command_position = true;
-    let mut git_subcommand_position = false;
+    command_segments(command)
+        .iter()
+        .any(|segment| segment_is_frigg_replaceable(segment))
+}
+
+/// Splits a shell command into per-command word lists on `;`, `|`, `&&`, and newlines.
+fn command_segments(command: &str) -> Vec<Vec<&str>> {
+    let mut segments = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
 
     for token in ShellTokens::new(command) {
         match token {
             ShellToken::Separator => {
-                command_position = true;
-                git_subcommand_position = false;
+                if !current.is_empty() {
+                    segments.push(std::mem::take(&mut current));
+                }
             }
-            ShellToken::Word(word) => {
-                let command_name = command_name(word);
-
-                if git_subcommand_position {
-                    if command_name == "grep" {
-                        return true;
-                    }
-                    if !word.starts_with('-') {
-                        git_subcommand_position = false;
-                    }
-                    command_position = false;
-                    continue;
-                }
-
-                if !command_position {
-                    continue;
-                }
-
-                if is_shell_assignment(word) {
-                    continue;
-                }
-                if is_grep_like_command_name(command_name) {
-                    return true;
-                }
-                if command_name == "git" {
-                    git_subcommand_position = true;
-                    command_position = false;
-                    continue;
-                }
-                command_position = is_command_wrapper(command_name);
-            }
+            ShellToken::Word(word) => current.push(word),
         }
     }
+    if !current.is_empty() {
+        segments.push(current);
+    }
 
+    segments
+}
+
+/// True when one shell command has a Frigg equivalent the agent should have reached for first.
+fn segment_is_frigg_replaceable(segment: &[&str]) -> bool {
+    // Step past leading `FOO=bar` assignments and wrappers such as `sudo` or `env`.
+    let mut index = 0;
+    while let Some(word) = segment.get(index) {
+        if is_shell_assignment(word) || is_command_wrapper(command_name(word)) {
+            index += 1;
+            continue;
+        }
+        break;
+    }
+
+    let Some(head) = segment.get(index) else {
+        return false;
+    };
+    let name = command_name(head);
+    let arguments = segment.get(index + 1..).unwrap_or(&[]);
+
+    if name == "git" {
+        return git_subcommand_is_grep(arguments);
+    }
+    if is_discovery_command_name(name) {
+        return true;
+    }
+    if is_file_read_command_name(name) {
+        return read_command_targets_code(name, arguments);
+    }
+    false
+}
+
+/// True when a `git` invocation is `git grep` (allowing leading global flags).
+fn git_subcommand_is_grep(arguments: &[&str]) -> bool {
+    for argument in arguments {
+        if *argument == "grep" {
+            return true;
+        }
+        if !argument.starts_with('-') {
+            return false;
+        }
+    }
     false
 }
 
@@ -107,8 +132,76 @@ fn command_name(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
 }
 
-fn is_grep_like_command_name(command_name: &str) -> bool {
-    matches!(command_name, "grep" | "egrep" | "fgrep" | "rg" | "ripgrep")
+/// Discovery commands: whole-repo search and file finding, replaced by `search_text`/`list_files`.
+fn is_discovery_command_name(command_name: &str) -> bool {
+    matches!(
+        command_name,
+        "grep" | "egrep" | "fgrep" | "rg" | "ripgrep" | "find" | "fd" | "fdfind"
+    )
+}
+
+/// Read commands, replaced by `read_file`. Only nudged when they target a source path.
+fn is_file_read_command_name(command_name: &str) -> bool {
+    matches!(command_name, "cat" | "head" | "tail" | "sed")
+}
+
+/// True when a read-shaped command names a source file.
+///
+/// Requiring a code path keeps `cat package.json` and `tail -f server.log` quiet; those are not
+/// reads Frigg replaces. In-place `sed` is an edit, and Frigg has no write tool, so it never nudges.
+fn read_command_targets_code(command_name: &str, arguments: &[&str]) -> bool {
+    if command_name == "sed"
+        && arguments
+            .iter()
+            .any(|argument| is_sed_in_place_flag(argument))
+    {
+        return false;
+    }
+
+    arguments
+        .iter()
+        .take_while(|argument| !is_redirection_token(argument))
+        .any(|argument| {
+            let argument = strip_shell_quotes(argument);
+            !argument.starts_with('-') && is_code_path(argument)
+        })
+}
+
+/// True for `>`, `>>`, `<`, and their fused forms such as `>out.rs`.
+///
+/// Everything from the first redirection onward names a stream target, not a file being read.
+/// `cat > src/lib.rs <<'EOF'` writes a file, and Frigg has no write tool, so it must not nudge.
+fn is_redirection_token(argument: &str) -> bool {
+    argument.starts_with('>') || argument.starts_with('<')
+}
+
+/// True for in-place `sed`: `-i`, `-i.bak`, bundled shorts such as `-Ei`, and `--in-place[=SUFFIX]`.
+fn is_sed_in_place_flag(argument: &str) -> bool {
+    let argument = strip_shell_quotes(argument);
+    if argument == "--in-place" || argument.starts_with("--in-place=") {
+        return true;
+    }
+    if argument.starts_with("--") || !argument.starts_with('-') {
+        return false;
+    }
+    // Bundled short options: everything up to an optional suffix is a flag letter, so `-Ei` and
+    // `-ni` are in-place just as much as a bare `-i`.
+    argument
+        .trim_start_matches('-')
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .contains('i')
+}
+
+/// Strips one layer of surrounding shell quotes left on a token by `ShellTokens`.
+fn strip_shell_quotes(word: &str) -> &str {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = word.strip_prefix(quote).and_then(|w| w.strip_suffix(quote)) {
+            return inner;
+        }
+    }
+    word
 }
 
 fn is_command_wrapper(command_name: &str) -> bool {
@@ -403,6 +496,88 @@ mod tests {
 
         for input in cases {
             assert_eq!(render_pretooluse_hook_output(&input.to_string()), None);
+        }
+    }
+
+    /// `Glob` is the host's file-finding tool and the case `list_files` replaces, so it must nudge.
+    #[test]
+    fn pretooluse_glob_emits_nudge() {
+        let input = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Glob",
+            "tool_input": { "pattern": "**/*.rs" },
+        })
+        .to_string();
+
+        assert!(render_pretooluse_hook_output(&input).is_some());
+    }
+
+    /// The skill claims `find`/`fd` and the read family, not just the grep family.
+    #[test]
+    fn pretooluse_bash_file_discovery_and_code_reads_emit_nudge() {
+        for command in [
+            "find . -name '*.rs'",
+            "fd --extension rs",
+            "fdfind foo",
+            "cat crates/cli/src/main.rs",
+            "head -20 crates/cli/src/main.rs",
+            "tail -n 5 src/lib.rs",
+            "sed -n '10,20p' src/lib.rs",
+            "cat \"crates/cli/src/main.rs\"",
+            "sudo find /srv -name '*.go'",
+            "cargo build && cat src/lib.rs",
+            // Reads a source file before redirecting; the read is still the replaceable part.
+            "cat src/lib.rs > /tmp/copy.txt",
+            // `-n`/`-e` are not in-place, so these stay nudged.
+            "sed -e 's/a/b/' src/lib.rs",
+        ] {
+            let input = json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": command },
+            })
+            .to_string();
+
+            assert!(
+                render_pretooluse_hook_output(&input).is_some(),
+                "expected nudge for command: {command}"
+            );
+        }
+    }
+
+    /// Read-shaped commands only nudge on source paths, and in-place `sed` is an edit Frigg
+    /// cannot serve at all, so neither should produce advisory context.
+    #[test]
+    fn pretooluse_bash_non_code_reads_and_in_place_edits_are_silent() {
+        for command in [
+            "cat package.json",
+            "tail -f /var/log/server.log",
+            "head -3 data.csv",
+            "sed -i 's/a/b/' src/lib.rs",
+            "sed -i.bak 's/a/b/' src/lib.rs",
+            "sed --in-place 's/a/b/' src/lib.rs",
+            "cat",
+            // Bundled short flags are in-place too.
+            "sed -Ei 's/a/b/' src/lib.rs",
+            "sed -ni 's/a/b/' src/lib.rs",
+            "sed -i'.bak' 's/a/b/' src/lib.rs",
+            // Redirection writes a file; Frigg has no write tool.
+            "cat > src/lib.rs",
+            "cat >> src/lib.rs",
+            "cat >src/lib.rs",
+        ] {
+            let input = json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": command },
+            })
+            .to_string();
+
+            assert_eq!(
+                render_pretooluse_hook_output(&input),
+                None,
+                "expected silence for command: {command}"
+            );
         }
     }
 
