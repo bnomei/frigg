@@ -1,7 +1,8 @@
 //! Best-effort install of the production `frigg-first-code-search` skill into host skill dirs.
 //!
-//! Never creates a missing parent `…/skills` directory. Only copies into an existing skills root
-//! (or removes the skill tree on uninstall). Destination layout is researched host defaults.
+//! Copies into an existing skills root, or removes the skill tree on uninstall. Destination
+//! layout is researched host defaults. The parent `…/skills` directory is never invented, with one
+//! exception: Claude's documented `~/.claude/skills` leaf, and only when `~/.claude` already exists.
 
 use std::fs;
 use std::io;
@@ -26,6 +27,11 @@ pub(crate) struct SkillInstallPlan {
     pub(crate) dest: Option<PathBuf>,
     /// Source skill tree used for this plan (install only); apply uses this path.
     pub(crate) source: Option<PathBuf>,
+    /// The one directory this plan authorizes creating, if any.
+    ///
+    /// Holds the path rather than a permission bit so apply can confirm it is creating exactly
+    /// what planning approved, and never re-derives the decision from ambient environment state.
+    pub(crate) parent_to_create: Option<PathBuf>,
     pub(crate) action: SkillInstallAction,
     pub(crate) reason: String,
 }
@@ -155,6 +161,10 @@ pub(crate) fn skill_parent_candidates(
 }
 
 /// Pick the first candidate parent skills directory that already exists as a directory.
+///
+/// An existing parent always wins over one Frigg could create, even when the creatable one ranks
+/// higher in `skill_parent_candidates`. A repo with `.claude/skills` checked in therefore keeps
+/// receiving the install, rather than having it move to a freshly created `~/.claude/skills`.
 pub(crate) fn resolve_existing_skills_parent(
     provider: SkillProvider,
     workspace_root: &Path,
@@ -165,6 +175,32 @@ pub(crate) fn resolve_existing_skills_parent(
         .find(|path| path.is_dir())
 }
 
+/// A skills parent Frigg may create when none exists yet.
+///
+/// Refusing to create the parent is the right default for a host whose layout Frigg is guessing:
+/// inventing `…/skills` somewhere wrong leaves litter the user never asked for. Claude is not a
+/// guess. `~/.claude/skills` is the documented personal skills directory, so on a machine where
+/// the user has Claude but has never written a skill, skipping produces no skill and an install
+/// that quietly did nothing.
+///
+/// The gate is `~/.claude` already existing. That directory is Claude's own, so its presence means
+/// Claude is set up here; its absence means Frigg would be creating a config tree for a tool that
+/// is not installed. Only the `skills` leaf is ever created, never `~/.claude` itself.
+pub(crate) fn creatable_skills_parent(
+    provider: SkillProvider,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    if provider != SkillProvider::Claude {
+        return None;
+    }
+    let home = home?;
+    let claude_home = home.join(".claude");
+    claude_home
+        .is_dir()
+        .then(|| claude_home.join("skills"))
+        .filter(|skills| !skills.exists())
+}
+
 /// Plan skill install/uninstall for one provider without writing.
 pub(crate) fn plan_skill_install(
     provider: SkillProvider,
@@ -173,7 +209,20 @@ pub(crate) fn plan_skill_install(
     source: Option<&Path>,
     uninstall: bool,
 ) -> SkillInstallPlan {
-    let Some(skills_parent) = resolve_existing_skills_parent(provider, workspace_root, home) else {
+    let existing_parent = resolve_existing_skills_parent(provider, workspace_root, home);
+    // Uninstall never creates anything: with no parent there is nothing installed to remove.
+    let creatable_parent = if uninstall {
+        None
+    } else {
+        creatable_skills_parent(provider, home)
+    };
+
+    // Record which source won: apply confirms against this exact path before any mkdir.
+    let parent_to_create = existing_parent
+        .is_none()
+        .then(|| creatable_parent.clone())
+        .flatten();
+    let Some(skills_parent) = existing_parent.or(creatable_parent) else {
         let tried = skill_parent_candidates(provider, workspace_root, home)
             .into_iter()
             .map(|p| p.display().to_string())
@@ -184,6 +233,7 @@ pub(crate) fn plan_skill_install(
             skills_parent: None,
             dest: None,
             source: None,
+            parent_to_create: None,
             action: SkillInstallAction::Skipped,
             reason: format!(
                 "skills-parent-missing: never create parent skills dir (tried: {tried})"
@@ -200,6 +250,7 @@ pub(crate) fn plan_skill_install(
                 skills_parent: Some(skills_parent),
                 dest: Some(dest),
                 source: None,
+                parent_to_create: None,
                 action: SkillInstallAction::Remove,
                 reason: "skill-tree-present".to_owned(),
             };
@@ -209,6 +260,7 @@ pub(crate) fn plan_skill_install(
             skills_parent: Some(skills_parent),
             dest: Some(dest),
             source: None,
+            parent_to_create: None,
             action: SkillInstallAction::Unchanged,
             reason: "skill-tree-absent".to_owned(),
         };
@@ -220,6 +272,7 @@ pub(crate) fn plan_skill_install(
             skills_parent: Some(skills_parent),
             dest: Some(dest),
             source: None,
+            parent_to_create: None,
             action: SkillInstallAction::Skipped,
             reason: format!(
                 "skill-source-missing: need {WORKSPACE_SKILL_REL} or {SKILL_SOURCE_ENV}"
@@ -233,6 +286,7 @@ pub(crate) fn plan_skill_install(
             skills_parent: Some(skills_parent),
             dest: Some(dest),
             source: Some(source.to_path_buf()),
+            parent_to_create: None,
             action: SkillInstallAction::Skipped,
             reason: format!("skill-source-invalid:{}", source.display()),
         };
@@ -244,6 +298,7 @@ pub(crate) fn plan_skill_install(
             skills_parent: Some(skills_parent),
             dest: Some(dest),
             source: Some(source.to_path_buf()),
+            parent_to_create: None,
             action: SkillInstallAction::Error,
             reason: "dest-not-directory".to_owned(),
         };
@@ -255,6 +310,7 @@ pub(crate) fn plan_skill_install(
             skills_parent: Some(skills_parent),
             dest: Some(dest),
             source: Some(source.to_path_buf()),
+            parent_to_create: None,
             action: SkillInstallAction::Unchanged,
             reason: "skill-tree-current".to_owned(),
         };
@@ -271,12 +327,24 @@ pub(crate) fn plan_skill_install(
         skills_parent: Some(skills_parent),
         dest: Some(dest),
         source: Some(source.to_path_buf()),
+        parent_to_create: parent_to_create.clone(),
         action,
-        reason: format!("source:{}", source.display()),
+        reason: match &parent_to_create {
+            // Creating a directory under the user's home is the one exception to this module's
+            // never-invent-a-parent rule, so it has to be visible in --dry-run and in the log.
+            Some(path) => format!(
+                "source:{} creating-skills-parent:{}",
+                source.display(),
+                path.display()
+            ),
+            None => format!("source:{}", source.display()),
+        },
     }
 }
 
-/// Apply a planned skill install (copy tree or remove). Does not create parent skills dirs.
+/// Apply a planned skill install (copy tree or remove).
+///
+/// Creates the parent skills directory only when the plan set `create_parent`.
 pub(crate) fn apply_skill_install(plan: &SkillInstallPlan) -> io::Result<()> {
     match plan.action {
         SkillInstallAction::Skipped | SkillInstallAction::Unchanged => Ok(()),
@@ -310,13 +378,35 @@ pub(crate) fn apply_skill_install(plan: &SkillInstallPlan) -> io::Result<()> {
                 .as_ref()
                 .ok_or_else(|| io::Error::other("skill install missing skills parent"))?;
             if !parent.is_dir() {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!(
-                        "refusing to create missing skills parent {}",
-                        parent.display()
-                    ),
-                ));
+                // Only the parent the plan itself judged creatable, and only its leaf directory:
+                // `create_dir` rather than `create_dir_all` so a missing grandparent still fails
+                // instead of materializing a config tree for a host that is not installed.
+                if plan.parent_to_create.as_deref() == Some(parent.as_path()) {
+                    fs::create_dir(parent).map_err(|err| {
+                        // `exists()` follows symlinks, so a dangling link reads as absent during
+                        // planning and then collides here. Say that rather than the bare EEXIST.
+                        let detail = if fs::symlink_metadata(parent).is_ok() {
+                            "path already exists as a symlink or non-directory; remove or repoint it"
+                        } else {
+                            "could not create the directory"
+                        };
+                        io::Error::new(
+                            err.kind(),
+                            format!(
+                                "failed to create skills parent {}: {detail} ({err})",
+                                parent.display()
+                            ),
+                        )
+                    })?;
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "refusing to create missing skills parent {}",
+                            parent.display()
+                        ),
+                    ));
+                }
             }
             if dest.exists() && !dest.is_dir() {
                 return Err(io::Error::new(
@@ -778,6 +868,236 @@ mod tests {
             plan2.action,
             SkillInstallAction::Unchanged,
             "codex install must converge, not re-Update forever"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// A machine with Claude but no skill ever written: `~/.claude` exists, `~/.claude/skills`
+    /// does not. Skipping here is what made `--skill-provider claude` quietly do nothing.
+    #[test]
+    fn creates_the_claude_skills_leaf_when_claude_home_exists() {
+        let root = temp_dir("skill-create-root");
+        let home = temp_dir("skill-create-home");
+        let source = temp_dir("skill-create-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".claude")).expect("claude home");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+
+        let plan = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(plan.action, SkillInstallAction::Create, "{}", plan.reason);
+        assert_eq!(
+            plan.parent_to_create.as_deref(),
+            Some(home.join(".claude/skills").as_path()),
+            "plan should name the exact leaf it authorizes creating"
+        );
+        assert!(
+            plan.reason.contains("creating-skills-parent"),
+            "the mkdir must be visible in the plan reason: {}",
+            plan.reason
+        );
+
+        apply_skill_install(&plan).expect("apply");
+        assert!(
+            home.join(".claude/skills")
+                .join(SKILL_DIR_NAME)
+                .join("SKILL.md")
+                .is_file()
+        );
+
+        let plan2 = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(plan2.action, SkillInstallAction::Unchanged);
+        assert!(
+            plan2.parent_to_create.is_none(),
+            "the leaf now exists, so nothing left to create"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// Without `~/.claude`, Claude is not set up on this machine and Frigg must not invent a
+    /// config tree for it.
+    #[test]
+    fn does_not_create_claude_home_itself() {
+        let root = temp_dir("skill-nohome-root");
+        let home = temp_dir("skill-nohome-home");
+        let source = temp_dir("skill-nohome-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+
+        let plan = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(plan.action, SkillInstallAction::Skipped);
+        assert!(!home.join(".claude").exists(), "must not create ~/.claude");
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// The exception is Claude-only. Other hosts keep the conservative never-create rule.
+    #[test]
+    fn other_providers_still_never_create_their_skills_parent() {
+        let home = temp_dir("skill-other-home");
+        fs::create_dir_all(home.join(".codex")).expect("codex home");
+        fs::create_dir_all(home.join(".cursor")).expect("cursor home");
+        fs::create_dir_all(home.join(".config/amp")).expect("amp home");
+
+        for provider in [
+            SkillProvider::Codex,
+            SkillProvider::Cursor,
+            SkillProvider::Amp,
+            SkillProvider::Copilot,
+        ] {
+            assert!(
+                creatable_skills_parent(provider, Some(&home)).is_none(),
+                "{} must not create its skills parent",
+                provider.as_str()
+            );
+        }
+
+        fs::remove_dir_all(home).ok();
+    }
+
+    /// Uninstall must not create anything: with no parent there is nothing installed to remove.
+    #[test]
+    fn uninstall_does_not_create_the_claude_skills_leaf() {
+        let root = temp_dir("skill-uninst-root");
+        let home = temp_dir("skill-uninst-home");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".claude")).expect("claude home");
+
+        let plan = plan_skill_install(SkillProvider::Claude, &root, Some(&home), None, true);
+
+        assert_eq!(plan.action, SkillInstallAction::Skipped, "{}", plan.reason);
+        assert!(plan.parent_to_create.is_none());
+        apply_skill_install(&plan).expect("apply");
+        assert!(
+            !home.join(".claude/skills").exists(),
+            "uninstall must not create the leaf it is about to find empty"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+    }
+
+    /// A regular file sitting at `~/.claude/skills` must never be clobbered.
+    #[test]
+    fn refuses_to_replace_a_file_at_the_claude_skills_path() {
+        let root = temp_dir("skill-filepath-root");
+        let home = temp_dir("skill-filepath-home");
+        let source = temp_dir("skill-filepath-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".claude")).expect("claude home");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+        fs::write(home.join(".claude/skills"), "user data").expect("file at skills path");
+
+        let plan = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert_eq!(plan.action, SkillInstallAction::Skipped, "{}", plan.reason);
+        assert!(plan.parent_to_create.is_none());
+        apply_skill_install(&plan).expect("apply must be a no-op");
+        assert_eq!(
+            fs::read_to_string(home.join(".claude/skills")).expect("file survives"),
+            "user data",
+            "the user's file must be untouched"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// `exists()` follows symlinks, so a dangling link reads as absent while planning and then
+    /// collides at mkdir. That must fail with an actionable message, not a panic or a bare EEXIST.
+    #[test]
+    fn reports_a_dangling_symlink_at_the_claude_skills_path() {
+        let root = temp_dir("skill-symlink-root");
+        let home = temp_dir("skill-symlink-home");
+        let source = temp_dir("skill-symlink-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".claude")).expect("claude home");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+        std::os::unix::fs::symlink(home.join("nowhere"), home.join(".claude/skills"))
+            .expect("dangling symlink");
+
+        let plan = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        let err = apply_skill_install(&plan).expect_err("dangling symlink must fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("symlink"),
+            "error should name the symlink so the user can fix it: {message}"
+        );
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+        fs::remove_dir_all(source).ok();
+    }
+
+    /// The parent appearing between plan and apply is benign: apply rechecks and proceeds.
+    #[test]
+    fn tolerates_the_skills_parent_appearing_after_planning() {
+        let root = temp_dir("skill-race-root");
+        let home = temp_dir("skill-race-home");
+        let source = temp_dir("skill-race-source");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(home.join(".claude")).expect("claude home");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+
+        let plan = plan_skill_install(
+            SkillProvider::Claude,
+            &root,
+            Some(&home),
+            Some(&source),
+            false,
+        );
+        assert!(plan.parent_to_create.is_some());
+        fs::create_dir(home.join(".claude/skills")).expect("someone else creates it first");
+
+        apply_skill_install(&plan).expect("apply should tolerate the parent already existing");
+        assert!(
+            home.join(".claude/skills")
+                .join(SKILL_DIR_NAME)
+                .join("SKILL.md")
+                .is_file()
         );
 
         fs::remove_dir_all(root).ok();
