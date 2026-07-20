@@ -342,12 +342,12 @@ function formatStatus(
 ): string {
   if (!result.ok) {
     return [
-      `✗ Frigg unavailable · ${shortText(result.reason, 80)}`,
+      `Frigg unavailable (${shortText(result.reason, 60)})`,
       typeof localStatus === "object"
-        ? formatLocalStatusLine(localStatus)
+        ? formatLocalStatus(localStatus)
         : (localStatus ?? `Endpoint: ${result.endpoint}`),
-      "Run `frigg serve` and retry.",
-    ].join("\n");
+      "run `frigg serve`",
+    ].join(" · ");
   }
 
   const { status } = result;
@@ -357,12 +357,15 @@ function formatStatus(
   const activeTasks = status.runtime.active_tasks?.length ?? 0;
 
   return [
-    `✓ Frigg ${status.frigg_version} · ${status.runtime.profile.replaceAll("_", " ")}`,
+    `Frigg ${status.frigg_version}`,
     typeof localStatus === "object"
-      ? formatLocalStatusLine(localStatus)
+      ? formatLocalStatus(localStatus)
       : (localStatus ?? `Endpoint: ${result.endpoint}`),
-    `Watch: ${watch.replaceAll("_", " ")} · ${status.runtime.tools_exposed.length} tools${activeTasks > 0 ? ` · ${activeTasks} active tasks` : ""}`,
-  ].join("\n");
+    `watch ${watch.replaceAll("_", " ")}`,
+    activeTasks > 0 ? "busy" : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
 }
 
 async function formatSetupCheck(
@@ -374,58 +377,51 @@ async function formatSetupCheck(
     force?: boolean,
   ) => Promise<ServiceCheck>,
 ): Promise<string> {
-  const lines = [`Frigg setup (${amp.system.executor.kind} executor)`];
+  const parts = ["Frigg setup"];
   const executorWarning = loopbackExecutorWarning(amp, config.endpoint);
 
   if (amp.system.executor.kind === "local") {
     try {
       const binary = await ctx.$`${config.binary} --version`;
       if (binary.exitCode === 0) {
-        lines.push(`✓ Binary: ${binary.stdout.trim() || config.binary}`);
+        const version = binary.stdout.trim().replace(/^frigg\s+/i, "");
+        parts.push(`CLI ${version || "available"}`);
       } else {
-        lines.push(
-          `✗ Binary: ${config.binary} is unavailable; install Frigg and ensure it is on PATH.`,
-        );
+        parts.push("CLI missing (install Frigg)");
       }
     } catch {
-      lines.push(
-        `✗ Binary: ${config.binary} is unavailable; install Frigg and ensure it is on PATH.`,
-      );
+      parts.push("CLI missing (install Frigg)");
     }
 
     const localStatus = await inspectLocalStatus(amp, ctx, config);
-    lines.push(
+    parts.push(
       typeof localStatus === "object"
-        ? formatLocalSetupStatus(localStatus)
+        ? formatLocalStatus(localStatus)
         : localStatus,
     );
   } else {
-    lines.push("– Binary: skipped outside the local executor");
+    parts.push(`CLI skipped (${amp.system.executor.kind} executor)`);
   }
 
   if (executorWarning) {
-    lines.push(`✗ Service: ${executorWarning}`);
+    parts.push("service unreachable (configure a remote endpoint)");
   } else {
     const result = await checkService(config, true);
     if (!result.ok) {
-      lines.push(
-        `✗ Service: ${result.reason}; run \`frigg serve\` in the indexed workspace.`,
-      );
+      parts.push("service unavailable (run `frigg serve`)");
     } else {
-      lines.push(
-        `✓ Service: Frigg ${result.status.frigg_version} at ${result.endpoint}`,
-      );
+      parts.push("service connected");
     }
   }
 
   if (amp.system.executor.kind === "local") {
     const skill = await inspectSkillInstallation(amp, config.endpoint);
-    lines.push(skill);
+    parts.push(skill);
   } else {
-    lines.push("– Amp skill: skipped outside the local executor");
+    parts.push("skill check skipped");
   }
 
-  return lines.join("\n");
+  return parts.join(" · ");
 }
 
 async function inspectLocalStatus(
@@ -434,7 +430,7 @@ async function inspectLocalStatus(
   config: ResolvedConfig,
 ): Promise<LocalStatus | string> {
   const workspace = localWorkspacePath(amp);
-  if (!workspace) return "– Workspace: no local Amp workspace is open.";
+  if (!workspace) return "index unavailable (no workspace)";
 
   try {
     const result =
@@ -444,7 +440,7 @@ async function inspectLocalStatus(
     }
     const status = JSON.parse(result.stdout) as LocalStatus;
     if (!isLocalStatus(status)) {
-      return "✗ Workspace: `frigg status --json` returned an unsupported schema.";
+      return "index unknown (unsupported CLI response)";
     }
     return status;
   } catch (error) {
@@ -454,14 +450,14 @@ async function inspectLocalStatus(
 
 function formatLocalStatusFailure(detail: string): string {
   if (/unrecognized subcommand\s+['"]status['"]/i.test(detail)) {
-    return "✗ Local index: update Frigg CLI (`status` missing)";
+    return "index unknown (update CLI)";
   }
 
   const summary = detail
     .split("\n")
     .map((line) => line.trim())
     .find(Boolean);
-  return `✗ Local index: status failed${summary ? ` · ${shortText(summary, 80)}` : ""}`;
+  return `index unknown${summary ? ` (${shortText(summary, 50)})` : ""}`;
 }
 
 function formatLocalStatus(status: LocalStatus): string {
@@ -470,27 +466,9 @@ function formatLocalStatus(status: LocalStatus): string {
   ).length;
   const readiness =
     status.repositories.length === 1
-      ? status.repositories[0]!.storage.index_state
+      ? status.repositories[0]!.storage.index_state.replaceAll("_", " ")
       : `${ready}/${status.repositories.length} ready`;
-  return `Local index: ${readiness} · watch ${status.watch.configured_mode}`;
-}
-
-function formatLocalStatusLine(status: LocalStatus): string {
-  return `${localStatusIsReady(status) ? "✓" : "✗"} ${formatLocalStatus(status)}`;
-}
-
-function formatLocalSetupStatus(status: LocalStatus): string {
-  const ready = localStatusIsReady(status);
-  return `${ready ? "✓" : "✗"} ${formatLocalStatus(status)}${ready ? "" : "; run `frigg index` before searching."}`;
-}
-
-function localStatusIsReady(status: LocalStatus): boolean {
-  return (
-    status.repositories.length > 0 &&
-    status.repositories.every(
-      (repository) => repository.storage.index_state === "ready",
-    )
-  );
+  return `index ${readiness}`;
 }
 
 function shortText(value: string, maxLength: number): string {
@@ -518,7 +496,7 @@ async function inspectSkillInstallation(
     if (!(await Bun.file(`${root}/SKILL.md`).exists())) continue;
     const mcpFile = Bun.file(`${root}/mcp.json`);
     if (!(await mcpFile.exists())) {
-      return `✗ Amp skill: installed at ${root}, but mcp.json is missing; run \`frigg adopt --skill-provider amp\`.`;
+      return "skill config missing (run `frigg adopt --skill-provider amp`)";
     }
     try {
       const mcp = (await mcpFile.json()) as { frigg?: { url?: string } };
@@ -527,15 +505,15 @@ async function inspectSkillInstallation(
         !mcpURL ||
         normalizeEndpoint(mcpURL.replace(/\/mcp$/, "")) !== endpoint
       ) {
-        return `✗ Amp skill: mcp.json uses ${mcp.frigg?.url ?? "no Frigg URL"}, not ${endpoint}/mcp.`;
+        return "skill endpoint mismatch (run `frigg adopt --skill-provider amp`)";
       }
-      return `✓ Amp skill: ${root}`;
+      return "skill installed";
     } catch {
-      return `✗ Amp skill: ${root}/mcp.json is invalid JSON.`;
+      return "skill config invalid (run `frigg adopt --skill-provider amp`)";
     }
   }
 
-  return "✗ Amp skill: not installed; run `frigg adopt --skill-provider amp`.";
+  return "skill missing (run `frigg adopt --skill-provider amp`)";
 }
 
 function localWorkspacePath(amp: PluginAPI): string | undefined {
