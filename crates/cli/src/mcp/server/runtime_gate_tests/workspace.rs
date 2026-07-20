@@ -5,8 +5,7 @@
 use super::*;
 use crate::mcp::types::{
     ListRepositoriesParams, ResultUnit, WorkspaceAttachAction, WorkspaceAttachIndexMode,
-    WorkspaceIndexAction, WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase,
+    WorkspaceIndexAction, WorkspaceIndexLifecyclePhase,
 };
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 
@@ -1384,7 +1383,7 @@ printf '%s' "local-python-scip" > "${{6}}"
         ),
     );
 
-    let response = server
+    let _response = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
             path: Some(workspace_root.display().to_string()),
             repository_id: None,
@@ -1550,8 +1549,8 @@ fn workspace_index_lifecycle_summary_ready_with_failed_reports_failed_phase() {
 }
 
 #[test]
-fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_index() {
-    let workspace_root = temp_workspace_root("index-allows-active-precise-generation");
+fn repository_active_runtime_work_blocks_precise_generation_and_index() {
+    let workspace_root = temp_workspace_root("index-blocks-active-precise-generation");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(
@@ -1583,8 +1582,8 @@ fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_in
         );
 
     assert!(
-        !server.repository_has_active_runtime_work(&workspace.repository_id),
-        "background precise generation should not block workspace_prepare/workspace_index"
+        server.repository_has_active_runtime_work(&workspace.repository_id),
+        "precise generation should block overlapping workspace writes"
     );
 
     server

@@ -1229,7 +1229,7 @@ mod tests {
             .find("fn workspace_response(&self) -> WorkspaceResponse")
             .expect("workspace response constructor must remain source-visible");
         let response_end = server_source[response_start..]
-            .find("    /// Optional lexical/semantic ready flags")
+            .find("    fn workspace_freshness_summary(")
             .expect("workspace response constructor must have a stable boundary")
             + response_start;
         let response_source = &server_source[response_start..response_end];
