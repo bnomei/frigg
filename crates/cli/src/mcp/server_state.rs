@@ -50,6 +50,7 @@ pub(crate) struct RepositorySymbolCorpus {
 }
 
 impl RepositorySymbolCorpus {
+    /// Conservative heap estimate used when enforcing runtime cache budgets.
     pub(crate) fn estimated_heap_bytes(&self) -> usize {
         size_of::<Self>()
             + self.repository_id.len()
@@ -1011,6 +1012,7 @@ pub(crate) enum PreciseCoverageMode {
 }
 
 impl PreciseCoverageMode {
+    /// Wire-stable coverage label (`full` / `partial` / `none`).
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Full => "full",
@@ -1053,6 +1055,7 @@ pub(crate) enum ScipArtifactFormat {
 }
 
 impl ScipArtifactFormat {
+    /// Infers encoding from extension (`.json` or `.scip`); unknown extensions yield `None`.
     pub(crate) fn from_path(path: &Path) -> Option<Self> {
         match path.extension().and_then(|ext| ext.to_str()) {
             Some("json") => Some(Self::Json),
@@ -1061,6 +1064,7 @@ impl ScipArtifactFormat {
         }
     }
 
+    /// Wire-stable format label for discovery digests.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -1079,12 +1083,14 @@ impl DeterministicSignatureHasher {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
+    /// Starts a new FNV-1a hash from the fixed offset basis.
     pub(crate) fn new() -> Self {
         Self {
             state: Self::OFFSET_BASIS,
         }
     }
 
+    /// Mixes raw bytes into the running signature.
     pub(crate) fn write_bytes(&mut self, bytes: &[u8]) {
         for byte in bytes {
             self.state ^= u64::from(*byte);
@@ -1092,20 +1098,24 @@ impl DeterministicSignatureHasher {
         }
     }
 
+    /// Field delimiter so adjacent string/u64 writes cannot collide.
     pub(crate) fn write_separator(&mut self) {
         self.write_bytes(&[0xff]);
     }
 
+    /// Writes a UTF-8 string followed by the field separator.
     pub(crate) fn write_str(&mut self, value: &str) {
         self.write_bytes(value.as_bytes());
         self.write_separator();
     }
 
+    /// Writes a little-endian u64 followed by the field separator.
     pub(crate) fn write_u64(&mut self, value: u64) {
         self.write_bytes(&value.to_le_bytes());
         self.write_separator();
     }
 
+    /// Tagged optional u64 so `None` and `Some(0)` remain distinct.
     pub(crate) fn write_optional_u64(&mut self, value: Option<u64>) {
         match value {
             Some(value) => {
@@ -1119,6 +1129,7 @@ impl DeterministicSignatureHasher {
         }
     }
 
+    /// Final 16-character lowercase hex digest of the running state.
     pub(crate) fn finish_hex(self) -> String {
         format!("{:016x}", self.state)
     }

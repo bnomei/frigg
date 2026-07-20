@@ -45,8 +45,10 @@ pub struct TextMatch {
     pub line: usize,
     pub column: usize,
     pub excerpt: String,
+    /// Internal path-witness score hint (not serialized on the wire).
     #[serde(skip, default)]
     pub witness_score_hint_millis: Option<u32>,
+    /// Provenance ids from path-surface witnesses that contributed to this hit.
     #[serde(skip, default)]
     pub witness_provenance_ids: Option<Vec<String>>,
 }
@@ -152,8 +154,10 @@ pub struct ReferenceMatch {
     pub line: usize,
     pub column: usize,
     pub match_kind: ReferenceMatchKind,
+    /// Precision tier label (`exact` / `precise` / `heuristic` / `fallback`) when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub precision: Option<String>,
+    /// Recovery reason when navigation degraded from precise resolution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

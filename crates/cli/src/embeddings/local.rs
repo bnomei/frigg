@@ -42,6 +42,7 @@ pub struct LocalEmbeddingProvider {
 }
 
 impl LocalEmbeddingProvider {
+    /// Loads a prepared on-disk model via fastembed; fails if artifacts are missing or HF_HOME is set.
     pub fn new(model: impl Into<String>) -> EmbeddingResult<Self> {
         let model = normalize_local_model(model.into());
         let alias = resolve_model_alias(&model).map_err(local_model_error_to_embedding_error)?;
@@ -171,6 +172,7 @@ impl LocalEmbeddingProvider {
     }
 }
 
+/// Rejects `HF_HOME` overrides so prepared Frigg cache roots stay authoritative.
 pub(super) fn reject_hf_home_override_for_provider(
     artifact: &LocalModelArtifact,
     hf_home: Option<PathBuf>,
@@ -243,6 +245,7 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     }
 }
 
+/// Maps local artifact errors into the shared embedding error envelope for factory/provider paths.
 pub(super) fn local_model_error_to_embedding_error(error: LocalModelError) -> EmbeddingError {
     match error {
         LocalModelError::Unsupported { model, supported } => {

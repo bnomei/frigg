@@ -7,6 +7,7 @@ use super::*;
 use serde::Serialize;
 
 impl FriggMcpServer {
+    /// TextSearcher wired to process-wide manifest-candidate and projection-store caches.
     pub(super) fn runtime_text_searcher(&self, config: FriggConfig) -> TextSearcher {
         TextSearcher::with_runtime_projection_store_service(
             config,
@@ -15,6 +16,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// TextSearcher restricted to an explicit repository-id scope for multi-repo sessions.
     pub(super) fn runtime_text_searcher_with_repository_ids(
         &self,
         config: FriggConfig,
@@ -24,6 +26,7 @@ impl FriggMcpServer {
             .with_runtime_repository_ids(repository_ids)
     }
 
+    /// Increments process telemetry counters for one runtime-cache family event.
     pub(super) fn record_runtime_cache_event(
         &self,
         family: RuntimeCacheFamily,

@@ -30,6 +30,7 @@ pub(crate) struct WorkspaceRegistry {
 }
 
 impl WorkspaceRegistry {
+    /// Seeds the catalog from configured startup roots (`runtime_id`, display name, path).
     pub(crate) fn from_startup_repositories<I>(repositories: I) -> Self
     where
         I: IntoIterator<Item = (String, String, String)>,
@@ -53,10 +54,12 @@ impl WorkspaceRegistry {
         registry
     }
 
+    /// Every workspace currently registered (startup + ephemeral attaches).
     pub(crate) fn known_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.workspaces.clone()
     }
 
+    /// Workspaces that originated from process config rather than late attach.
     pub(crate) fn startup_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.workspaces
             .iter()
@@ -68,6 +71,7 @@ impl WorkspaceRegistry {
             .collect()
     }
 
+    /// True when `repository_id` (stable or runtime) is a startup-configured root.
     pub(crate) fn is_startup_repository_id(&self, repository_id: &str) -> bool {
         self.workspaces
             .iter()
@@ -81,6 +85,7 @@ impl WorkspaceRegistry {
             })
     }
 
+    /// Lookup by stable public `repository_id` (alias of `workspace_by_any_repository_id`).
     pub(crate) fn workspace_by_repository_id(
         &self,
         repository_id: &str,
@@ -88,6 +93,7 @@ impl WorkspaceRegistry {
         self.workspace_by_any_repository_id(repository_id)
     }
 
+    /// Lookup by stable or runtime repository id used across watch/index tasks.
     pub(crate) fn workspace_by_any_repository_id(
         &self,
         repository_id: &str,
@@ -101,6 +107,7 @@ impl WorkspaceRegistry {
             .cloned()
     }
 
+    /// Inserts a workspace under a canonical root, or returns the existing entry for that root.
     pub(crate) fn insert_with_repository_id(
         &mut self,
         canonical_root: PathBuf,
@@ -125,6 +132,7 @@ impl WorkspaceRegistry {
         workspace
     }
 
+    /// Ensures a root is cataloged; second value is true when this call created the entry.
     pub(crate) fn get_or_insert(&mut self, canonical_root: PathBuf) -> (AttachedWorkspace, bool) {
         let display_name = display_name_for_root(&canonical_root);
         let repository_id = stable_repository_id_for_root(&canonical_root).0;
@@ -226,6 +234,7 @@ impl WorkspaceRegistry {
         Some(workspace)
     }
 
+    /// Active MCP sessions that currently have this repository adopted.
     pub(crate) fn active_session_count(&self, repository_id: &str) -> usize {
         self.active_session_counts
             .get(repository_id)

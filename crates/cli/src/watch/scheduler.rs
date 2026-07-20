@@ -39,10 +39,15 @@ pub(super) struct ScheduledRefresh {
 /// third `agent_hot` class (EXP-hotpath-queue A).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WatchRepositoryQueueSnapshot {
+    /// Manifest-fast refresh is debounced/queued but not yet running.
     pub manifest_fast_pending: bool,
+    /// Semantic-followup refresh is queued after a successful manifest-fast pass.
     pub semantic_followup_pending: bool,
+    /// Manifest-fast worker currently holds this repository.
     pub manifest_fast_in_flight: bool,
+    /// Semantic-followup worker currently holds this repository.
     pub semantic_followup_in_flight: bool,
+    /// Sampled dirty path count retained for status hints (not a full change set).
     pub dirty_path_hint_count: usize,
     /// Oldest `first_pending_at` across pending classes (tokio Instant).
     pub(crate) oldest_first_pending_at: Option<Instant>,
@@ -63,6 +68,7 @@ impl WatchRepositoryQueueSnapshot {
             .map(|at| now.saturating_duration_since(at).as_millis() as u64)
     }
 
+    /// Whether any dual-class unit is queued or actively refreshing this repository.
     pub fn has_pending_or_in_flight(&self) -> bool {
         self.refresh_queue_depth() > 0
     }

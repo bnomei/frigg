@@ -207,6 +207,7 @@ pub enum ToolCallDisplayStatus {
 }
 
 impl ToolCallDisplayStatus {
+    /// Wire-stable label for progress UIs (`ok` / `failed`).
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
@@ -341,6 +342,7 @@ pub fn benchmark_precise_graph_for_server(
     })
 }
 
+/// PHP helper family detected at a navigation cursor (translation/route/config/env).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::mcp::server) enum NavigationPhpHelperKind {
     Translation,
@@ -349,6 +351,7 @@ pub(in crate::mcp::server) enum NavigationPhpHelperKind {
     Env,
 }
 
+/// Token-level hint extracted from a navigation path/line used to prefer precise or helper paths.
 #[derive(Debug, Clone)]
 pub(in crate::mcp::server) struct NavigationLocationTokenHint {
     symbol_query: String,
@@ -357,15 +360,16 @@ pub(in crate::mcp::server) struct NavigationLocationTokenHint {
     helper_kind: Option<NavigationPhpHelperKind>,
     rust_hint: Option<crate::languages::RustNavigationQueryHint>,
 }
+
 /// Concrete streamable HTTP service type used when Frigg is exposed over MCP transport.
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
 type PendingPreciseDirtyPathSets = (BTreeSet<String>, BTreeSet<String>);
 type PendingPreciseDirtyPathMap = Arc<RwLock<BTreeMap<String, PendingPreciseDirtyPathSets>>>;
 
-#[derive(Clone)]
 /// Orchestrates Frigg's public MCP tool surface over shared config, caches, session state,
 /// provenance, and optional watch-backed refresh state.
+#[derive(Clone)]
 pub struct FriggMcpServer {
     config: Arc<FriggConfig>,
     tool_router: ToolRouter<Self>,
@@ -440,6 +444,7 @@ struct FriggMcpCacheState {
     compiled_safe_regex_cache: Arc<RwLock<BTreeMap<String, regex::Regex>>>,
 }
 
+/// Timing and identity context for a read-only MCP tool call (provenance + display sink).
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
 pub(super) struct ReadOnlyToolExecutionContext {
@@ -449,6 +454,7 @@ pub(super) struct ReadOnlyToolExecutionContext {
     display_context_saved_percent: Arc<Mutex<Option<f64>>>,
 }
 
+/// Read-only execution bound to adopted workspaces and a response-cache freshness basis.
 #[derive(Debug, Clone)]
 pub(super) struct ScopedReadOnlyToolExecutionContext {
     #[cfg(test)]
@@ -483,12 +489,18 @@ impl FriggMcpServer {
     const SESSION_CONTINUATION_TTL: Duration = Duration::from_secs(300);
     #[allow(dead_code)] // wired by the bounded surface handlers in later completeness tasks.
     const SESSION_CONTINUATION_MAX_ENTRIES: usize = 64;
+
+    /// Constructs a stdio-ephemeral server; tool surface follows `FRIGG_MCP_TOOL_SURFACE_PROFILE`.
     pub fn new(config: FriggConfig) -> Self {
         let enable_extended_tools =
             active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
         Self::new_with_runtime_options(config, enable_extended_tools)
     }
 
+    /// Constructs a server sharing an external runtime task registry and manifest-candidate cache.
+    ///
+    /// Tool surface still follows the process env profile; use `new_with_runtime_context` when the
+    /// caller must pin core versus extended independently of env.
     pub fn new_with_runtime(
         config: FriggConfig,
         runtime_profile: RuntimeProfile,
@@ -509,6 +521,8 @@ impl FriggMcpServer {
         )
     }
 
+    /// Full constructor: tool-surface profile, transport profile, optional watch runtime, and
+    /// shared process-wide task/cache handles used by long-lived HTTP and attached stdio hosts.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_runtime_context(
         config: FriggConfig,
@@ -579,6 +593,7 @@ impl FriggMcpServer {
         }
     }
 
+    /// Stdio-ephemeral constructor with an explicit core/extended tool-surface pin.
     pub fn new_with_runtime_options(config: FriggConfig, enable_extended_tools: bool) -> Self {
         Self::new_with_runtime_context(
             config,
@@ -591,6 +606,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// Test/benchmark constructor that injects semantic runtime credentials after `new`.
     #[doc(hidden)]
     pub fn new_with_semantic_runtime_credentials(
         config: FriggConfig,
@@ -601,6 +617,7 @@ impl FriggMcpServer {
         server
     }
 
+    /// Tool names currently registered on this process's MCP tool router (profile-filtered).
     pub fn runtime_registered_tool_names(&self) -> Vec<String> {
         self.tool_router
             .list_all()
@@ -624,6 +641,7 @@ impl FriggMcpServer {
         }
     }
 
+    /// Diffs the live router against a profile manifest (missing/unexpected tool names).
     pub fn runtime_tool_surface_parity(
         &self,
         profile: ToolSurfaceProfile,
@@ -632,12 +650,14 @@ impl FriggMcpServer {
         diff_runtime_against_profile_manifest(profile, &runtime_names)
     }
 
+    /// Serves this instance over stdio until the peer disconnects.
     pub async fn serve_stdio(self) -> Result<(), rmcp::RmcpError> {
         let service = self.serve(rmcp::transport::stdio()).await?;
         service.waiting().await?;
         Ok(())
     }
 
+    /// Streamable HTTP service that clones a fresh session state per accepted MCP session.
     pub fn streamable_http_service(self, config: StreamableHttpServerConfig) -> FriggMcpService {
         StreamableHttpService::new(
             move || Ok(self.clone_for_new_session()),
@@ -1011,6 +1031,8 @@ impl FriggMcpServer {
 
 #[tool_router(router = tool_router)]
 impl FriggMcpServer {
+    /// Session adoption + workspace freshness gate: compact status, optional path/`repository_id`
+    /// adopt, and auto-adopt when detached. Prefer this before repo-aware tools in multi-root work.
     #[tool(
         name = "workspace",
         description = "Show workspace status; adopt path/repository_id or auto-adopt a default when detached.",
@@ -1090,6 +1112,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// Enumerate session-visible repositories (adopted + startup-known) with compact watch/storage.
     #[tool(
         name = "list_repositories",
         description = "List session-visible repositories with compact session, watch, and storage state.",
@@ -1149,6 +1172,8 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
+    /// Path inventory under an adopted repository; completeness + snapshot-bound continuation.
+    /// Content discovery belongs on `search_text` / `search_symbol`, not this tool.
     #[tool(
         name = "list_files",
         description = "List repository files with filters. Pages expose completeness and snapshot-bound continuation; use search_text/search_symbol for content.",
@@ -1165,6 +1190,8 @@ impl FriggMcpServer {
         self.list_files_impl(params.0).await
     }
 
+    /// Explicit session adoption for a path or `repository_id`, with index ensure and precise
+    /// lifecycle summary. Prefer unified `workspace` for status + auto-adopt in normal loops.
     #[tool(
         name = "workspace_attach",
         description = "Adopt a repository into this session. Use this before repo-aware tools when detached or when you want a stable default repository.",
@@ -1329,6 +1356,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// Drop session adoption for a repository and release its watch lease when no other lease holds.
     #[tool(
         name = "workspace_detach",
         description = "Remove a repository from this session and release its watch lease when applicable.",
@@ -1422,6 +1450,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// Initialize ignored `.frigg/` repository state and adopt the workspace; confirmation-gated.
     #[tool(
         name = "workspace_prepare",
         description = "Initialize Frigg repository state and adopt it into this session; requires confirmation.",
@@ -1619,6 +1648,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// Refresh index / precise generation for an adopted repository; confirmation-gated maintenance.
     #[tool(
         name = "workspace_index",
         description = "Refresh Frigg index state for a repository and adopt it; requires confirmation.",
@@ -1873,6 +1903,7 @@ impl FriggMcpServer {
         )
     }
 
+    /// Lightweight session default + adopted repositories + runtime tasks (no deep freshness gate).
     #[tool(
         name = "workspace_current",
         description = "Inspect the session default, adopted repositories, and runtime tasks without computing detailed index diagnostics.",
@@ -1948,6 +1979,8 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
+    /// Bounded repository-relative file/window read; presentation mode selects text/JSON/citation.
+    /// Auto-adopts when a single sensible repository is available; scope is path under that root.
     #[tool(
         name = "read_file",
         description = "Read a bounded repository-relative source file or line window. Text is raw source; JSON/citation modes add metadata or line citations.",
@@ -1966,6 +1999,7 @@ impl FriggMcpServer {
         self.present_read_file_result(&params, response)
     }
 
+    /// Proof-handle read: revises source via `result_handle` + `match_id`; fails closed on stale anchors.
     #[tool(
         name = "read_match",
         description = "Read revision-bound source by result_handle and match_id. Stale or unverifiable source returns RESOURCE_NOT_FOUND/STALE_PROOF_ANCHOR.",
@@ -1984,6 +2018,7 @@ impl FriggMcpServer {
         self.present_read_match_result(&params, response)
     }
 
+    /// In-file probe/refine/zoom over one adopted path; paged completeness for probe/refine only.
     #[tool(
         name = "explore",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ExploreResponse>(),
@@ -2003,6 +2038,7 @@ impl FriggMcpServer {
         self.present_explore_result(&params, response)
     }
 
+    /// Exact lexical search (literal default) under adopted scope; completeness + v2 continuation.
     #[tool(
         name = "search_text",
         description = "Exact text search, literal by default. Paged rows expose completeness and canonical continuation; use regex/glob/path_regex to scope.",
@@ -2019,6 +2055,7 @@ impl FriggMcpServer {
         self.search_text_impl(params.0).await
     }
 
+    /// Ranked discovery pivot only: incomplete by contract; never paginate—confirm with exact tools.
     #[tool(
         name = "search_hybrid",
         description = "Discovery pivots for broad questions. Ranked results are incomplete and non-exhaustive; never use a continuation. Confirm with exact search.",
@@ -2035,6 +2072,7 @@ impl FriggMcpServer {
         self.search_hybrid_impl(params.0).await
     }
 
+    /// Known-name symbol lookup over the adopted index; completeness + continuation for exhaustive pages.
     #[tool(
         name = "search_symbol",
         description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Paged rows expose completeness and continuation.",
@@ -2051,6 +2089,7 @@ impl FriggMcpServer {
         self.search_symbol_impl(params.0).await
     }
 
+    /// Concurrent multi-hypothesis probes (text/symbol/hybrid) with per-probe and aggregate completeness.
     #[tool(
         name = "search_batch",
         description = "Run 2-8 text/symbol/hybrid probes concurrently. Per-probe and aggregate completeness expose caps and continuation.",
@@ -2067,6 +2106,7 @@ impl FriggMcpServer {
         self.search_batch_impl(params.0).await
     }
 
+    /// Definitions and usages for a symbol/cursor/`target`; navigation precise or heuristic with completeness.
     #[tool(
         name = "find_references",
         description = "Find definition and usage rows for a symbol or cursor location. Pages expose active-mode completeness and continuation.",
@@ -2083,6 +2123,7 @@ impl FriggMcpServer {
         self.find_references_impl(params.0).await
     }
 
+    /// Default definition route (prefer `symbol=`); precise-first with heuristic fallback and completeness.
     #[tool(
         name = "go_to_definition",
         description = "Default agent route for definitions. Prefer symbol=. Pages expose active-mode completeness and continuation.",
@@ -2099,6 +2140,7 @@ impl FriggMcpServer {
         self.go_to_definition_impl(params.0).await
     }
 
+    /// Declaration sites when distinct from definition; same adoption/`target` contract as navigation peers.
     #[tool(
         name = "find_declarations",
         description = "Secondary to go_to_definition when declaration vs definition matters. Pages expose active-mode completeness and continuation.",
@@ -2115,6 +2157,7 @@ impl FriggMcpServer {
         self.find_declarations_impl(params.0).await
     }
 
+    /// Trait/interface implementors (not ordinary struct fields); navigation mode + completeness.
     #[tool(
         name = "find_implementations",
         description = "Find implementations for traits/interfaces, not ordinary structs. Pages expose active-mode completeness and continuation.",
@@ -2131,6 +2174,7 @@ impl FriggMcpServer {
         self.find_implementations_impl(params.0).await
     }
 
+    /// Caller edges for a callable symbol/cursor/`target`; confirm provisional/heuristic edges in proof flows.
     #[tool(
         name = "incoming_calls",
         description = "Who calls this? Find callers for a callable symbol or cursor location. Pages expose active-mode completeness and continuation.",
@@ -2147,6 +2191,7 @@ impl FriggMcpServer {
         self.incoming_calls_impl(params.0).await
     }
 
+    /// Callee edges for a callable; provisional edges need confirmation—pages carry active-mode completeness.
     #[tool(
         name = "outgoing_calls",
         description = "Find callees for a callable symbol or cursor location. Pages expose active-mode completeness and continuation; confirm provisional edges.",
@@ -2163,6 +2208,7 @@ impl FriggMcpServer {
         self.outgoing_calls_impl(params.0).await
     }
 
+    /// Per-file outline under adopted scope; completeness + continuation (prefer `search_symbol` for known names).
     #[tool(
         name = "document_symbols",
         description = "File outline for one supported source file. Pages expose completeness and canonical continuation; known name: use search_symbol.",
@@ -2179,6 +2225,7 @@ impl FriggMcpServer {
         self.document_symbols_impl(params.0).await
     }
 
+    /// Tree-sitter focus/ancestors/children at a source location; bounded child collections report completeness.
     #[tool(
         name = "inspect_syntax_tree",
         description = "Return AST focus, ancestors, and children around a source location. Bounded ancestor/child collections expose completeness.",
@@ -2195,6 +2242,7 @@ impl FriggMcpServer {
         self.inspect_syntax_tree_impl(params.0).await
     }
 
+    /// Bounded Tree-sitter query across adopted files; deterministic replay + completeness/continuation.
     #[tool(
         name = "search_structural",
         description = "Run a bounded Tree-sitter query. Paged structural rows expose completeness and canonical continuation.",
@@ -2211,6 +2259,7 @@ impl FriggMcpServer {
         self.search_structural_impl(params.0).await
     }
 
+    /// Fail-closed impact bundle (sections + proof handles); test mentions opt-in; navigation stays authoritative.
     #[tool(
         name = "impact_bundle",
         description = "Fail-closed impact planning with section completeness and proof. Test mentions are opt-in; navigation remains authoritative.",
@@ -2252,6 +2301,7 @@ impl FriggMcpServer {
 #[cfg(feature = "playbook")]
 #[tool_router(router = playbook_tool_router, vis = "pub(super)")]
 impl FriggMcpServer {
+    /// Extended-surface only: execute a deep-search playbook and emit a replayable trace artifact.
     #[tool(
         name = "playbook_run",
         description = "Run a trace-oriented playbook and return the resulting trace artifact.",
@@ -2268,6 +2318,7 @@ impl FriggMcpServer {
         self.playbook_run_impl(params.0.into()).await
     }
 
+    /// Extended-surface only: re-run a playbook and diff against an expected trace artifact.
     #[tool(
         name = "playbook_replay",
         description = "Replay a playbook against an expected trace artifact and report whether it still matches.",
@@ -2284,6 +2335,7 @@ impl FriggMcpServer {
         self.playbook_replay_impl(params.0).await
     }
 
+    /// Extended-surface only: build answer claims/citations from a stored deep-search trace.
     #[tool(
         name = "playbook_compose_citations",
         description = "Compose citation payloads from an existing playbook trace artifact.",

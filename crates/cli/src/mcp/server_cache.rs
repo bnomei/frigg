@@ -37,6 +37,7 @@ pub(crate) enum RuntimeCacheFamily {
 }
 
 impl RuntimeCacheFamily {
+    /// Closed set of process-tracked runtime cache families.
     pub(crate) const ALL: [Self; 9] = [
         Self::ValidatedManifestCandidate,
         Self::ProjectionFamily,
@@ -49,6 +50,7 @@ impl RuntimeCacheFamily {
         Self::SearchCandidateUniverse,
     ];
 
+    /// Stable telemetry / status label for this cache family.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::ValidatedManifestCandidate => "validated_manifest_candidate",
@@ -105,6 +107,7 @@ pub(crate) struct RuntimeCacheBudget {
 }
 
 impl RuntimeCacheBudget {
+    /// Constructs an optional entry and/or byte ceiling (`None` means unbounded on that axis).
     pub(crate) const fn new(max_entries: Option<usize>, max_bytes: Option<usize>) -> Self {
         Self {
             max_entries,
@@ -112,10 +115,12 @@ impl RuntimeCacheBudget {
         }
     }
 
+    /// Both entry and byte bounds are required for the family.
     pub(crate) const fn entry_and_byte_bound(max_entries: usize, max_bytes: usize) -> Self {
         Self::new(Some(max_entries), Some(max_bytes))
     }
 
+    /// True when at least one finite budget axis is set.
     #[cfg(test)]
     pub(crate) const fn is_defined(self) -> bool {
         self.max_entries.is_some() || self.max_bytes.is_some()
@@ -133,6 +138,7 @@ pub(crate) struct RuntimeCacheFamilyPolicy {
 }
 
 impl RuntimeCacheFamilyPolicy {
+    /// Whether values may be retained and reused across MCP requests under this policy.
     #[cfg(test)]
     pub(crate) const fn supports_cross_request_reuse(self) -> bool {
         matches!(self.residency, RuntimeCacheResidency::ProcessWide)
@@ -159,6 +165,7 @@ pub(crate) struct RuntimeCacheTelemetry {
 }
 
 impl RuntimeCacheTelemetry {
+    /// Accumulates one instrumented cache event against the matching counter.
     pub(crate) fn record(&mut self, event: RuntimeCacheEvent, count: usize) {
         match event {
             RuntimeCacheEvent::Hit => self.hits += count,
@@ -195,10 +202,12 @@ impl Default for RuntimeCacheRegistry {
 }
 
 impl RuntimeCacheRegistry {
+    /// Policy for one named runtime cache family, if registered.
     pub(crate) fn policy(&self, family: RuntimeCacheFamily) -> Option<&RuntimeCacheFamilyPolicy> {
         self.families.get(&family)
     }
 
+    /// Full family→policy map (tests / diagnostics).
     #[cfg(test)]
     pub(crate) fn families(&self) -> &BTreeMap<RuntimeCacheFamily, RuntimeCacheFamilyPolicy> {
         &self.families
@@ -268,6 +277,7 @@ pub(crate) enum RepositoryResponseCacheFreshnessMode {
 }
 
 impl RepositoryResponseCacheFreshnessMode {
+    /// Wire-stable freshness-mode label for response metadata.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::ManifestOnly => "manifest_only",
@@ -443,11 +453,11 @@ pub(crate) struct SessionContinuationCache {
     pub(crate) next_id: u64,
 }
 
-#[derive(Debug, Clone)]
 /// File snapshot used by both `read_file` and `explore`.
 ///
 /// Raw bytes are preserved for exact full-file reads, while a single normalized text buffer plus
 /// per-line ranges supports bounded line windows without allocating one `String` per line.
+#[derive(Debug, Clone)]
 pub(crate) struct FileContentSnapshot {
     raw_bytes: Arc<[u8]>,
     normalized_content: Arc<str>,
@@ -457,10 +467,12 @@ pub(crate) struct FileContentSnapshot {
 }
 
 impl FileContentSnapshot {
+    /// Reads a file from disk into a shared raw+normalized line snapshot.
     pub(crate) fn from_path(path: &std::path::Path) -> Result<Self, io::Error> {
         fs::read(path).map(Self::from_bytes)
     }
 
+    /// Builds a snapshot from owned bytes without re-reading the filesystem.
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
         let mut normalized_content = String::new();
         let mut line_ranges = Vec::new();
@@ -496,6 +508,7 @@ impl FileContentSnapshot {
         }
     }
 
+    /// Length of the preserved raw byte buffer (revision proof basis).
     pub(crate) fn raw_bytes_len(&self) -> usize {
         self.raw_bytes.len()
     }
@@ -508,10 +521,12 @@ impl FileContentSnapshot {
         }
     }
 
+    /// Full-file lossy UTF-8 decode of the raw buffer (read_file text path).
     pub(crate) fn read_file_content(&self) -> String {
         String::from_utf8_lossy(&self.raw_bytes).to_string()
     }
 
+    /// Bounded inclusive 1-based line window with lossy UTF-8 and byte-budget tracking.
     pub(crate) fn read_line_slice_lossy(
         &self,
         line_start: usize,
@@ -565,6 +580,7 @@ impl FileContentSnapshot {
         })
     }
 
+    /// Explore probe/refine scan over a line scope with optional matcher, page cap, and cursor.
     pub(crate) fn scan_file_scope_lossy(
         &self,
         scope: ExploreScopeRequest,

@@ -11,6 +11,7 @@ use crate::storage::{
 use super::common::normalize_repository_snapshot_ids;
 
 impl Storage {
+    /// Replaces all path-witness projection rows for a manifest snapshot.
     pub fn replace_path_witness_projections_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -102,6 +103,7 @@ impl Storage {
         Ok(())
     }
 
+    /// Loads path-witness projections used by lexical and hybrid witness-recall stages.
     pub fn load_path_witness_projections_for_repository_snapshot(
         &self,
         repository_id: &str,

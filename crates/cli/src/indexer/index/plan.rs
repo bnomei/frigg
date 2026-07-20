@@ -35,6 +35,7 @@ pub enum IndexMode {
 }
 
 impl IndexMode {
+    /// Stable wire/log label for the index mode (`full` / `changed`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Full => "full",
@@ -78,6 +79,7 @@ pub enum ManifestSnapshotPlan {
 }
 
 impl ManifestSnapshotPlan {
+    /// Snapshot id that the remainder of the index plan should treat as current.
     pub fn snapshot_id(&self) -> &str {
         match self {
             Self::ReuseExisting { snapshot_id } | Self::PersistNew { snapshot_id, .. } => {
@@ -86,6 +88,7 @@ impl ManifestSnapshotPlan {
         }
     }
 
+    /// Whether a failed semantic refresh must delete the newly persisted manifest snapshot.
     pub fn rollback_on_semantic_failure(&self) -> bool {
         match self {
             Self::ReuseExisting { .. } => false,
@@ -96,6 +99,7 @@ impl ManifestSnapshotPlan {
         }
     }
 
+    /// Stable plan label (`reuse_existing` / `persist_new`) for summaries and progress events.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ReuseExisting { .. } => "reuse_existing",
@@ -115,6 +119,7 @@ pub enum SemanticRefreshMode {
 }
 
 impl SemanticRefreshMode {
+    /// Stable wire/log label for the semantic refresh policy.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
@@ -125,14 +130,17 @@ impl SemanticRefreshMode {
         }
     }
 
+    /// True when no embedding work runs for this refresh.
     pub fn is_noop(self) -> bool {
         matches!(self, Self::Disabled | Self::ReuseExisting)
     }
 
+    /// True when the semantic corpus is rebuilt wholesale rather than advanced path-wise.
     pub fn is_rebuild_like(self) -> bool {
         matches!(self, Self::FullRebuild | Self::FullRebuildFromChangedOnly)
     }
 
+    /// True when progress reporting should surface changed/deleted path counts.
     pub fn shows_path_delta(self) -> bool {
         matches!(self, Self::IncrementalAdvance)
     }
@@ -153,6 +161,7 @@ pub enum IndexProgressPhase {
 }
 
 impl IndexProgressPhase {
+    /// Stable phase label for progress UIs and structured logs.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::InitializeStorage => "initialize_storage",
@@ -178,6 +187,7 @@ pub enum IndexProgressStatus {
 }
 
 impl IndexProgressStatus {
+    /// Stable status label for a progress phase transition.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Starting => "starting",
@@ -212,6 +222,7 @@ pub struct IndexProgressEvent {
 }
 
 impl IndexProgressEvent {
+    /// Builds a phase event with required identity fields; optional metrics attach via builders.
     pub fn new(
         repository_id: impl Into<String>,
         mode: IndexMode,
@@ -240,16 +251,19 @@ impl IndexProgressEvent {
         }
     }
 
+    /// Attaches the manifest snapshot id this phase is operating on.
     pub fn with_snapshot(mut self, snapshot_id: impl Into<String>) -> Self {
         self.snapshot_id = Some(snapshot_id.into());
         self
     }
 
+    /// Attaches the prior snapshot id when the plan advances from an existing head.
     pub fn with_previous_snapshot(mut self, previous_snapshot_id: Option<&str>) -> Self {
         self.previous_snapshot_id = previous_snapshot_id.map(ToOwned::to_owned);
         self
     }
 
+    /// Attaches scanned/changed/deleted file counts from the index plan.
     pub fn with_file_counts(
         mut self,
         files_scanned: usize,
@@ -262,11 +276,13 @@ impl IndexProgressEvent {
         self
     }
 
+    /// Attaches the number of non-fatal manifest-build diagnostics.
     pub fn with_diagnostics(mut self, diagnostics: usize) -> Self {
         self.diagnostics = Some(diagnostics);
         self
     }
 
+    /// Attaches semantic record or projection row counts written in this phase.
     pub fn with_records(mut self, records: usize) -> Self {
         self.records = Some(records);
         self
@@ -283,22 +299,26 @@ impl IndexProgressEvent {
         self
     }
 
+    /// Attaches the semantic refresh policy selected by the index plan.
     pub fn with_semantic_refresh_mode(mut self, mode: SemanticRefreshMode) -> Self {
         self.semantic_refresh_mode = Some(mode);
         self
     }
 
+    /// Attaches normalized changed/deleted path counts for incremental progress.
     pub fn with_path_counts(mut self, changed_paths: usize, deleted_paths: usize) -> Self {
         self.changed_paths = Some(changed_paths);
         self.deleted_paths = Some(deleted_paths);
         self
     }
 
+    /// Attaches how many superseded manifest snapshots retention prune removed.
     pub fn with_pruned_snapshots(mut self, pruned_snapshots: usize) -> Self {
         self.pruned_snapshots = Some(pruned_snapshots);
         self
     }
 
+    /// Attaches wall-clock duration for the completed phase or overall index.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
         self.duration_ms = Some(duration_ms);
         self

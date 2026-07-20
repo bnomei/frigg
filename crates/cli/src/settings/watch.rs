@@ -39,6 +39,7 @@ pub enum WatchMode {
 }
 
 impl WatchMode {
+    /// Snake-case mode id for CLI flags, config files, and runtime status.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -73,11 +74,16 @@ impl FromStr for WatchMode {
 /// Freshness policy for background watch-driven index after manifest changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchConfig {
+    /// Enablement relative to transport defaults (`auto`/`on`/`off`).
     pub mode: WatchMode,
+    /// Quiet period after filesystem events before a manifest-fast refresh is scheduled.
     pub debounce_ms: u64,
+    /// Base delay before retrying a failed watch-driven refresh (subject to exponential backoff).
     pub retry_ms: u64,
+    /// Concurrent manifest-fast refreshes allowed across watched repositories.
     #[serde(default = "default_manifest_fast_concurrency")]
     pub manifest_fast_concurrency: usize,
+    /// Concurrent semantic-followup refreshes allowed across watched repositories.
     #[serde(default = "default_semantic_followup_concurrency")]
     pub semantic_followup_concurrency: usize,
 }

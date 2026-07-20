@@ -99,10 +99,12 @@ pub struct GoogleEmbeddingProvider {
 }
 
 impl GoogleEmbeddingProvider {
+    /// Builds a Gemini embeddings client with default endpoint and retry policy.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_config(api_key, GoogleEmbeddingProviderConfig::default())
     }
 
+    /// Builds a Gemini embeddings client with a custom endpoint/timeout/retry policy.
     pub fn with_config(api_key: impl Into<String>, config: GoogleEmbeddingProviderConfig) -> Self {
         Self::with_runtime(
             api_key.into(),

@@ -69,6 +69,7 @@ impl<'de> Deserialize<'de> for TargetRef {
 }
 
 impl TargetRef {
+    /// Builds a session-bound result-match target when all identity fields are non-empty.
     pub fn result_match(
         result_handle: String,
         match_id: String,
@@ -83,6 +84,7 @@ impl TargetRef {
         )
     }
 
+    /// Session correlation scope for `ResultMatch`; `None` for snapshot-bound stable symbols.
     pub fn target_scope(&self) -> Option<&str> {
         match self {
             Self::ResultMatch { target_scope, .. } => Some(target_scope),
@@ -90,6 +92,7 @@ impl TargetRef {
         }
     }
 
+    /// Rejects empty identity fields; deserialization also enforces this fail-closed.
     pub fn validate(&self) -> Result<(), &'static str> {
         let fields = match self {
             Self::ResultMatch {

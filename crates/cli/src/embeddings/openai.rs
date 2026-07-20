@@ -65,10 +65,12 @@ pub struct OpenAiEmbeddingProvider {
 }
 
 impl OpenAiEmbeddingProvider {
+    /// Builds an official OpenAI embeddings client with default endpoint and retry policy.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_config(api_key, OpenAiEmbeddingProviderConfig::default())
     }
 
+    /// Builds an official OpenAI embeddings client with a custom endpoint/timeout/retry policy.
     pub fn with_config(api_key: impl Into<String>, config: OpenAiEmbeddingProviderConfig) -> Self {
         Self::with_config_kind(api_key, config, EmbeddingProviderKind::OpenAi)
     }

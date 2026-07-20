@@ -699,6 +699,7 @@ pub enum SearchSymbolPathClass {
 }
 
 impl SearchSymbolPathClass {
+    /// Wire-stable path-class label for filters and recovery echo.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Runtime => "runtime",
@@ -726,6 +727,7 @@ pub enum SearchBatchProbeKind {
 }
 
 impl SearchBatchProbeKind {
+    /// Wire-stable probe kind label (`text` / `symbol` / `hybrid`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Text => "text",
@@ -778,6 +780,7 @@ pub enum SearchBatchMatchStrength {
 }
 
 impl SearchBatchMatchStrength {
+    /// Default post-fusion strength for a single contributing probe kind.
     pub const fn from_kind(kind: SearchBatchProbeKind) -> Self {
         match kind {
             SearchBatchProbeKind::Text => Self::ExactLiteral,

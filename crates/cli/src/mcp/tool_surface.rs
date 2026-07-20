@@ -19,8 +19,10 @@ pub enum ToolSurfaceProfile {
 }
 
 impl ToolSurfaceProfile {
+    /// Every supported runtime profile (core then extended).
     pub const ALL: [Self; 2] = [Self::Core, Self::Extended];
 
+    /// Wire/env label for this profile (`core` / `extended`).
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Core => "core",
@@ -106,6 +108,7 @@ pub struct ToolSurfaceParityDiff {
 }
 
 impl ToolSurfaceParityDiff {
+    /// True when the runtime router and profile manifest list identical tool names.
     pub fn is_empty(&self) -> bool {
         self.missing_in_runtime.is_empty() && self.unexpected_in_runtime.is_empty()
     }

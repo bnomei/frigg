@@ -35,6 +35,7 @@ impl DeepSearchStepTool {
         }
     }
 
+    /// Public MCP tool name this playbook step is allowed to invoke.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Workspace => "workspace",
@@ -46,6 +47,7 @@ impl DeepSearchStepTool {
     }
 }
 
+/// Whitelisted tool names that may appear as deep-search / playbook steps (core subset).
 pub(crate) fn allowed_step_tools() -> &'static [&'static str] {
     const ALLOWED_STEP_TOOLS: [&str; 5] = [
         DeepSearchStepTool::ALL[0].as_str(),
@@ -92,8 +94,8 @@ pub struct DeepSearchTraceStep {
     pub outcome: DeepSearchTraceOutcome,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Normalized success or transport error outcome for one traced MCP tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DeepSearchTraceOutcome {
     Ok {

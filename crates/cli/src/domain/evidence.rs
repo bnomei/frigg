@@ -17,6 +17,7 @@ pub enum ProductRing {
 }
 
 impl ProductRing {
+    /// Snake-case wire label for product-ring framing in docs and payloads.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::StableCore => "stable_core",
@@ -38,6 +39,7 @@ pub enum EvidenceChannel {
 }
 
 impl EvidenceChannel {
+    /// Snake-case wire label for channel identity in hits, health, and replay.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LexicalManifest => "lexical_manifest",
@@ -86,6 +88,7 @@ pub struct EvidenceAnchor {
 }
 
 impl EvidenceAnchor {
+    /// Builds a span/symbol anchor without optional citation detail.
     pub fn new(
         kind: EvidenceAnchorKind,
         start_line: usize,
@@ -103,6 +106,7 @@ impl EvidenceAnchor {
         }
     }
 
+    /// Attaches free-form citation detail used by replay and MCP payloads.
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
@@ -121,6 +125,7 @@ pub struct EvidenceHit {
 }
 
 impl EvidenceHit {
+    /// Builds a scored hit linked to exactly one provenance id.
     pub fn single_provenance(
         channel: EvidenceChannel,
         document: EvidenceDocumentRef,
@@ -152,6 +157,7 @@ pub enum ChannelHealthStatus {
 }
 
 impl ChannelHealthStatus {
+    /// Snake-case wire label for channel-health reporting.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
@@ -172,10 +178,12 @@ pub struct ChannelHealth {
 }
 
 impl ChannelHealth {
+    /// Builds a health envelope with optional operator-facing reason text.
     pub fn new(status: ChannelHealthStatus, reason: Option<String>) -> Self {
         Self { status, reason }
     }
 
+    /// Healthy channel with no degradation reason.
     pub fn ok() -> Self {
         Self::new(ChannelHealthStatus::Ok, None)
     }
@@ -207,6 +215,7 @@ pub struct ChannelResult {
 }
 
 impl ChannelResult {
+    /// Assembles a full per-channel outcome for hybrid search responses.
     pub fn new(
         channel: EvidenceChannel,
         hits: Vec<EvidenceHit>,
@@ -235,6 +244,7 @@ pub enum FriggLayer {
 }
 
 impl FriggLayer {
+    /// Snake-case wire label for architecture-layer framing.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Engine => "engine",
@@ -255,6 +265,7 @@ pub enum SupportLevel {
 }
 
 impl SupportLevel {
+    /// Snake-case wire label for capability support reporting.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::FirstClass => "first_class",

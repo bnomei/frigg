@@ -42,6 +42,7 @@ impl ManifestStore {
             .upsert_repository(repository_id, root_path, display_name)
     }
 
+    /// Initializes storage for an index pass, skipping sqlite-vec when semantic work is disabled.
     pub(crate) fn initialize_for_index(&self, semantic_enabled: bool) -> FriggResult<()> {
         if semantic_enabled {
             self.storage.initialize()

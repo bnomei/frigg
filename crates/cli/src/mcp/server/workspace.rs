@@ -6,6 +6,7 @@
 use super::*;
 
 impl FriggMcpSessionState {
+    /// Allocates session-local adoption state and registers its result-handle cache for watch fanout.
     pub(super) fn new(
         workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
         watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
@@ -31,6 +32,7 @@ impl FriggMcpSessionState {
         }
     }
 
+    /// Opaque session id used in display/progress events (not the MCP transport session token).
     pub(super) fn display_session_id(&self) -> String {
         self.inner.display_session_id.clone()
     }
@@ -68,11 +70,13 @@ impl FriggMcpSessionStateInner {
     }
 }
 
+/// Outcome of session adoption: whether this call created a new adoption refcount.
 #[derive(Debug)]
 pub(super) struct WorkspaceAdoption {
     pub(super) newly_adopted: bool,
 }
 
+/// RAII pending-workspace guard released on drop so failed attaches do not pin ephemeral roots.
 pub(super) struct WorkspaceResolutionGuard {
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     repository_id: String,
@@ -80,6 +84,7 @@ pub(super) struct WorkspaceResolutionGuard {
 }
 
 impl WorkspaceResolutionGuard {
+    /// Marks the repository pending until attach succeeds, rolls back, or this guard drops.
     pub(super) fn new(
         workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
         repository_id: String,
@@ -111,6 +116,7 @@ impl Drop for WorkspaceResolutionGuard {
     }
 }
 
+/// Rolls back partial attach (adoption + optional session default) unless [`Self::disarm`] is called.
 pub(super) struct WorkspaceAttachRollbackGuard {
     session_state: FriggMcpSessionState,
     repository_id: String,
@@ -147,10 +153,12 @@ impl WorkspaceAttachRollbackGuard {
         }
     }
 
+    /// Records that this attach path created a new session adoption (eligible for rollback).
     pub(super) fn mark_created_adoption(&mut self) {
         self.created_adoption = true;
     }
 
+    /// Marks attach successful so Drop will not reverse adoption or the session default.
     pub(super) fn disarm(mut self) {
         self.finish(true);
     }
@@ -304,6 +312,7 @@ impl Drop for FriggMcpSessionStateInner {
 }
 
 impl FriggMcpServer {
+    /// Process-wide catalog snapshot (startup + ephemeral), independent of this session's adoption.
     pub(super) fn known_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.runtime_state
             .workspace_registry
@@ -312,6 +321,7 @@ impl FriggMcpServer {
             .known_workspaces()
     }
 
+    /// Configured startup roots that may be auto-adopted when the session is detached.
     pub(super) fn startup_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.runtime_state
             .workspace_registry
@@ -320,10 +330,12 @@ impl FriggMcpServer {
             .startup_workspaces()
     }
 
+    /// Workspaces eligible for automatic session adoption (currently startup roots).
     pub(super) fn auto_adoptable_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.startup_workspaces()
     }
 
+    /// Session-visible repositories: adopted plus still-known startup roots.
     pub(super) fn visible_workspaces(&self) -> Vec<AttachedWorkspace> {
         let mut visible = BTreeMap::new();
         {
@@ -351,6 +363,7 @@ impl FriggMcpServer {
         visible.into_values().collect()
     }
 
+    /// Repositories this session has adopted (session default may be a subset).
     pub(super) fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
         let adopted_repository_ids = self
             .session_state
@@ -372,6 +385,7 @@ impl FriggMcpServer {
             .collect()
     }
 
+    /// Session-default repository id used when tools omit `repository_id`.
     pub(super) fn current_repository_id(&self) -> Option<String> {
         self.session_state
             .inner
@@ -381,6 +395,7 @@ impl FriggMcpServer {
             .clone()
     }
 
+    /// Sets or clears the session-default repository (does not by itself adopt).
     pub(super) fn set_current_repository_id(&self, repository_id: Option<String>) {
         let mut current = self
             .session_state
@@ -391,6 +406,7 @@ impl FriggMcpServer {
         *current = repository_id;
     }
 
+    /// Whether a repository id is in the session-visible set (adopted or startup-known).
     pub(super) fn is_visible_repository_id(&self, repository_id: &str) -> bool {
         let registry = self
             .runtime_state
@@ -411,6 +427,7 @@ impl FriggMcpServer {
             .contains(&workspace.repository_id)
     }
 
+    /// Adopts a workspace into this session (refcount + watch lease) and optionally sets default.
     pub(super) fn adopt_workspace(
         &self,
         workspace: &AttachedWorkspace,
@@ -466,6 +483,7 @@ impl FriggMcpServer {
         Ok(WorkspaceAdoption { newly_adopted })
     }
 
+    /// Path-based attach only: arms a rollback guard so failed attach can reverse adoption.
     pub(super) fn workspace_attach_path_rollback_guard(
         &self,
         path: Option<&str>,
@@ -483,6 +501,7 @@ impl FriggMcpServer {
         ))
     }
 
+    /// Releases this session's adoption of a repository and may drop the watch lease.
     pub(super) fn detach_workspace(
         &self,
         repository_id: &str,
@@ -565,6 +584,7 @@ impl FriggMcpServer {
         ))
     }
 
+    /// Session-default workspace when one is set and still registered.
     pub(super) fn current_workspace(&self) -> Option<AttachedWorkspace> {
         let repository_id = self.current_repository_id()?;
         self.runtime_state

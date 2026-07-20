@@ -136,6 +136,7 @@ pub(super) fn semantic_chunk_embedding_record_order(
         .then(left.chunk_id.cmp(&right.chunk_id))
 }
 
+/// Encodes a float embedding as little-endian bytes for SQLite blob storage.
 pub(crate) fn encode_f32_vector(values: &[f32]) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(std::mem::size_of_val(values));
     for value in values {
@@ -200,6 +201,7 @@ fn normalize_sqlite_vec_version(version: &str) -> &str {
         .unwrap_or(trimmed)
 }
 
+/// Rejects sqlite-vec runtimes that do not match Frigg's pinned extension version.
 pub(crate) fn ensure_sqlite_vec_pinned_version(runtime_version: &str) -> FriggResult<()> {
     let normalized_runtime_version = normalize_sqlite_vec_version(runtime_version);
     let normalized_required_version = normalize_sqlite_vec_version(SQLITE_VEC_REQUIRED_VERSION);
@@ -331,6 +333,7 @@ fn sqlite_vec_status(extension_version: String, expected_dimensions: usize) -> V
     }
 }
 
+/// Initializes the vector table when a caller already probed sqlite-vec version capability.
 pub(crate) fn initialize_vector_store_on_connection_with_detected_capability(
     conn: &Connection,
     expected_dimensions: usize,
@@ -353,6 +356,7 @@ pub(crate) fn initialize_vector_store_on_connection_with_detected_capability(
     }
 }
 
+/// Verifies vector-table schema given a pre-detected sqlite-vec version (test and inject paths).
 pub(crate) fn verify_vector_store_on_connection_with_detected_capability(
     conn: &Connection,
     expected_dimensions: usize,

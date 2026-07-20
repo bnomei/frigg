@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use super::*;
 
+/// File-scoped replace: drops prior occurrences for the path, then upserts the new set.
 pub(super) fn replace_precise_occurrences_for_file(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -28,6 +29,7 @@ pub(super) fn replace_precise_occurrences_for_file(
     }
 }
 
+/// Overlay merge: upserts occurrences without removing existing ones for the file.
 pub(super) fn overlay_precise_occurrences_for_file(
     graph: &mut SymbolGraph,
     _repository_id: &str,
@@ -39,6 +41,7 @@ pub(super) fn overlay_precise_occurrences_for_file(
     }
 }
 
+/// File-scoped symbol replace with ref-count bookkeeping so multi-file symbols stay resident.
 pub(super) fn replace_precise_symbols_for_file(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -67,6 +70,7 @@ pub(super) fn replace_precise_symbols_for_file(
     graph.precise_symbols_by_file.insert(file_key, next_symbols);
 }
 
+/// Overlay symbols for a file, incrementing ref-counts only for first reference from that file.
 pub(super) fn overlay_precise_symbols_for_file(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -95,6 +99,7 @@ pub(super) fn overlay_precise_symbols_for_file(
     }
 }
 
+/// File-scoped relationship replace; decrements prior edges then installs the new set.
 pub(super) fn replace_precise_relationships_for_file(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -124,6 +129,7 @@ pub(super) fn replace_precise_relationships_for_file(
         .insert(file_key, next_relationship_keys);
 }
 
+/// Overlay relationships for a file without dropping edges still claimed by other files.
 pub(super) fn overlay_precise_relationships_for_file(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -152,6 +158,7 @@ pub(super) fn overlay_precise_relationships_for_file(
     }
 }
 
+/// Inserts or overwrites a precise symbol and indexes it under its repository.
 pub(super) fn upsert_precise_symbol_record(
     graph: &mut SymbolGraph,
     symbol_key: &(String, String),
@@ -167,6 +174,7 @@ pub(super) fn upsert_precise_symbol_record(
         .insert(symbol_key.1.clone());
 }
 
+/// Inserts or replaces one occurrence and refreshes file/symbol secondary indexes.
 pub(super) fn upsert_precise_occurrence(
     graph: &mut SymbolGraph,
     occurrence: &PreciseOccurrenceRecord,
@@ -181,12 +189,14 @@ pub(super) fn upsert_precise_occurrence(
     insert_precise_occurrence_indexes(graph, &key, occurrence);
 }
 
+/// Removes one occurrence and cleans empty secondary index entries.
 pub(super) fn remove_precise_occurrence(graph: &mut SymbolGraph, key: &PreciseOccurrenceKey) {
     if let Some(previous) = graph.precise_occurrences.remove(key) {
         remove_precise_occurrence_indexes(graph, key, &previous);
     }
 }
 
+/// Links an occurrence key into per-file and per-symbol indexes.
 pub(super) fn insert_precise_occurrence_indexes(
     graph: &mut SymbolGraph,
     key: &PreciseOccurrenceKey,
@@ -210,6 +220,7 @@ pub(super) fn insert_precise_occurrence_indexes(
         .insert(key.clone());
 }
 
+/// Unlinks an occurrence from secondary indexes, dropping empty index sets.
 pub(super) fn remove_precise_occurrence_indexes(
     graph: &mut SymbolGraph,
     key: &PreciseOccurrenceKey,
@@ -240,6 +251,7 @@ pub(super) fn remove_precise_occurrence_indexes(
     }
 }
 
+/// Inserts or replaces one precise relationship and refreshes from/to indexes.
 pub(super) fn upsert_precise_relationship(
     graph: &mut SymbolGraph,
     relationship: &PreciseRelationshipRecord,
@@ -254,6 +266,7 @@ pub(super) fn upsert_precise_relationship(
     insert_precise_relationship_indexes(graph, &key, relationship);
 }
 
+/// Links a relationship key into from-symbol and to-symbol indexes.
 pub(super) fn insert_precise_relationship_indexes(
     graph: &mut SymbolGraph,
     key: &PreciseRelationshipKey,
@@ -277,6 +290,7 @@ pub(super) fn insert_precise_relationship_indexes(
         .insert(key.clone());
 }
 
+/// Unlinks a relationship from secondary indexes, dropping empty index sets.
 pub(super) fn remove_precise_relationship_indexes(
     graph: &mut SymbolGraph,
     key: &PreciseRelationshipKey,
@@ -316,6 +330,7 @@ pub(super) fn remove_precise_relationship_indexes(
     }
 }
 
+/// Records another file claiming a precise symbol so it is not dropped on partial replaces.
 pub(super) fn increment_precise_symbol_ref_count(
     graph: &mut SymbolGraph,
     symbol_key: &(String, String),
@@ -331,6 +346,7 @@ pub(super) fn increment_precise_symbol_ref_count(
         .insert(symbol_key.clone(), next);
 }
 
+/// Releases one file claim; removes the symbol when no files still reference it.
 pub(super) fn decrement_precise_symbol_ref_count(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -369,6 +385,7 @@ pub(super) fn decrement_precise_symbol_ref_count(
     }
 }
 
+/// Records another file claiming a precise relationship edge.
 pub(super) fn increment_precise_relationship_ref_count(
     graph: &mut SymbolGraph,
     relationship_key: &PreciseRelationshipKey,
@@ -384,6 +401,7 @@ pub(super) fn increment_precise_relationship_ref_count(
         .insert(relationship_key.clone(), next);
 }
 
+/// Releases one file claim on a relationship; removes the edge when the count hits zero.
 pub(super) fn decrement_precise_relationship_ref_count(
     graph: &mut SymbolGraph,
     relationship_key: &PreciseRelationshipKey,
@@ -410,14 +428,17 @@ pub(super) fn decrement_precise_relationship_ref_count(
     }
 }
 
+/// Composite map key for repository-scoped SCIP symbol lookups.
 pub(super) fn precise_symbol_key(repository_id: &str, symbol: &str) -> (String, String) {
     (repository_id.to_owned(), symbol.to_owned())
 }
 
+/// Composite map key for repository-scoped file indexes.
 pub(super) fn precise_file_key(repository_id: &str, path: &str) -> (String, String) {
     (repository_id.to_owned(), path.to_owned())
 }
 
+/// Stable ordering for precise symbol query results.
 pub(super) fn precise_symbol_order(
     left: &PreciseSymbolRecord,
     right: &PreciseSymbolRecord,
@@ -429,6 +450,7 @@ pub(super) fn precise_symbol_order(
         .then(left.kind.cmp(&right.kind))
 }
 
+/// Stable ordering for precise occurrence query results (path, then range).
 pub(super) fn precise_occurrence_order(
     left: &PreciseOccurrenceRecord,
     right: &PreciseOccurrenceRecord,
@@ -443,6 +465,7 @@ pub(super) fn precise_occurrence_order(
         .then(left.symbol_roles.cmp(&right.symbol_roles))
 }
 
+/// Stable ordering for precise relationship query results.
 pub(super) fn precise_relationship_order(
     left: &PreciseRelationshipRecord,
     right: &PreciseRelationshipRecord,
@@ -453,6 +476,7 @@ pub(super) fn precise_relationship_order(
         .then(left.kind.cmp(&right.kind))
 }
 
+/// Lower rank is a better navigation match; `None` when neither query nor fallback applies.
 pub(super) fn precise_navigation_symbol_rank(
     precise_symbol: &PreciseSymbolRecord,
     symbol_query: &str,
@@ -499,6 +523,7 @@ pub(super) fn precise_navigation_symbol_rank(
     None
 }
 
+/// Builds a structured SCIP invalid-input error without source coordinates.
 pub(super) fn invalid_input(
     artifact_label: &str,
     code: ScipInvalidInputCode,
@@ -515,6 +540,7 @@ pub(super) fn invalid_input(
     }
 }
 
+/// Builds a structured SCIP resource-budget exceeded error with limit/actual values.
 pub(super) fn resource_budget_exceeded(
     artifact_label: &str,
     code: ScipResourceBudgetCode,
@@ -533,6 +559,7 @@ pub(super) fn resource_budget_exceeded(
     }
 }
 
+/// Fails the current ingest phase when wall-clock elapsed time exceeds the configured budget.
 pub(super) fn enforce_elapsed_budget(
     artifact_label: &str,
     started_at: Instant,
@@ -557,6 +584,7 @@ pub(super) fn enforce_elapsed_budget(
     Ok(())
 }
 
+/// Stable ordering for heuristic relation edge lists.
 pub(super) fn symbol_relation_order(
     left: &SymbolRelation,
     right: &SymbolRelation,
@@ -567,6 +595,7 @@ pub(super) fn symbol_relation_order(
         .then(left.relation.cmp(&right.relation))
 }
 
+/// Stable ordering for heuristic adjacency results (relation, then symbol id/path/line).
 pub(super) fn adjacent_symbol_order(
     left: &AdjacentSymbol,
     right: &AdjacentSymbol,
@@ -578,6 +607,7 @@ pub(super) fn adjacent_symbol_order(
         .then(left.symbol.line.cmp(&right.symbol.line))
 }
 
+/// Orders heuristic hints by descending confidence, then source location.
 pub(super) fn heuristic_relation_hint_order(
     left: &HeuristicRelationHint,
     right: &HeuristicRelationHint,

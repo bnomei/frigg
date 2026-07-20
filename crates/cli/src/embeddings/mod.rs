@@ -16,15 +16,20 @@ pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingProviderKind {
+    /// Official OpenAI embeddings API.
     OpenAi,
     /// OpenAI-compatible HTTP embeddings (custom endpoint; distinct from official OpenAI).
     OpenAiCompat,
+    /// Google Gemini embeddings API.
     Google,
+    /// On-host fastembed provider backed by prepared local model artifacts.
     Local,
+    /// Vector-store readiness path (not a remote embedding wire format).
     VectorStore,
 }
 
 impl EmbeddingProviderKind {
+    /// Stable identity string for logs, storage keys, and serialized failures.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
@@ -40,8 +45,10 @@ impl EmbeddingProviderKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingPurpose {
+    /// Passage/document embedding used when indexing repository content.
     #[default]
     Document,
+    /// Query-time embedding used for semantic recall.
     Query,
 }
 
@@ -127,6 +134,7 @@ pub struct EmbeddingRequest {
 }
 
 impl EmbeddingRequest {
+    /// Rejects empty models/inputs, blank segments, and zero dimensions before transport.
     pub fn validate(&self) -> Result<(), ValidationFailure> {
         if self.model.trim().is_empty() {
             return Err(ValidationFailure::new("model", "model must not be empty"));
@@ -267,6 +275,7 @@ pub struct ValidationFailure {
 }
 
 impl ValidationFailure {
+    /// Builds a field-scoped validation failure for request shaping errors.
     pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             field: field.into(),
@@ -299,6 +308,7 @@ pub struct ProviderFailure {
 }
 
 impl ProviderFailure {
+    /// Provider failure that transport helpers may retry (rate limits, transient 5xx).
     pub fn retryable(
         provider: EmbeddingProviderKind,
         message: impl Into<String>,
@@ -316,6 +326,7 @@ impl ProviderFailure {
         }
     }
 
+    /// Provider failure that must not be retried (auth, bad request, invalid response).
     pub fn non_retryable(
         provider: EmbeddingProviderKind,
         message: impl Into<String>,
@@ -363,6 +374,7 @@ pub struct TransportFailure {
 }
 
 impl TransportFailure {
+    /// Transport failure eligible for backoff retry (timeouts, connect, retryable HTTP).
     pub fn retryable(
         provider: EmbeddingProviderKind,
         operation: impl Into<String>,
@@ -378,6 +390,7 @@ impl TransportFailure {
         }
     }
 
+    /// Transport failure that should surface immediately without retry.
     pub fn non_retryable(
         provider: EmbeddingProviderKind,
         operation: impl Into<String>,
@@ -420,6 +433,7 @@ pub enum EmbeddingError {
 }
 
 impl EmbeddingError {
+    /// Top-level failure bucket for metrics and caller branching.
     pub fn category(&self) -> EmbeddingErrorCategory {
         match self {
             Self::Validation(_) => EmbeddingErrorCategory::Validation,
@@ -428,6 +442,7 @@ impl EmbeddingError {
         }
     }
 
+    /// Whether transport helpers should backoff and retry this failure.
     pub fn retryability(&self) -> Retryability {
         match self {
             Self::Validation(_) => Retryability::NonRetryable,
@@ -436,10 +451,12 @@ impl EmbeddingError {
         }
     }
 
+    /// Convenience for retry loops; validation is never retryable.
     pub fn is_retryable(&self) -> bool {
         matches!(self.retryability(), Retryability::Retryable)
     }
 
+    /// Correlates remote failures with the originating request when present.
     pub fn trace_id(&self) -> Option<&str> {
         match self {
             Self::Validation(_) => None,
@@ -474,11 +491,14 @@ mod tests;
 /// Provider contract for batch embedding calls used by semantic indexing and recall.
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
+    /// Provider identity attached to responses and failures.
     fn kind(&self) -> EmbeddingProviderKind;
 
+    /// Optional batch/dimension ceilings enforced by callers before transport.
     fn limits(&self) -> EmbeddingProviderLimits {
         EmbeddingProviderLimits::default()
     }
 
+    /// Embeds a validated batch and returns normalized vectors (and usage when available).
     async fn embed(&self, request: EmbeddingRequest) -> EmbeddingResult<EmbeddingResponse>;
 }

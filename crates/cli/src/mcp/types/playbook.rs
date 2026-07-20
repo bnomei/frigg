@@ -158,6 +158,7 @@ impl From<InternalDeepSearchTraceArtifact> for PlaybookRunResponse {
 }
 
 impl PlaybookReplayParams {
+    /// Converts public wire params into the deep-search harness playbook + expected trace.
     pub fn into_internal(self) -> (InternalDeepSearchPlaybook, InternalDeepSearchTraceArtifact) {
         (self.playbook.into(), self.expected_trace_artifact.into())
     }
@@ -174,6 +175,7 @@ impl From<InternalDeepSearchReplayCheck> for PlaybookReplayResponse {
 }
 
 impl PlaybookComposeCitationsParams {
+    /// Converts public wire params into the harness trace plus optional answer override.
     pub fn into_internal(self) -> (InternalDeepSearchTraceArtifact, Option<String>) {
         (self.trace_artifact.into(), self.answer)
     }

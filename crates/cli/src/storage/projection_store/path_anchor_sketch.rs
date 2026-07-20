@@ -9,6 +9,7 @@ use crate::storage::{PathAnchorSketchProjection, Storage, db_runtime::i64_to_u64
 use super::common::normalize_repository_snapshot_ids;
 
 impl Storage {
+    /// Loads path-anchor sketch projections for exact-anchor-biased retrieval.
     pub fn load_path_anchor_sketch_projections_for_repository_snapshot(
         &self,
         repository_id: &str,

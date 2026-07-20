@@ -18,6 +18,7 @@ pub enum PathClass {
 }
 
 impl PathClass {
+    /// Snake-case wire label for path-class ranking and diagnostics.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Runtime => "runtime",
@@ -26,6 +27,7 @@ impl PathClass {
         }
     }
 
+    /// Lower rank sorts first; runtime preferred over project over support.
     pub const fn rank(self) -> u8 {
         match self {
             Self::Runtime => 0,
@@ -34,6 +36,7 @@ impl PathClass {
         }
     }
 
+    /// Parses a snake-case path-class label; unknown labels yield `None`.
     pub fn from_label(value: &str) -> Option<Self> {
         match value {
             "runtime" => Some(Self::Runtime),
@@ -66,6 +69,7 @@ pub enum SourceClass {
 }
 
 impl SourceClass {
+    /// Snake-case wire label for source-origin bias in planner and witnesses.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ErrorContracts => "error_contracts",
@@ -84,6 +88,7 @@ impl SourceClass {
         }
     }
 
+    /// Parses a snake-case source-class label; unknown labels yield `None`.
     pub fn from_label(value: &str) -> Option<Self> {
         match value {
             "error_contracts" => Some(Self::ErrorContracts),
@@ -223,6 +228,7 @@ pub enum SearchIntentRuleId {
 }
 
 impl SearchIntentRuleId {
+    /// Snake-case rule id for planner term-bundle selection and diagnostics.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DocumentationTerms => "documentation_terms",

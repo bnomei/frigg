@@ -188,6 +188,7 @@ pub enum ManifestDiagnosticKind {
 }
 
 impl ManifestDiagnosticKind {
+    /// Stable diagnostic kind label (`walk` / `read`) for reports and serialization.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Walk => "walk",

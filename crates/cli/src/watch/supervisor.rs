@@ -261,7 +261,9 @@ fn should_invalidate_watch_worker_cache(
 /// Lease snapshot for a repository root watched by the shared supervisor.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WatchLeaseStatus {
+    /// At least one session currently holds a watch lease for this repository.
     pub active: bool,
+    /// Number of concurrent lease holders; zero means the root can be unwatched.
     pub lease_count: usize,
 }
 

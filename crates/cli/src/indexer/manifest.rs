@@ -527,6 +527,7 @@ fn manifest_by_path(entries: &[FileDigest]) -> BTreeMap<PathBuf, FileDigest> {
     by_path
 }
 
+/// Deterministic ordering for file digests so manifest snapshots sort stably by path then metadata.
 pub(crate) fn file_digest_order(left: &FileDigest, right: &FileDigest) -> std::cmp::Ordering {
     left.path
         .cmp(&right.path)

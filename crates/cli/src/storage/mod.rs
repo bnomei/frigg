@@ -114,6 +114,7 @@ pub enum VectorStoreBackend {
 }
 
 impl VectorStoreBackend {
+    /// Stable wire/log label for the vector backend (`sqlite_vec`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SqliteVec => "sqlite_vec",

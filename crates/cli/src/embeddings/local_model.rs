@@ -70,6 +70,7 @@ mod enabled {
     }
 
     impl CacheResolutionEnv {
+        /// Reads cache-related environment variables used for platform cache-root resolution.
         pub fn from_process_env() -> Self {
             Self {
                 frigg_semantic_model_cache: non_empty_env_path(FRIGG_SEMANTIC_MODEL_CACHE_ENV),
@@ -134,6 +135,7 @@ mod enabled {
     /// Result alias for local model artifact resolution and preparation.
     pub type LocalModelResult<T> = Result<T, LocalModelError>;
 
+    /// Resolves on-disk layout for a semantic model using the process environment and host OS.
     pub fn resolve_local_model_artifact(
         semantic_model: &str,
     ) -> LocalModelResult<LocalModelArtifact> {
@@ -144,6 +146,7 @@ mod enabled {
         )
     }
 
+    /// Resolves on-disk layout with injectable platform/env for tests and offline tooling.
     pub fn resolve_local_model_artifact_with_env(
         semantic_model: &str,
         platform: Option<CachePlatform>,
@@ -182,6 +185,7 @@ mod enabled {
         })
     }
 
+    /// Resolves the local semantic model cache root from process env and host platform.
     pub fn resolve_cache_root() -> LocalModelResult<PathBuf> {
         resolve_cache_root_with_env(
             current_cache_platform(),
@@ -189,6 +193,7 @@ mod enabled {
         )
     }
 
+    /// Resolves cache root with injectable platform/env; `FRIGG_SEMANTIC_MODEL_CACHE` wins if set.
     pub fn resolve_cache_root_with_env(
         platform: Option<CachePlatform>,
         env: &CacheResolutionEnv,
@@ -237,6 +242,7 @@ mod enabled {
         }
     }
 
+    /// Resolves then verifies whether prepared artifacts exist for a semantic model name.
     pub fn check_local_model_artifact(
         semantic_model: &str,
     ) -> LocalModelResult<LocalModelArtifactStatus> {
@@ -244,6 +250,7 @@ mod enabled {
         check_resolved_local_model_artifact(artifact)
     }
 
+    /// Verifies snapshot completeness for a resolved artifact; corrupt layouts become errors.
     pub fn check_resolved_local_model_artifact(
         artifact: LocalModelArtifact,
     ) -> LocalModelResult<LocalModelArtifactStatus> {
@@ -298,6 +305,7 @@ mod enabled {
         Ok(LocalModelArtifactStatus::Ready(artifact))
     }
 
+    /// Requires a ready local artifact; missing artifacts fail without attempting download.
     pub fn require_prepared_local_model(
         semantic_model: &str,
     ) -> LocalModelResult<LocalModelArtifact> {
@@ -310,6 +318,9 @@ mod enabled {
         }
     }
 
+    /// Downloads and validates the local model when semantic runtime is local and enabled.
+    ///
+    /// Rejects `HF_HOME` overrides so Frigg cache roots control placement. No-ops when already ready.
     pub fn prepare_local_semantic_model(
         semantic_runtime: &SemanticRuntimeConfig,
     ) -> LocalModelResult<LocalModelArtifact> {
@@ -663,6 +674,7 @@ mod enabled {
         format!("{ELLIPSIS}{suffix}")
     }
 
+    /// Maps supported semantic/fastembed/repository aliases to the v1 local model metadata.
     pub fn resolve_model_alias(semantic_model: &str) -> LocalModelResult<&'static LocalModelAlias> {
         let normalized = semantic_model.trim();
         if normalized.eq_ignore_ascii_case(DEFAULT_LOCAL_EMBEDDING_MODEL)
@@ -1048,18 +1060,21 @@ mod disabled {
     /// Result alias for local model artifact resolution and preparation.
     pub type LocalModelResult<T> = Result<T, LocalModelError>;
 
+    /// Stub when `local-embeddings` is disabled; always returns [`LocalModelError::Unavailable`].
     pub fn resolve_local_model_artifact(
         _semantic_model: &str,
     ) -> LocalModelResult<LocalModelArtifact> {
         Err(LocalModelError::Unavailable)
     }
 
+    /// Stub when `local-embeddings` is disabled; always returns [`LocalModelError::Unavailable`].
     pub fn check_local_model_artifact(
         _semantic_model: &str,
     ) -> LocalModelResult<LocalModelArtifactStatus> {
         Err(LocalModelError::Unavailable)
     }
 
+    /// Stub when `local-embeddings` is disabled; always returns [`LocalModelError::Unavailable`].
     pub fn prepare_local_semantic_model(
         _semantic_runtime: &SemanticRuntimeConfig,
     ) -> LocalModelResult<LocalModelArtifact> {

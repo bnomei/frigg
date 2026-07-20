@@ -15,6 +15,7 @@ pub enum RuntimeTransportKind {
 }
 
 impl RuntimeTransportKind {
+    /// Snake-case transport id used in status, profile mapping, and operator diagnostics.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Stdio => "stdio",
@@ -35,6 +36,7 @@ pub enum RuntimeProfile {
 }
 
 impl RuntimeProfile {
+    /// Snake-case profile id exposed in workspace status and runtime policy surfaces.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::StdioEphemeral => "stdio_ephemeral",

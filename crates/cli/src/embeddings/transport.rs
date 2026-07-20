@@ -46,6 +46,7 @@ pub(super) struct HttpRequestDiagnostics {
 }
 
 impl HttpRequestDiagnostics {
+    /// Captures batch size, body hash, and raw inputs for redacted failure diagnostics.
     pub(super) fn from_request(
         provider: EmbeddingProviderKind,
         request: &EmbeddingRequest,
@@ -117,6 +118,7 @@ impl HttpTransportError {
     }
 }
 
+/// Appends redacted request context to a failure message (API keys and raw inputs scrubbed).
 pub(super) fn append_request_diagnostics_with_secrets(
     message: impl AsRef<str>,
     diagnostics: &HttpRequestDiagnostics,
@@ -203,11 +205,13 @@ fn redact_key_bearing_url_parameters(message: &str) -> String {
     output
 }
 
+/// Injectable HTTP executor so embedding providers can be unit-tested without real network I/O.
 #[async_trait]
 pub(super) trait HttpExecutor: Send + Sync {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpTransportError>;
 }
 
+/// Production [`HttpExecutor`] backed by a shared reqwest client.
 #[derive(Clone)]
 pub(super) struct ReqwestHttpExecutor {
     client: Client,
@@ -248,11 +252,13 @@ impl HttpExecutor for ReqwestHttpExecutor {
     }
 }
 
+/// Injectable sleep for retry backoff so tests can advance without wall-clock delays.
 #[async_trait]
 pub(super) trait BackoffSleeper: Send + Sync {
     async fn sleep(&self, duration: Duration);
 }
 
+/// Production sleeper using `tokio::time::sleep`.
 #[derive(Clone, Default)]
 pub(super) struct TokioSleeper;
 
@@ -272,6 +278,7 @@ fn map_reqwest_error(error: reqwest::Error) -> HttpTransportError {
     }
 }
 
+/// Classifies HTTP status codes shared by OpenAI/Google providers for retry decisions.
 pub(super) fn status_retryability(status_code: u16) -> Retryability {
     if matches!(status_code, 408 | 409 | 425 | 429 | 500 | 502 | 503 | 504) {
         Retryability::Retryable
@@ -280,6 +287,7 @@ pub(super) fn status_retryability(status_code: u16) -> Retryability {
     }
 }
 
+/// Builds usage metadata when either token count is present; otherwise returns `None`.
 pub(super) fn usage_from_counts(
     prompt_tokens: Option<u64>,
     total_tokens: Option<u64>,

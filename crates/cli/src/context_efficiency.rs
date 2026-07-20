@@ -320,11 +320,17 @@ pub(crate) struct ContextEfficiencyLogRow {
 /// Inclusive time window used when aggregating context-efficiency JSONL logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextSummaryWindow {
+    /// Lower bound (inclusive), typically start of a UTC day or an RFC3339 instant.
     pub date_since: DateTime<Utc>,
+    /// Upper bound (inclusive) for log rows included in the summary.
     pub date_until: DateTime<Utc>,
 }
 
 impl ContextSummaryWindow {
+    /// Parses optional `since`/`until` bounds, defaulting to the last 30 days ending at `now`.
+    ///
+    /// Accepts date-only (`YYYY-MM-DD`) and RFC3339 instants. When only one bound is set, the
+    /// missing side expands by 30 days so `frigg context` summaries stay bounded.
     pub fn resolve(
         since: Option<&str>,
         until: Option<&str>,
@@ -428,17 +434,29 @@ impl From<serde_json::Error> for ContextSummaryError {
 /// Rolled-up context-efficiency counters across one or more workspace roots.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ContextLogAggregate {
+    /// JSONL rows included in this aggregate.
     pub events: usize,
+    /// Peak indexed readable file count observed on any single event.
     pub indexed_readable_files_max: usize,
+    /// Peak indexed readable byte budget observed on any single event.
     pub indexed_readable_bytes_max: u64,
+    /// Sum of per-query durations across events (milliseconds).
     pub query_duration_ms_total: u64,
+    /// Slowest single-query duration across events (milliseconds).
     pub query_duration_ms_max: u64,
+    /// Candidates entering ranking/selection before post-selection pruning.
     pub candidate_input_count: u64,
+    /// Candidates remaining after ranking/selection.
     pub candidate_output_count: u64,
+    /// Match rows returned to the caller.
     pub returned_match_count: u64,
+    /// Distinct repository paths represented in returned results.
     pub returned_unique_paths: u64,
+    /// Manifest-indexed byte sizes of returned unique paths.
     pub returned_unique_file_bytes: u64,
+    /// Estimated source bytes actually included in tool responses (snippets/excerpts).
     pub returned_source_bytes_estimate: u64,
+    /// Estimated bytes avoided vs opening full matched files (may be negative if over-read).
     pub matched_file_context_saved_bytes_estimate: i64,
 }
 
@@ -525,11 +543,17 @@ impl ContextLogAggregate {
 /// Per-workspace-root summary of context-efficiency JSONL activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextLogRootSummary {
+    /// Workspace root path that owns `.frigg/context.jsonl`.
     pub root: String,
+    /// Absolute or display path of the JSONL log file for this root.
     pub context_log: String,
+    /// Whether the log file was present when the summary was built.
     pub exists: bool,
+    /// Distinct repository ids observed in log rows for this root.
     pub repositories: Vec<String>,
+    /// Per-tool event counts (`search_hybrid`, `read_file`, …).
     pub tools: BTreeMap<String, usize>,
+    /// Rolled-up counters for rows inside the requested date window.
     #[serde(flatten)]
     pub aggregate: ContextLogAggregate,
 }
@@ -537,9 +561,13 @@ pub struct ContextLogRootSummary {
 /// Multi-root context-efficiency summary for operator-facing reporting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextLogSummary {
+    /// Inclusive window start as RFC3339.
     pub date_since: String,
+    /// Inclusive window end as RFC3339.
     pub date_until: String,
+    /// One summary entry per requested workspace root.
     pub roots: Vec<ContextLogRootSummary>,
+    /// Cross-root totals of the same counters as each root aggregate.
     pub totals: ContextLogAggregate,
 }
 

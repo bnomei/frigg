@@ -9,6 +9,7 @@ use crate::storage::{Storage, SubtreeCoverageProjection, db_runtime::i64_to_u64}
 use super::common::normalize_repository_snapshot_ids;
 
 impl Storage {
+    /// Loads subtree-coverage projections for directory-level navigation fallbacks.
     pub fn load_subtree_coverage_projections_for_repository_snapshot(
         &self,
         repository_id: &str,

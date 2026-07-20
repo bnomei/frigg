@@ -5,6 +5,7 @@
 
 use super::*;
 
+/// Builds a 1-based line/column [`SourceSpan`] from clamped byte offsets into `source`.
 pub(crate) fn source_span_from_offsets(
     source: &str,
     start_byte: usize,
@@ -24,6 +25,7 @@ pub(crate) fn source_span_from_offsets(
     }
 }
 
+/// Converts a byte offset into 1-based `(line, column)` coordinates.
 pub(crate) fn line_column_for_offset(source: &str, offset: usize) -> (usize, usize) {
     let clamped = offset.min(source.len());
     let bytes = source.as_bytes();
@@ -38,6 +40,7 @@ pub(crate) fn line_column_for_offset(source: &str, offset: usize) -> (usize, usi
     (line, column)
 }
 
+/// Resolves a 1-based line/column cursor to a byte offset, or `None` when out of range.
 pub(crate) fn byte_offset_for_line_column(
     source: &str,
     line: usize,
@@ -73,6 +76,7 @@ pub(crate) fn byte_offset_for_line_column(
     None
 }
 
+/// Builds a [`SourceSpan`] from a tree-sitter node (1-based line/column positions).
 pub(crate) fn source_span(node: Node<'_>) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();

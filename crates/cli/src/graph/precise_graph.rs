@@ -6,6 +6,7 @@
 use super::*;
 
 impl SymbolGraph {
+    /// Cardinality of currently loaded precise symbols, occurrences, and relationships.
     pub fn precise_counts(&self) -> PreciseGraphCounts {
         PreciseGraphCounts {
             symbols: self.precise_symbols.len(),
@@ -14,6 +15,7 @@ impl SymbolGraph {
         }
     }
 
+    /// Drops all precise SCIP state while leaving the heuristic graph intact.
     pub fn clear_precise_data(&mut self) {
         self.precise_symbols.clear();
         self.precise_symbol_keys_by_repository.clear();
@@ -29,6 +31,7 @@ impl SymbolGraph {
         self.precise_relationship_ref_counts.clear();
     }
 
+    /// Looks up one precise symbol by repository and SCIP symbol identifier.
     pub fn precise_symbol(
         &self,
         repository_id: &str,
@@ -38,6 +41,7 @@ impl SymbolGraph {
             .get(&(repository_id.to_owned(), symbol.to_owned()))
     }
 
+    /// All precise symbols registered for a repository, sorted for stable consumers.
     pub fn precise_symbols_for_repository(&self, repository_id: &str) -> Vec<PreciseSymbolRecord> {
         let mut symbols = self
             .precise_symbol_keys_by_repository
@@ -54,6 +58,7 @@ impl SymbolGraph {
         symbols
     }
 
+    /// All precise occurrences of a symbol (definitions and references), sorted by path/range.
     pub fn precise_occurrences_for_symbol(
         &self,
         repository_id: &str,
@@ -70,6 +75,7 @@ impl SymbolGraph {
         occurrences
     }
 
+    /// First definition-role occurrence for a symbol, if any SCIP definition site is loaded.
     pub fn precise_definition_occurrence_for_symbol(
         &self,
         repository_id: &str,
@@ -84,6 +90,7 @@ impl SymbolGraph {
             .cloned()
     }
 
+    /// Non-definition occurrences for a symbol (references and other non-definition roles).
     pub fn precise_references_for_symbol(
         &self,
         repository_id: &str,
@@ -95,6 +102,7 @@ impl SymbolGraph {
             .collect()
     }
 
+    /// Precise occurrences in one repository-relative file, sorted by range.
     pub fn precise_occurrences_for_file(
         &self,
         repository_id: &str,
@@ -111,6 +119,10 @@ impl SymbolGraph {
         occurrences
     }
 
+    /// Picks the best precise symbol under a caret using containment, then nearest range start.
+    ///
+    /// Prefers occurrences that fully contain `(line, column)`, then smallest line/column distance
+    /// among starts at or before the caret. Returns `None` when the file has no usable occurrences.
     pub fn select_precise_symbol_for_location(
         &self,
         repository_id: &str,
@@ -170,6 +182,7 @@ impl SymbolGraph {
             .map(|(_, _, _, _, _, _, symbol)| symbol)
     }
 
+    /// Outgoing precise relationships from a SCIP symbol (definition/reference/implementation/…).
     pub fn precise_relationships_from_symbol(
         &self,
         repository_id: &str,
@@ -186,6 +199,7 @@ impl SymbolGraph {
         relationships
     }
 
+    /// Incoming precise relationships filtered to the requested kinds (e.g. implementations only).
     pub fn precise_relationships_to_symbol_by_kinds(
         &self,
         repository_id: &str,
@@ -205,6 +219,7 @@ impl SymbolGraph {
         relationships
     }
 
+    /// Best-ranked precise symbol matching a navigation query (exact SCIP id, then display name).
     pub fn select_precise_symbol_for_navigation(
         &self,
         repository_id: &str,
@@ -220,6 +235,7 @@ impl SymbolGraph {
         .next()
     }
 
+    /// All precise symbols matching a navigation query, ordered by match quality then symbol id.
     pub fn matching_precise_symbols_for_navigation(
         &self,
         repository_id: &str,

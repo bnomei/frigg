@@ -9,6 +9,7 @@ use rmcp::model::ProgressNotificationParam;
 use crate::domain::{NormalizedWorkloadMetadata, WorkloadPrecisionMode};
 
 impl ReadOnlyToolExecutionContext {
+    /// Optional context-efficiency percent mirrored into the tool-call display sink.
     pub(super) fn set_display_context_saved_percent(&self, percent: Option<f64>) {
         if let Some(percent) = percent {
             *self
@@ -25,6 +26,7 @@ impl ReadOnlyToolExecutionContext {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Provenance workload metadata for this tool over the given repository scope.
     pub(super) fn normalized_workload(
         &self,
         repository_ids: &[String],
@@ -39,6 +41,7 @@ impl ReadOnlyToolExecutionContext {
 }
 
 impl ScopedReadOnlyToolExecutionContext {
+    /// Provenance workload for the already-scoped repository ids (test helper).
     #[cfg(test)]
     pub(super) fn normalized_workload(
         &self,
@@ -49,6 +52,7 @@ impl ScopedReadOnlyToolExecutionContext {
     }
 }
 
+/// Source refs plus optional normalized workload used when recording provenance after a tool call.
 #[derive(Debug, Clone)]
 pub(super) struct ToolExecutionFinalization {
     pub(super) source_refs: Value,
@@ -56,6 +60,7 @@ pub(super) struct ToolExecutionFinalization {
 }
 
 impl ToolExecutionFinalization {
+    /// Bundles provenance source refs with optional normalized workload metadata.
     pub(super) fn new(
         source_refs: Value,
         normalized_workload: Option<NormalizedWorkloadMetadata>,
@@ -68,6 +73,7 @@ impl ToolExecutionFinalization {
 }
 
 impl FriggMcpServer {
+    /// Best-effort MCP progress notification when the client supplied a progress token.
     pub(super) async fn notify_progress(
         meta: &Meta,
         client: &Peer<RoleServer>,
@@ -184,6 +190,9 @@ impl FriggMcpServer {
         ToolExecutionFinalization::new(source_refs, normalized_workload)
     }
 
+    /// Installs or clears the optional CLI tool-call display sink for this process.
+    ///
+    /// When set, tool handlers may stream human-readable call summaries without changing MCP wire payloads.
     pub fn set_tool_call_display_sink(&self, sink: Option<ToolCallDisplaySink>) {
         *self
             .runtime_state

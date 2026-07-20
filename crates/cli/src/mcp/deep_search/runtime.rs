@@ -23,10 +23,12 @@ struct ResolvedDeepSearchPlaybookStep<'a> {
 }
 
 impl DeepSearchHarness {
+    /// Binds a harness to a dedicated MCP server instance used for playbook step dispatch.
     pub fn new(server: FriggMcpServer) -> Self {
         Self { server }
     }
 
+    /// Loads and deserializes a playbook JSON document from disk.
     pub fn load_playbook(path: &Path) -> FriggResult<DeepSearchPlaybook> {
         let raw = fs::read_to_string(path).map_err(FriggError::Io)?;
         serde_json::from_str::<DeepSearchPlaybook>(&raw).map_err(|err| {
@@ -37,6 +39,7 @@ impl DeepSearchHarness {
         })
     }
 
+    /// Writes a pretty-printed canonical JSON trace artifact, creating parent dirs as needed.
     pub fn persist_trace_artifact(
         path: &Path,
         artifact: &DeepSearchTraceArtifact,
@@ -53,6 +56,7 @@ impl DeepSearchHarness {
         Ok(())
     }
 
+    /// Loads and deserializes a previously persisted deep-search trace artifact.
     pub fn load_trace_artifact(path: &Path) -> FriggResult<DeepSearchTraceArtifact> {
         let raw = fs::read_to_string(path).map_err(FriggError::Io)?;
         serde_json::from_str::<DeepSearchTraceArtifact>(&raw).map_err(|err| {
@@ -63,6 +67,7 @@ impl DeepSearchHarness {
         })
     }
 
+    /// Executes every playbook step in order and returns a normalized, replayable trace artifact.
     pub async fn run_playbook(
         &self,
         playbook: &DeepSearchPlaybook,
@@ -101,6 +106,7 @@ impl DeepSearchHarness {
         })
     }
 
+    /// Re-runs a playbook and reports structural/response drift versus an expected trace.
     pub async fn replay_and_diff(
         &self,
         playbook: &DeepSearchPlaybook,
@@ -116,6 +122,7 @@ impl DeepSearchHarness {
         })
     }
 
+    /// Loads an expected trace from disk, then re-runs and diffs the playbook against it.
     pub async fn replay_from_artifact_path(
         &self,
         playbook: &DeepSearchPlaybook,
@@ -125,6 +132,7 @@ impl DeepSearchHarness {
         self.replay_and_diff(playbook, &expected).await
     }
 
+    /// Builds claims and file-span citations from successful trace steps (optional answer override).
     pub fn compose_citation_payload(
         trace: &DeepSearchTraceArtifact,
         answer: impl Into<String>,
@@ -182,6 +190,7 @@ impl DeepSearchHarness {
         })
     }
 
+    /// Dispatches one playbook step against the harness server (test/debug entry point).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) async fn run_step(&self, step: &DeepSearchPlaybookStep) -> DeepSearchTraceOutcome {
         let resolved = match resolve_step_tool(step) {
@@ -288,6 +297,7 @@ impl DeepSearchHarness {
     }
 }
 
+/// Strips volatile fields so replay diffs compare stable identity/match evidence only.
 pub(super) fn normalize_trace_response_for_tool(tool_name: &str, response: Value) -> Value {
     match tool_name {
         "workspace" | "list_repositories" => normalize_workspace_response(response),
@@ -390,6 +400,7 @@ fn resolve_step_tool(step: &DeepSearchPlaybookStep) -> FriggResult<DeepSearchSte
     })
 }
 
+/// Step dispatch failure mapped into a stable deep-search trace error outcome.
 #[derive(Debug)]
 pub(super) struct DeepSearchStepError {
     pub(super) code: String,
@@ -407,6 +418,7 @@ impl DeepSearchStepError {
     }
 }
 
+/// Deserializes playbook step JSON into typed MCP params, wrapping failures as invalid_params.
 pub(super) fn decode_params<T>(value: &Value) -> Result<T, DeepSearchStepError>
 where
     T: for<'de> Deserialize<'de>,
@@ -687,6 +699,7 @@ fn truncate_claim_fragment(raw: &str) -> String {
     truncated
 }
 
+/// Human-readable structural/outcome diff; `None` when traces match for replay purposes.
 pub(super) fn diff_trace_artifacts(
     expected: &DeepSearchTraceArtifact,
     actual: &DeepSearchTraceArtifact,

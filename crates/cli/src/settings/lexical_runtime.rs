@@ -19,6 +19,7 @@ pub enum LexicalBackendMode {
 }
 
 impl LexicalBackendMode {
+    /// Snake-case backend id for CLI flags, config files, and diagnostics.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -53,7 +54,9 @@ impl FromStr for LexicalBackendMode {
 /// Lexical backend mode and optional ripgrep executable override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct LexicalRuntimeConfig {
+    /// Selected backend; `Auto` prefers ripgrep when available, else native scanning.
     pub backend: LexicalBackendMode,
+    /// Explicit `rg` path when PATH resolution is insufficient for the host environment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ripgrep_executable: Option<PathBuf>,
 }

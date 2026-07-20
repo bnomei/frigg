@@ -15,12 +15,14 @@ fn vector_store_error_is_repairable(message: &str) -> bool {
 }
 
 impl Storage {
+    /// Creates a storage handle for the SQLite database at `db_path` without opening it yet.
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
         }
     }
 
+    /// Returns the configured path to `.frigg/storage.sqlite3` (or an override path).
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }
@@ -48,6 +50,7 @@ impl Storage {
         }
     }
 
+    /// Initializes schema without registering sqlite-vec (manifest-only or pre-vector index paths).
     pub(crate) fn initialize_without_vector_store(&self) -> FriggResult<()> {
         self.initialize_with_vector_store(false)
     }
@@ -67,17 +70,23 @@ impl Storage {
         ))
     }
 
+    /// Fails unless the on-disk schema matches this build's [`CURRENT_SCHEMA_VERSION`].
+    ///
+    /// Incompatible or uninitialized databases are rejected so callers rebuild regenerable
+    /// index state rather than migrating in place.
     pub fn require_current_schema(&self) -> FriggResult<()> {
         let conn = open_existing_connection(&self.db_path)?;
         self.require_current_schema_on_connection(&conn)
     }
 
+    /// Opens a writable connection after verifying the current storage schema.
     pub(crate) fn open_current_schema_connection(&self) -> FriggResult<Connection> {
         let conn = open_existing_connection(&self.db_path)?;
         self.require_current_schema_on_connection(&conn)?;
         Ok(conn)
     }
 
+    /// Opens a multi-phase [`StorageSession`] that reuses one schema-checked connection.
     pub(crate) fn open_session(&self) -> FriggResult<StorageSession> {
         let conn = self.open_current_schema_connection()?;
         Ok(StorageSession {
@@ -86,6 +95,8 @@ impl Storage {
         })
     }
 
+    /// Schema gate used by open and verify paths: empty DB is uninitialized; other versions are
+    /// hard-incompatible.
     pub(crate) fn require_current_schema_on_connection(
         &self,
         conn: &Connection,
@@ -163,6 +174,7 @@ impl Storage {
         Ok(())
     }
 
+    /// Reads the persisted schema version, or `0` when the schema_version table is absent.
     pub fn schema_version(&self) -> FriggResult<i64> {
         let conn = open_existing_connection(&self.db_path)?;
         if !table_exists(&conn, "schema_version")? {
@@ -252,6 +264,10 @@ impl Storage {
         Ok(())
     }
 
+    /// Lifecycle heal for repairable vector-table damage; returns which invariant categories fixed.
+    ///
+    /// Rebuilds the sqlite-vec partition when schema/table mismatches are detected. Non-repairable
+    /// failures propagate so callers can delete and reindex.
     pub fn repair_storage_invariants(&self) -> FriggResult<StorageInvariantRepairSummary> {
         let conn = self.open_current_schema_connection()?;
         let mut repaired_categories = Vec::new();
@@ -398,6 +414,7 @@ impl Storage {
         Ok(partitions)
     }
 
+    /// Ensures the sqlite-vec virtual table exists at `expected_dimensions`.
     pub fn initialize_vector_store(
         &self,
         expected_dimensions: usize,
@@ -406,6 +423,7 @@ impl Storage {
         initialize_vector_store_on_connection(&conn, expected_dimensions)
     }
 
+    /// Verifies extension readiness and vector-table schema without rewriting rows.
     pub fn verify_vector_store(
         &self,
         expected_dimensions: usize,
@@ -416,6 +434,7 @@ impl Storage {
 }
 
 impl StorageSession {
+    /// Truncates the WAL after a multi-phase index so readers see a compact durable file.
     pub(crate) fn checkpoint_wal_truncate(&self) -> FriggResult<()> {
         checkpoint_wal_truncate_on_connection(&self.conn, &self.db_path)
     }

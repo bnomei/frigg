@@ -42,6 +42,7 @@ fn require_trimmed_input<'a>(value: &'a str, field: &str) -> FriggResult<&'a str
 }
 
 impl StorageSession {
+    /// Loads the live semantic head for a repository provider-model partition.
     pub(crate) fn load_semantic_head_for_repository_model(
         &self,
         repository_id: &str,
@@ -59,6 +60,7 @@ impl StorageSession {
         )
     }
 
+    /// Loads full semantic chunk records for a subset of chunk ids in one provider-model partition.
     pub(crate) fn load_semantic_embeddings_for_repository_model_chunk_ids(
         &self,
         repository_id: &str,
@@ -209,6 +211,7 @@ fn load_semantic_embeddings_for_repository_model_chunk_ids_on_connection(
 }
 
 impl Storage {
+    /// Opens a reusable semantic read context for head, KNN, and payload queries.
     pub(crate) fn open_semantic_read_context(&self) -> FriggResult<SemanticReadContext> {
         #[cfg(test)]
         record_semantic_read_context_open();
@@ -217,6 +220,7 @@ impl Storage {
         })
     }
 
+    /// Loads the live semantic head for a repository provider-model partition.
     pub fn load_semantic_head_for_repository_model(
         &self,
         repository_id: &str,
@@ -246,6 +250,7 @@ impl Storage {
         load_semantic_head_for_repository_model_on_connection(&conn, repository_id, provider, model)
     }
 
+    /// Loads full semantic chunk records for every head covering `snapshot_id`.
     pub fn load_semantic_embeddings_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -359,6 +364,7 @@ impl Storage {
         })
     }
 
+    /// Loads full semantic records for selected chunk ids within one provider-model partition.
     pub fn load_semantic_embeddings_for_repository_model_chunk_ids(
         &self,
         repository_id: &str,
@@ -376,6 +382,7 @@ impl Storage {
         )
     }
 
+    /// Loads path/line/embedding projections for all models covering a snapshot (no text payload).
     pub fn load_semantic_embedding_projections_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -389,6 +396,7 @@ impl Storage {
         )
     }
 
+    /// Loads embedding projections for a snapshot, optionally filtered by provider and model.
     pub fn load_semantic_embedding_projections_for_repository_snapshot_model(
         &self,
         repository_id: &str,
@@ -497,6 +505,7 @@ impl Storage {
         })
     }
 
+    /// Runs cosine KNN over the live semantic vector partition for one provider-model snapshot.
     #[allow(clippy::too_many_arguments)]
     pub fn load_semantic_vector_topk_for_repository_snapshot_model(
         &self,
@@ -520,6 +529,7 @@ impl Storage {
             )
     }
 
+    /// Loads text payloads for selected semantic chunks after vector or id-based recall.
     pub fn load_semantic_chunk_payloads_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -534,6 +544,7 @@ impl Storage {
             )
     }
 
+    /// Cheap membership probe: whether a provider-model head covers `snapshot_id` with rows.
     pub fn has_semantic_embeddings_for_repository_snapshot_model(
         &self,
         repository_id: &str,
@@ -550,6 +561,7 @@ impl Storage {
             )
     }
 
+    /// Counts live embedding rows for a repository provider-model head covering `snapshot_id`.
     pub fn count_semantic_embeddings_for_repository_snapshot_model(
         &self,
         repository_id: &str,
@@ -613,6 +625,7 @@ impl Storage {
         })
     }
 
+    /// Finds the newest manifest snapshot covered by a ready semantic head for provider/model.
     pub fn load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
         &self,
         repository_id: &str,
@@ -627,6 +640,7 @@ impl Storage {
             )
     }
 
+    /// Convenience map of chunk id → content text after payload load.
     pub fn load_semantic_chunk_texts_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -646,6 +660,7 @@ impl Storage {
 }
 
 impl SemanticReadContext {
+    /// KNN over the live vector partition; language filter is optional post-partition narrowing.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn load_semantic_vector_topk_for_repository_snapshot_model(
         &self,
@@ -682,6 +697,7 @@ impl SemanticReadContext {
         )
     }
 
+    /// Loads full text payloads for selected chunk ids without reopening the connection.
     pub(crate) fn load_semantic_chunk_payloads_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -702,6 +718,7 @@ impl SemanticReadContext {
         )
     }
 
+    /// Loads truncated previews for bounded MCP/CLI response surfaces.
     pub(crate) fn load_semantic_chunk_previews_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -722,6 +739,7 @@ impl SemanticReadContext {
         )
     }
 
+    /// Membership probe on a reused semantic read connection.
     pub(crate) fn has_semantic_embeddings_for_repository_snapshot_model(
         &self,
         repository_id: &str,
@@ -743,6 +761,7 @@ impl SemanticReadContext {
         )
     }
 
+    /// Latest snapshot id with a ready semantic head for provider/model on this connection.
     pub(crate) fn load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
         &self,
         repository_id: &str,

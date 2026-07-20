@@ -369,6 +369,7 @@ pub struct WorkspacePreciseRepoLocalTouchRisk {
 }
 
 impl WorkspacePreciseRepoLocalTouchRisk {
+    /// True when the generator declares no writes, executes, or may-patch paths.
     pub fn is_empty(&self) -> bool {
         self.writes.is_empty() && self.executes.is_empty() && self.may_patch.is_empty()
     }

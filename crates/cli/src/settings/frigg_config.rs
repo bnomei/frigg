@@ -24,12 +24,19 @@ pub const DEFAULT_MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 /// Top-level configuration shared by indexing, retrieval, watch, and MCP serving.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FriggConfig {
+    /// Git workspace roots adopted for indexing, search, and MCP serve.
     pub workspace_roots: Vec<PathBuf>,
+    /// Hard cap on lexical/hybrid result rows returned to callers.
     pub max_search_results: usize,
+    /// Per-file read budget; larger files are skipped during index and bounded reads.
     pub max_file_bytes: usize,
+    /// When true, precise-graph ingest prefers full SCIP corpora over sparse fallbacks.
     pub full_scip_ingest: bool,
+    /// Debounced watch and dual-class refresh policy for long-lived runtimes.
     pub watch: WatchConfig,
+    /// Lexical backend mode (native vs ripgrep) and optional executable override.
     pub lexical_runtime: LexicalRuntimeConfig,
+    /// Semantic provider, model, and enablement for embedding-backed recall.
     pub semantic_runtime: SemanticRuntimeConfig,
 }
 
@@ -52,10 +59,14 @@ impl FriggConfig {
         RepositoryId(format!("repo-{:03}", index + 1))
     }
 
+    /// Builds config from explicit roots, defaulting to `"."` when the list is empty.
+    ///
+    /// Requires at least one existing Git workspace root after defaults are applied.
     pub fn from_workspace_roots(workspace_roots: Vec<PathBuf>) -> FriggResult<Self> {
         Self::from_workspace_roots_with_mode(workspace_roots, true)
     }
 
+    /// Builds config for MCP serve where empty roots are allowed until a workspace is adopted.
     pub fn from_optional_workspace_roots(workspace_roots: Vec<PathBuf>) -> FriggResult<Self> {
         Self::from_workspace_roots_with_mode(workspace_roots, false)
     }
@@ -86,6 +97,7 @@ impl FriggConfig {
         Ok(cfg)
     }
 
+    /// Validates budgets, watch/semantic sections, and requires at least one Git workspace root.
     pub fn validate(&self) -> FriggResult<()> {
         self.validate_with_root_requirement(true)
     }
@@ -95,6 +107,7 @@ impl FriggConfig {
         self.validate_with_root_requirement(false)
     }
 
+    /// Fails when no workspace roots are configured (utility commands and non-serve paths).
     pub fn ensure_workspace_roots_configured(&self) -> FriggResult<()> {
         if self.workspace_roots.is_empty() {
             return Err(FriggError::InvalidInput(

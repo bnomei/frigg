@@ -206,6 +206,7 @@ fn collect_symbols_from_node(
     }
 }
 
+/// Appends a symbol definition when the name is non-empty and the stable id is not already present.
 pub(crate) fn push_symbol_definition(
     symbols: &mut Vec<SymbolDefinition>,
     language: SymbolLanguage,

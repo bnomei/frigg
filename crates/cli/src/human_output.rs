@@ -23,6 +23,7 @@ pub enum HumanRow {
 }
 
 impl HumanRow {
+    /// Key-value row with a left-aligned label column and truncated value.
     pub fn kv(label: impl Into<String>, value: impl Into<String>) -> Self {
         Self::Kv {
             label: label.into(),
@@ -30,10 +31,12 @@ impl HumanRow {
         }
     }
 
+    /// Dim single-line note; empty notes are dropped at render time.
     pub fn note(value: impl Into<String>) -> Self {
         Self::Note(value.into())
     }
 
+    /// Path row that rewrites `"."` into a workspace-friendly label.
     pub fn path(value: impl Into<String>) -> Self {
         Self::Path(value.into())
     }
@@ -76,6 +79,7 @@ enum HumanBadgeMode {
 }
 
 impl HumanBlock {
+    /// Builds a titled card; `marker`/`accent`/`rail_accent` are ANSI style codes for color mode.
     pub fn new(
         title: impl Into<String>,
         rows: Vec<HumanRow>,
@@ -94,6 +98,7 @@ impl HumanBlock {
         }
     }
 
+    /// Places a short badge on the title line only (no reserved column on body rows).
     pub fn with_badge(mut self, badge: impl Into<String>) -> Self {
         let badge = badge.into();
         if !badge.trim().is_empty() {
@@ -103,6 +108,7 @@ impl HumanBlock {
         self
     }
 
+    /// Places a badge on the title line and keeps a blank badge column on body rows for alignment.
     pub fn with_badge_column(mut self, badge: impl Into<String>) -> Self {
         let badge = badge.into();
         if !badge.trim().is_empty() {
@@ -112,16 +118,19 @@ impl HumanBlock {
         self
     }
 
+    /// Reserves a blank badge column so multi-card stacks share the same left gutter.
     pub fn with_empty_badge_column(mut self) -> Self {
         self.badge = None;
         self.badge_mode = HumanBadgeMode::EmptyColumn;
         self
     }
 
+    /// Renders the card within `width` display columns, applying ANSI color when enabled.
     pub fn render(self, color: bool, width: usize) -> String {
         self.render_with_min_label_width(color, width, None)
     }
 
+    /// Like [`Self::render`], but enforces a minimum label column width across stacked cards.
     pub fn render_with_min_label_width(
         self,
         color: bool,

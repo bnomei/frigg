@@ -9,6 +9,7 @@ use crate::storage::{EntrypointSurfaceProjection, Storage};
 use super::common::normalize_repository_snapshot_ids;
 
 impl Storage {
+    /// Replaces entrypoint-surface projections for bootstrap and runtime path selection.
     pub fn replace_entrypoint_surface_projections_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -98,6 +99,7 @@ impl Storage {
         Ok(())
     }
 
+    /// Loads entrypoint-surface projections for onboarding and build-flow diversification.
     pub fn load_entrypoint_surface_projections_for_repository_snapshot(
         &self,
         repository_id: &str,

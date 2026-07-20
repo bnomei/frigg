@@ -117,51 +117,61 @@ impl SuggestedNext {
         }
     }
 
+    /// Sets the suggested query / pivot token for the next tool call.
     pub fn with_query(mut self, query: impl Into<String>) -> Self {
         self.query = Some(query.into());
         self
     }
 
+    /// Echoes literal vs regex pattern mode when retrying text search.
     pub fn with_pattern_type(mut self, pattern_type: impl Into<String>) -> Self {
         self.pattern_type = Some(pattern_type.into());
         self
     }
 
+    /// Suggests a path-regex scope for the follow-up tool call.
     pub fn with_path_regex(mut self, path_regex: impl Into<String>) -> Self {
         self.path_regex = Some(path_regex.into());
         self
     }
 
+    /// Suggests an include glob for the follow-up tool call.
     pub fn with_glob(mut self, glob: impl Into<String>) -> Self {
         self.glob = Some(glob.into());
         self
     }
 
+    /// Suggests a path-class filter (`runtime` / `project` / `support` / `any`).
     pub fn with_path_class(mut self, path_class: impl Into<String>) -> Self {
         self.path_class = Some(path_class.into());
         self
     }
 
+    /// Suggests a symbol name for navigation or symbol-search recovery.
     pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
         self.symbol = Some(symbol.into());
         self
     }
 
+    /// Pins the recovery suggestion to one repository id.
     pub fn with_repository_id(mut self, repository_id: impl Into<String>) -> Self {
         self.repository_id = Some(repository_id.into());
         self
     }
 
+    /// Suggests a repository-relative path for read/outline follow-ups.
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
         self
     }
 
+    /// Attaches a session proof handle when the next action is `read_match` or similar.
     pub fn with_result_handle(mut self, result_handle: impl Into<String>) -> Self {
         self.result_handle = Some(result_handle.into());
         self
     }
 
+    /// Human-readable reason agents can surface when choosing this next action.
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
         self
@@ -271,6 +281,7 @@ impl ZeroHitScope {
             && self.excluded_by_policy.is_empty()
     }
 
+    /// Records non-empty path-regex scope applied when the tool returned zero hits.
     pub fn with_path_regex(mut self, path_regex: impl Into<String>) -> Self {
         let value = path_regex.into();
         if !value.is_empty() {
@@ -279,6 +290,7 @@ impl ZeroHitScope {
         self
     }
 
+    /// Records non-empty include glob scope applied to the zero-hit request.
     pub fn with_glob(mut self, glob: impl Into<String>) -> Self {
         let value = glob.into();
         if !value.is_empty() {
@@ -287,6 +299,7 @@ impl ZeroHitScope {
         self
     }
 
+    /// Records non-empty path-class filter applied to the zero-hit request.
     pub fn with_path_class(mut self, path_class: impl Into<String>) -> Self {
         let value = path_class.into();
         if !value.is_empty() {
@@ -295,6 +308,7 @@ impl ZeroHitScope {
         self
     }
 
+    /// Records non-empty repository scope applied to the zero-hit request.
     pub fn with_repository_id(mut self, repository_id: impl Into<String>) -> Self {
         let value = repository_id.into();
         if !value.is_empty() {
@@ -303,6 +317,7 @@ impl ZeroHitScope {
         self
     }
 
+    /// Paths omitted by policy (ignore rules / support class) that agents may broaden into.
     pub fn with_excluded_by_policy(mut self, excluded: impl IntoIterator<Item = String>) -> Self {
         self.excluded_by_policy = excluded.into_iter().filter(|v| !v.is_empty()).collect();
         self
@@ -349,6 +364,7 @@ pub struct ZeroHitDiagnostics {
 }
 
 impl ZeroHitDiagnostics {
+    /// True when both scope and index blocks would omit every serializable field.
     pub fn is_empty(&self) -> bool {
         self.scope.as_ref().is_none_or(ZeroHitScope::is_empty)
             && self.index.as_ref().is_none_or(ZeroHitIndex::is_empty)

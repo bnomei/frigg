@@ -47,6 +47,7 @@ pub enum SemanticRuntimeProvider {
 }
 
 impl SemanticRuntimeProvider {
+    /// Snake-case provider id used in config, storage partitions, and operator-facing status.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
@@ -56,6 +57,10 @@ impl SemanticRuntimeProvider {
         }
     }
 
+    /// Process env var that must hold a non-empty API key when this provider is enabled.
+    ///
+    /// Local embeddings do not need a key. `openai_compat` prefers its dedicated var but may
+    /// fall back to `OPENAI_API_KEY` via [`SemanticRuntimeCredentials::api_key_for`].
     pub fn api_key_env_var(self) -> Option<&'static str> {
         match self {
             Self::OpenAi => Some(OPENAI_API_KEY_ENV_VAR),
@@ -65,6 +70,7 @@ impl SemanticRuntimeProvider {
         }
     }
 
+    /// Built-in embedding model id when operators omit `--semantic-runtime-model`.
     pub fn default_model(self) -> &'static str {
         match self {
             Self::OpenAi | Self::OpenAiCompat => DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -73,6 +79,7 @@ impl SemanticRuntimeProvider {
         }
     }
 
+    /// Whether config must supply a full embeddings HTTP URL (`openai_compat` only).
     pub fn requires_endpoint(self) -> bool {
         matches!(self, Self::OpenAiCompat)
     }
@@ -104,9 +111,13 @@ impl FromStr for SemanticRuntimeProvider {
 /// Controls whether semantic indexing and recall participate in the runtime contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SemanticRuntimeConfig {
+    /// When false, semantic channels stay idle and startup skips credential checks.
     pub enabled: bool,
+    /// Embedding backend; required when [`Self::enabled`] is true.
     pub provider: Option<SemanticRuntimeProvider>,
+    /// Provider model id; blank strings fail validation; `None` uses the provider default.
     pub model: Option<String>,
+    /// When true, serve/index fail closed if the embedding provider is not ready.
     pub strict_mode: bool,
     /// Full embeddings HTTP URL for [`SemanticRuntimeProvider::OpenAiCompat`].
     ///
@@ -118,12 +129,16 @@ pub struct SemanticRuntimeConfig {
 /// Process-environment API keys consumed during semantic runtime startup.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemanticRuntimeCredentials {
+    /// Value of [`OPENAI_API_KEY_ENV_VAR`], also used as `openai_compat` fallback.
     pub openai_api_key: Option<String>,
+    /// Value of [`OPENAI_COMPAT_API_KEY_ENV_VAR`] for OpenAI-protocol proxies.
     pub openai_compat_api_key: Option<String>,
+    /// Value of [`GEMINI_API_KEY_ENV_VAR`] for Google embeddings.
     pub gemini_api_key: Option<String>,
 }
 
 impl SemanticRuntimeCredentials {
+    /// Loads API keys from the process environment without validating presence or non-emptiness.
     pub fn from_process_env() -> Self {
         Self {
             openai_api_key: std::env::var(OPENAI_API_KEY_ENV_VAR).ok(),
@@ -169,6 +184,7 @@ pub enum SemanticRuntimeConfigError {
 }
 
 impl SemanticRuntimeConfigError {
+    /// MCP-facing error code for invalid semantic runtime configuration.
     pub fn code(&self) -> &'static str {
         SEMANTIC_RUNTIME_INVALID_PARAMS_CODE
     }
@@ -190,6 +206,7 @@ pub enum SemanticRuntimeCredentialError {
 }
 
 impl SemanticRuntimeCredentialError {
+    /// MCP-facing error code for missing or blank provider credentials.
     pub fn code(&self) -> &'static str {
         SEMANTIC_RUNTIME_INVALID_PARAMS_CODE
     }
@@ -205,12 +222,14 @@ pub enum SemanticRuntimeStartupError {
 }
 
 impl SemanticRuntimeStartupError {
+    /// MCP-facing error code shared by config and credential startup failures.
     pub fn code(&self) -> &'static str {
         SEMANTIC_RUNTIME_INVALID_PARAMS_CODE
     }
 }
 
 impl SemanticRuntimeConfig {
+    /// Checks provider/model/endpoint shape when semantic runtime is enabled; no-op when disabled.
     pub fn validate(&self) -> Result<(), SemanticRuntimeConfigError> {
         if !self.enabled {
             return Ok(());
@@ -235,6 +254,7 @@ impl SemanticRuntimeConfig {
         Ok(())
     }
 
+    /// Trimmed configured model, or the provider default when model is unset.
     pub fn normalized_model(&self) -> Option<&str> {
         match self.model.as_deref() {
             Some(model) => {
@@ -273,6 +293,7 @@ impl SemanticRuntimeConfig {
         Ok(())
     }
 
+    /// Validates config shape plus process credentials so serve/index fail before the first embed.
     pub fn validate_startup(
         &self,
         credentials: &SemanticRuntimeCredentials,

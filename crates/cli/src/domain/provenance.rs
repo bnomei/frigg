@@ -45,6 +45,7 @@ pub enum WorkloadToolFamily {
 }
 
 impl WorkloadToolFamily {
+    /// Snake-case wire label for workload-family grouping in provenance.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Content => "content",
@@ -81,6 +82,7 @@ pub enum WorkloadToolClass {
 }
 
 impl WorkloadToolClass {
+    /// Maps an MCP tool name to its normalized workload class; unknown tools map to `Unknown`.
     pub fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
             "read_file" => Self::BoundedFileExploration,
@@ -110,6 +112,7 @@ impl WorkloadToolClass {
         }
     }
 
+    /// Parent workload family used for coarse provenance grouping.
     pub fn family(self) -> WorkloadToolFamily {
         match self {
             Self::BoundedFileExploration => WorkloadToolFamily::Content,
@@ -130,6 +133,7 @@ impl WorkloadToolClass {
         }
     }
 
+    /// Snake-case wire label for tool-class provenance fields.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BoundedFileExploration => "bounded_file_exploration",
@@ -165,6 +169,7 @@ pub enum WorkloadPrecisionMode {
 }
 
 impl WorkloadPrecisionMode {
+    /// Snake-case wire label for precision tier in workload metadata.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
@@ -175,6 +180,7 @@ impl WorkloadPrecisionMode {
         }
     }
 
+    /// Parses a precision label; unrecognized values map to `Unknown`.
     pub fn from_label(value: &str) -> Self {
         match value {
             "exact" => Self::Exact,
@@ -203,6 +209,7 @@ pub enum WorkloadFallbackReason {
 }
 
 impl WorkloadFallbackReason {
+    /// Snake-case wire label for recovery/fallback attribution.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -216,6 +223,7 @@ impl WorkloadFallbackReason {
         }
     }
 
+    /// Parses a fallback-reason label; unrecognized values map to `Unknown`.
     pub fn from_label(value: &str) -> Self {
         match value {
             "none" => Self::None,
@@ -242,6 +250,7 @@ pub enum WorkloadRepositoryScopeKind {
 }
 
 impl WorkloadRepositoryScopeKind {
+    /// Snake-case wire label for repository cardinality on a workload.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unspecified => "unspecified",
@@ -261,6 +270,7 @@ pub struct WorkloadRepositoryScope {
 }
 
 impl WorkloadRepositoryScope {
+    /// Builds scope metadata; truncates id list and id text for workload payload bounds.
     pub fn new(repository_scope: WorkloadRepositoryScopeKind, repository_ids: Vec<String>) -> Self {
         let repository_count = repository_ids.len();
         let repository_ids = bounded_repository_ids(repository_ids, WORKLOAD_REPOSITORY_ID_LIMIT);
@@ -272,10 +282,12 @@ impl WorkloadRepositoryScope {
         }
     }
 
+    /// Empty scope when no repository context was attached to the invocation.
     pub fn unspecified() -> Self {
         Self::new(WorkloadRepositoryScopeKind::Unspecified, Vec::new())
     }
 
+    /// Infers single/multi/unspecified scope from repository ids with payload bounds applied.
     pub fn from_repository_ids(repository_ids: &[String]) -> Self {
         match repository_ids.len() {
             0 => Self::unspecified(),
@@ -293,6 +305,7 @@ impl WorkloadRepositoryScope {
         }
     }
 
+    /// Snake-case cardinality label for the attached repository scope.
     pub fn scope_label(&self) -> &'static str {
         self.scope.as_str()
     }
@@ -307,6 +320,7 @@ pub struct WorkloadStageSample {
 }
 
 impl WorkloadStageSample {
+    /// Builds a stage timing/cardinality sample from already-bounded u64 counters.
     pub const fn new(elapsed_us: u64, input_count: u64, output_count: u64) -> Self {
         Self {
             elapsed_us,
@@ -315,6 +329,7 @@ impl WorkloadStageSample {
         }
     }
 
+    /// Convenience alias for constructing samples from u64 stage counters.
     pub fn from_u64s(elapsed_us: u64, input_count: u64, output_count: u64) -> Self {
         Self {
             elapsed_us,
@@ -323,6 +338,7 @@ impl WorkloadStageSample {
         }
     }
 
+    /// Converts usize stage counters into a sample, saturating at `u64::MAX`.
     pub fn bounded_from_usizes(elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
         Self {
             elapsed_us: bounded_to_u64(elapsed_us),
@@ -331,6 +347,7 @@ impl WorkloadStageSample {
         }
     }
 
+    /// True when the stage recorded no elapsed time and no input/output traffic.
     pub fn is_zero(self) -> bool {
         self.elapsed_us == 0 && self.input_count == 0 && self.output_count == 0
     }
@@ -357,6 +374,7 @@ pub struct WorkloadStageAttribution {
 }
 
 impl WorkloadStageAttribution {
+    /// Zeroed attribution used when stage timing was not collected.
     pub const fn empty() -> Self {
         Self {
             candidate_intake: WorkloadStageSample::new(0, 0, 0),
@@ -371,6 +389,7 @@ impl WorkloadStageAttribution {
         }
     }
 
+    /// Records candidate intake stage timing and cardinality.
     pub fn with_candidate_intake(
         mut self,
         elapsed_us: usize,
@@ -382,6 +401,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records freshness-validation stage timing and cardinality.
     pub fn with_freshness_validation(
         mut self,
         elapsed_us: usize,
@@ -393,11 +413,13 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records lexical/scan stage timing and cardinality.
     pub fn with_scan(mut self, elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
         self.scan = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
+    /// Records path-witness scoring stage timing and cardinality.
     pub fn with_witness_scoring(
         mut self,
         elapsed_us: usize,
@@ -409,6 +431,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records graph-expansion stage timing and cardinality.
     pub fn with_graph_expansion(
         mut self,
         elapsed_us: usize,
@@ -420,6 +443,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records semantic-retrieval stage timing and cardinality.
     pub fn with_semantic_retrieval(
         mut self,
         elapsed_us: usize,
@@ -431,6 +455,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records multi-channel anchor blending stage timing and cardinality.
     pub fn with_anchor_blending(
         mut self,
         elapsed_us: usize,
@@ -442,6 +467,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records document-aggregation stage timing and cardinality.
     pub fn with_document_aggregation(
         mut self,
         elapsed_us: usize,
@@ -453,6 +479,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// Records final diversification stage timing and cardinality.
     pub fn with_final_diversification(
         mut self,
         elapsed_us: usize,
@@ -464,6 +491,7 @@ impl WorkloadStageAttribution {
         self
     }
 
+    /// True when every stage sample is zero (no attribution recorded).
     pub fn is_empty(&self) -> bool {
         self == &Self::empty()
     }
@@ -491,6 +519,7 @@ pub struct NormalizedWorkloadMetadata {
 }
 
 impl NormalizedWorkloadMetadata {
+    /// Builds workload metadata from an MCP tool name, scope, and precision tier.
     pub fn new(
         tool_name: &str,
         repository_scope: WorkloadRepositoryScope,
@@ -508,6 +537,7 @@ impl NormalizedWorkloadMetadata {
         }
     }
 
+    /// Attaches a recovery/fallback reason with optional bounded detail text.
     pub fn with_fallback_reason(
         mut self,
         fallback_reason: WorkloadFallbackReason,
@@ -518,6 +548,7 @@ impl NormalizedWorkloadMetadata {
         self
     }
 
+    /// Builds metadata while inferring repository scope from the id list.
     pub fn from_repository_ids(
         tool_name: &str,
         repository_ids: &[String],
@@ -530,34 +561,41 @@ impl NormalizedWorkloadMetadata {
         )
     }
 
+    /// Replaces the repository scope attached to this workload record.
     pub fn with_repository_scope(mut self, repository_scope: WorkloadRepositoryScope) -> Self {
         self.repository_scope = repository_scope;
         self
     }
 
+    /// Sets or clears bounded free-form fallback detail without changing the reason code.
     pub fn with_fallback_reason_detail(mut self, detail: Option<String>) -> Self {
         self.fallback_reason_detail = detail.map(|value| bounded_text(&value, WORKLOAD_TEXT_LIMIT));
         self
     }
 
+    /// Overrides the precision tier after graph/semantic recovery decisions.
     pub fn with_precision_mode(mut self, precision_mode: WorkloadPrecisionMode) -> Self {
         self.precision_mode = precision_mode;
         self
     }
 
+    /// Attaches stage-level timing samples for workload attribution.
     pub fn with_stage_attribution(mut self, stage_attribution: WorkloadStageAttribution) -> Self {
         self.stage_attribution = Some(stage_attribution);
         self
     }
 
+    /// True when a fallback reason was recorded for this invocation.
     pub fn has_fallback(&self) -> bool {
         self.fallback_reason.is_some()
     }
 
+    /// Snake-case repository-scope cardinality label.
     pub fn repository_scope_label(&self) -> &'static str {
         self.repository_scope.scope_label()
     }
 
+    /// Serializes to JSON for MCP/provenance payloads, with a minimal fallback on error.
     pub fn as_payload_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| {
             json!({

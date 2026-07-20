@@ -6,6 +6,7 @@
 use super::*;
 use protobuf::Message;
 
+/// Decodes a JSON SCIP index payload into the internal document model.
 pub(super) fn parse_scip_json(
     artifact_label: &str,
     payload: &[u8],
@@ -23,6 +24,7 @@ pub(super) fn parse_scip_json(
     })
 }
 
+/// Decodes a protobuf SCIP index and maps it into the shared JSON-shaped intermediate form.
 pub(super) fn parse_scip_protobuf(
     artifact_label: &str,
     payload: &[u8],
@@ -142,6 +144,9 @@ fn scip_relationship_from_protobuf(relationship: ScipRelationshipProto) -> ScipR
     }
 }
 
+/// Normalizes SCIP documents into repository-scoped precise records ready for storage.
+///
+/// Validates relative paths, ranges, and relationship flags; sorts documents by path.
 pub(super) fn map_scip_documents(
     repository_id: &str,
     artifact_label: &str,
@@ -436,6 +441,7 @@ fn relationship_kinds(relationship: &ScipRelationshipJson) -> Vec<PreciseRelatio
     kinds
 }
 
+/// Applies mapped SCIP documents via replace or overlay storage modes and returns upsert counts.
 pub(super) fn apply_scip_documents(
     graph: &mut SymbolGraph,
     artifact_label: &str,

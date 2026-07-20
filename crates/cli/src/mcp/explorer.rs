@@ -10,8 +10,11 @@ use regex::Regex;
 use crate::mcp::server_cache::FileContentSnapshot;
 use crate::mcp::types::{ExploreAnchor, ExploreCursor, ExploreLineWindow};
 
+/// Default context lines above/below an explore zoom anchor.
 pub(crate) const DEFAULT_CONTEXT_LINES: usize = 3;
+/// Hard cap on explore context lines accepted from tool params.
 pub(crate) const MAX_CONTEXT_LINES: usize = 32;
+/// Default page size for explore probe/refine match rows.
 pub(crate) const DEFAULT_MAX_MATCHES: usize = 8;
 
 /// Explore window failure: I/O error or a line_start outside the file's total line count.
@@ -48,6 +51,7 @@ pub(crate) enum ExploreMatcher {
 }
 
 impl ExploreMatcher {
+    /// Byte spans `(start, end)` of all non-overlapping matches on one line.
     pub(crate) fn find_spans(&self, line: &str) -> Vec<(usize, usize)> {
         match self {
             Self::Literal(query) => line
@@ -95,6 +99,7 @@ pub(crate) struct ExploreScanResult {
     pub lossy_utf8: bool,
 }
 
+/// Validates 1-based inclusive explore anchors (lines/columns must be non-zero and ordered).
 pub(crate) fn validate_anchor(anchor: &ExploreAnchor) -> Result<(), &'static str> {
     if anchor.start_line == 0 || anchor.end_line == 0 {
         return Err("anchor line positions must be greater than zero");
@@ -111,6 +116,7 @@ pub(crate) fn validate_anchor(anchor: &ExploreAnchor) -> Result<(), &'static str
     Ok(())
 }
 
+/// Validates a 1-based explore resume cursor (`line` and `column` must be non-zero).
 pub(crate) fn validate_cursor(cursor: &ExploreCursor) -> Result<(), &'static str> {
     if cursor.line == 0 {
         return Err("resume_from.line must be greater than zero");
@@ -121,6 +127,7 @@ pub(crate) fn validate_cursor(cursor: &ExploreCursor) -> Result<(), &'static str
     Ok(())
 }
 
+/// Expands an anchor by `context_lines` into an inclusive 1-based line window (clamped at line 1).
 pub(crate) fn line_window_around_anchor(
     anchor: &ExploreAnchor,
     context_lines: usize,
@@ -131,6 +138,7 @@ pub(crate) fn line_window_around_anchor(
     }
 }
 
+/// Path convenience wrapper: load a file snapshot then slice a lossy line window.
 #[allow(dead_code)]
 pub(crate) fn read_line_slice_lossy(
     path: &Path,
@@ -142,6 +150,7 @@ pub(crate) fn read_line_slice_lossy(
     snapshot.read_line_slice_lossy(line_start, line_end, max_bytes)
 }
 
+/// Path convenience wrapper: load a file snapshot then run an explore scope scan.
 #[allow(dead_code)]
 pub(crate) fn scan_file_scope_lossy(
     path: &Path,
@@ -163,6 +172,7 @@ pub(crate) fn scan_file_scope_lossy(
     ))
 }
 
+/// Strips trailing CR/LF and decodes a line lossily; second value is true when replacement occurred.
 pub(crate) fn normalize_lossy_line_bytes(raw_line: &[u8]) -> (String, bool) {
     let mut line_bytes = raw_line;
     if line_bytes.ends_with(b"\n") {
@@ -176,6 +186,7 @@ pub(crate) fn normalize_lossy_line_bytes(raw_line: &[u8]) -> (String, bool) {
     (normalized.into_owned(), had_lossy_utf8)
 }
 
+/// True when `(line, column)` is strictly before a resume cursor (same line: column-before).
 pub(crate) fn position_is_before_cursor(
     line: usize,
     column: usize,

@@ -153,6 +153,7 @@ impl Storage {
         })
     }
 
+    /// Lifecycle heal: drops and rebuilds the sqlite-vec table from live embedding rows.
     pub fn repair_semantic_vector_store(&self) -> FriggResult<()> {
         let mut conn = self.open_current_schema_connection()?;
         let tx = conn.transaction().map_err(|err| {
@@ -177,6 +178,9 @@ impl Storage {
         Ok(())
     }
 
+    /// Prunes older manifest snapshots for a repository, keeping the newest `keep_latest` epochs.
+    ///
+    /// Semantic heads and live corpora are preserved; only superseded snapshot rows are removed.
     pub fn prune_repository_snapshots(
         &self,
         repository_id: &str,
@@ -188,6 +192,7 @@ impl Storage {
 }
 
 impl StorageSession {
+    /// Session-scoped full replace of a repository provider-model semantic partition.
     pub(crate) fn replace_semantic_embeddings_for_repository(
         &mut self,
         repository_id: &str,
@@ -206,6 +211,7 @@ impl StorageSession {
         )
     }
 
+    /// Session-scoped incremental advance of semantic embeddings onto a new manifest snapshot.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn advance_semantic_embeddings_for_repository(
         &mut self,
@@ -231,6 +237,7 @@ impl StorageSession {
         )
     }
 
+    /// Session-scoped retention prune of superseded manifest snapshots.
     pub(crate) fn prune_repository_snapshots(
         &mut self,
         repository_id: &str,

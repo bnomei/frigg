@@ -33,6 +33,7 @@ pub enum SymbolKind {
 }
 
 impl SymbolKind {
+    /// Stable snake_case label for the symbol kind used in ids, logs, and wire formats.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Module => "module",

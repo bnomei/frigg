@@ -12,6 +12,7 @@ use rusqlite::Transaction;
 use super::*;
 
 impl Storage {
+    /// Registers or updates a repository root and display name in durable storage.
     pub fn upsert_repository(
         &self,
         repository_id: &str,
@@ -22,6 +23,7 @@ impl Storage {
         upsert_repository_on_connection(&conn, repository_id, root_path, display_name)
     }
 
+    /// Writes one manifest snapshot (file digests) that anchors projections and semantic heads.
     pub fn upsert_manifest(
         &self,
         repository_id: &str,
@@ -32,11 +34,13 @@ impl Storage {
         upsert_manifest_on_connection(&mut conn, repository_id, snapshot_id, entries)
     }
 
+    /// Loads every file row stored under a manifest `snapshot_id`.
     pub fn load_manifest_for_snapshot(&self, snapshot_id: &str) -> FriggResult<Vec<ManifestEntry>> {
         let conn = self.open_current_schema_connection()?;
         load_manifest_entries_for_snapshot(&conn, snapshot_id)
     }
 
+    /// Returns the newest manifest snapshot for a repository, when any exist.
     pub fn load_latest_manifest_for_repository(
         &self,
         repository_id: &str,
@@ -45,6 +49,7 @@ impl Storage {
         load_latest_manifest_snapshot_for_repository(&conn, repository_id)
     }
 
+    /// Loads latest manifest metadata (no content hashes) for freshness and context summaries.
     pub fn load_latest_manifest_metadata_for_repository(
         &self,
         repository_id: &str,
@@ -53,6 +58,7 @@ impl Storage {
         load_latest_manifest_metadata_snapshot_for_repository(&conn, repository_id)
     }
 
+    /// Cached metadata summary for context-efficiency accounting over the latest manifest.
     #[allow(dead_code)]
     pub(crate) fn load_latest_context_efficiency_manifest_summary_for_repository(
         &self,
@@ -84,6 +90,7 @@ impl Storage {
         Ok(Some(summary))
     }
 
+    /// Deletes a manifest snapshot and cascade-linked rows; used by retention prune and rollback.
     pub fn delete_snapshot(&self, snapshot_id: &str) -> FriggResult<()> {
         let snapshot_id = snapshot_id.trim();
         if snapshot_id.is_empty() {
@@ -112,6 +119,7 @@ impl Storage {
 }
 
 impl StorageSession {
+    /// Session-scoped repository upsert reusing the open index connection.
     pub(crate) fn upsert_repository(
         &self,
         repository_id: &str,
@@ -121,6 +129,7 @@ impl StorageSession {
         upsert_repository_on_connection(&self.conn, repository_id, root_path, display_name)
     }
 
+    /// Session-scoped manifest snapshot write for multi-phase index commits.
     pub(crate) fn upsert_manifest(
         &mut self,
         repository_id: &str,
@@ -130,6 +139,7 @@ impl StorageSession {
         upsert_manifest_on_connection(&mut self.conn, repository_id, snapshot_id, entries)
     }
 
+    /// Session-scoped load of file digests for one snapshot.
     pub(crate) fn load_manifest_for_snapshot(
         &self,
         snapshot_id: &str,
@@ -137,6 +147,7 @@ impl StorageSession {
         load_manifest_entries_for_snapshot(&self.conn, snapshot_id)
     }
 
+    /// Session-scoped latest-manifest lookup without reopening storage.
     pub(crate) fn load_latest_manifest_for_repository(
         &self,
         repository_id: &str,
@@ -144,6 +155,7 @@ impl StorageSession {
         load_latest_manifest_snapshot_for_repository(&self.conn, repository_id)
     }
 
+    /// Session-scoped snapshot delete for prune and semantic-failure rollback.
     pub(crate) fn delete_snapshot(&mut self, snapshot_id: &str) -> FriggResult<()> {
         let snapshot_id = snapshot_id.trim();
         if snapshot_id.is_empty() {

@@ -446,6 +446,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     })
 }
 
+/// Derives whether semantic work is disabled, reused, rebuilt, or advanced for this index plan.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_semantic_refresh_plan(
     repository_id: &str,
@@ -642,6 +643,7 @@ fn dedup_semantic_paths(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Executes embedding replace/advance for a planned semantic refresh against the open session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_semantic_refresh_plan(
     repository_id: &str,

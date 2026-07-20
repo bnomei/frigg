@@ -13,21 +13,27 @@ pub type FriggResult<T> = Result<T, FriggError>;
 /// Top-level failure modes surfaced to callers and MCP error envelopes.
 #[derive(Debug, Error)]
 pub enum FriggError {
+    /// Caller-supplied arguments or policy inputs failed validation.
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// Requested entity or path is absent from workspace/storage.
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// Authorization or workspace isolation blocked the operation.
     #[error("access denied: {0}")]
     AccessDenied(String),
 
+    /// Underlying filesystem or IO failure mapped into the domain error surface.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Strict semantic mode failed; recovery must not silently fall back.
     #[error("semantic_status=strict_failure: {reason}")]
     StrictSemanticFailure { reason: String },
 
+    /// Local index schema epoch mismatch; rebuild required (no auto-migration).
     #[error(
         "internal error: storage schema is incompatible (found {found_version}, expected {expected_version}); automatic schema migrations are disabled for Frigg's regenerable local index; delete '{}' and run `frigg index` to rebuild it",
         db_path.display()
@@ -38,6 +44,7 @@ pub enum FriggError {
         db_path: PathBuf,
     },
 
+    /// Unexpected invariant or programming failure not covered by other variants.
     #[error("internal error: {0}")]
     Internal(String),
 }

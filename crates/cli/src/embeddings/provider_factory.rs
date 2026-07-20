@@ -30,7 +30,9 @@ use super::{
 /// Policy controlling whether local model artifacts may be prepared during provider construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalArtifactPolicy {
+    /// Fail construction unless artifacts are already prepared on disk.
     RequirePrepared,
+    /// Download/prepare missing local model artifacts before constructing the provider.
     AllowPreparation,
 }
 

@@ -36,6 +36,7 @@ pub struct SymbolNode {
 }
 
 impl SymbolNode {
+    /// Builds a heuristic graph node from registration inputs (path and line are 1-based source coords).
     pub fn new(
         symbol_id: impl Into<String>,
         repository_id: impl Into<String>,
@@ -67,6 +68,7 @@ pub enum RelationKind {
 }
 
 impl RelationKind {
+    /// Wire/log label for this heuristic relation (`defined_in`, `calls`, …).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DefinedIn => "defined_in",
@@ -109,6 +111,7 @@ pub enum HeuristicConfidence {
 }
 
 impl HeuristicConfidence {
+    /// Wire/log label for this confidence tier (`low` / `medium` / `high`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -117,6 +120,7 @@ impl HeuristicConfidence {
         }
     }
 
+    /// Default confidence for a heuristic relation kind (calls/implements high; defined-in low).
     pub fn from_relation(relation: RelationKind) -> Self {
         match relation {
             RelationKind::Calls
@@ -165,6 +169,7 @@ pub enum PreciseRelationshipKind {
 }
 
 impl PreciseRelationshipKind {
+    /// Wire/log label for this precise relationship kind.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Definition => "definition",
@@ -210,10 +215,12 @@ pub struct PreciseOccurrenceRecord {
 }
 
 impl PreciseOccurrenceRecord {
+    /// Whether SCIP roles mark this occurrence as a definition site.
     pub fn is_definition(&self) -> bool {
         (self.symbol_roles & SCIP_SYMBOL_ROLE_DEFINITION) != 0
     }
 
+    /// Whether `line`/`column` fall inside this occurrence range (column optional = any column on line).
     pub fn contains_location(&self, line: usize, column: Option<usize>) -> bool {
         if line < self.range.start_line || line > self.range.end_line {
             return false;
@@ -295,6 +302,7 @@ pub struct ScipResourceBudgets {
 }
 
 impl ScipResourceBudgets {
+    /// Disables all SCIP ingest ceilings (payload, documents, elapsed time).
     pub const fn unbounded() -> Self {
         Self {
             max_payload_bytes: usize::MAX,
@@ -323,6 +331,7 @@ pub enum ScipInvalidInputCode {
 }
 
 impl ScipInvalidInputCode {
+    /// Stable diagnostic code string for logs and structured error surfaces.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::JsonDecode => "json_decode",
@@ -374,6 +383,7 @@ pub enum ScipResourceBudgetCode {
 }
 
 impl ScipResourceBudgetCode {
+    /// Stable diagnostic code string for which budget dimension was exceeded.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PayloadBytes => "payload_bytes",
@@ -574,6 +584,9 @@ pub struct SymbolGraph {
 }
 
 impl SymbolGraph {
+    /// Replaces per-file precise records from a JSON SCIP index (unbounded resource budgets).
+    ///
+    /// On success returns upsert counts; fails on decode/normalization errors or invalid document paths.
     pub fn ingest_scip_json(
         &mut self,
         repository_id: &str,
@@ -590,6 +603,7 @@ impl SymbolGraph {
         )
     }
 
+    /// Like [`Self::ingest_scip_json`] but enforces payload, document, and elapsed-time budgets.
     pub fn ingest_scip_json_with_budgets(
         &mut self,
         repository_id: &str,
@@ -607,6 +621,7 @@ impl SymbolGraph {
         )
     }
 
+    /// Merges JSON SCIP records without clearing prior per-file symbols/occurrences/relationships.
     pub(crate) fn overlay_scip_json_with_budgets(
         &mut self,
         repository_id: &str,
@@ -624,6 +639,7 @@ impl SymbolGraph {
         )
     }
 
+    /// Replaces per-file precise records from a protobuf SCIP index (unbounded resource budgets).
     pub fn ingest_scip_protobuf(
         &mut self,
         repository_id: &str,
@@ -640,6 +656,7 @@ impl SymbolGraph {
         )
     }
 
+    /// Like [`Self::ingest_scip_protobuf`] but enforces payload, document, and elapsed-time budgets.
     pub fn ingest_scip_protobuf_with_budgets(
         &mut self,
         repository_id: &str,
@@ -657,6 +674,7 @@ impl SymbolGraph {
         )
     }
 
+    /// Merges protobuf SCIP records without clearing prior per-file precise graph state.
     pub(crate) fn overlay_scip_protobuf_with_budgets(
         &mut self,
         repository_id: &str,

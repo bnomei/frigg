@@ -9,6 +9,7 @@ use crate::storage::{PathSurfaceTermProjection, Storage};
 use super::common::normalize_repository_snapshot_ids;
 
 impl Storage {
+    /// Loads path-surface term projections for lexical token-overlap witness scoring.
     pub fn load_path_surface_term_projections_for_repository_snapshot(
         &self,
         repository_id: &str,

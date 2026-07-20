@@ -460,7 +460,9 @@ pub(crate) enum RepositorySemanticFreshness {
 /// Active semantic embedding provider and model for freshness checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepositorySemanticTarget {
+    /// Canonical provider id matching the active semantic runtime partition.
     pub provider: String,
+    /// Embedding model id for the active provider-model corpus.
     pub model: String,
 }
 

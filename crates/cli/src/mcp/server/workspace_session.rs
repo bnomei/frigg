@@ -4,6 +4,7 @@
 use super::workspace::{WorkspaceAttachRollbackGuard, WorkspaceResolutionGuard};
 use super::*;
 
+/// Attach result plus an armed rollback guard that must be disarmed on successful completion.
 pub(super) struct WorkspaceAttachTargetOutcome {
     pub(super) response: WorkspaceAttachResponse,
     pub(super) rollback_guard: Option<WorkspaceAttachRollbackGuard>,
@@ -20,6 +21,7 @@ type WorkspaceTargetResolution = Result<
 >;
 
 impl FriggMcpServer {
+    /// HTTP session factory: shares process runtime/caches, allocates fresh session adoption state.
     pub(super) fn clone_for_new_session(&self) -> Self {
         Self {
             config: Arc::clone(&self.config),
@@ -101,6 +103,7 @@ impl FriggMcpServer {
         })
     }
 
+    /// Installs or clears the process watch runtime used for dirty-path invalidation and leases.
     pub fn set_watch_runtime(&self, watch_runtime: Option<Arc<crate::watch::WatchRuntime>>) {
         let mut state = self
             .runtime_state

@@ -464,6 +464,7 @@ impl Storage {
         Ok(())
     }
 
+    /// Loads the projection-family head row for one family in a manifest snapshot.
     pub fn load_retrieval_projection_head_for_repository_snapshot_family(
         &self,
         repository_id: &str,
@@ -510,6 +511,7 @@ impl Storage {
         })
     }
 
+    /// Lists required projection families that have no head row for the snapshot.
     pub fn missing_retrieval_projection_families_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -571,6 +573,7 @@ impl Storage {
 }
 
 impl StorageSession {
+    /// Session-scoped atomic replace of the full retrieval projection bundle for a snapshot.
     pub(crate) fn replace_retrieval_projection_bundle_for_repository_snapshot(
         &mut self,
         repository_id: &str,
@@ -1010,6 +1013,7 @@ impl StorageSession {
         Ok(())
     }
 
+    /// Session-scoped freshness check against expected heuristic versions per family.
     pub(crate) fn stale_or_missing_retrieval_projection_families_for_repository_snapshot(
         &self,
         repository_id: &str,

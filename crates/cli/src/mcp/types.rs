@@ -123,6 +123,7 @@ pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required"
 pub struct MetadataObject(Value);
 
 impl MetadataObject {
+    /// Unwraps the object-typed metadata payload as a raw JSON value.
     pub fn into_inner(self) -> Value {
         self.0
     }

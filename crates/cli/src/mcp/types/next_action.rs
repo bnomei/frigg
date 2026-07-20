@@ -22,6 +22,7 @@ use super::{
 pub struct NextActionId(pub String);
 
 impl NextActionId {
+    /// Constructs a non-empty response-local action id; blank/whitespace values are rejected.
     pub fn new(value: impl Into<String>) -> Option<Self> {
         let value = value.into();
         (!value.trim().is_empty()).then_some(Self(value))
@@ -100,6 +101,7 @@ pub enum NextActionTarget {
 }
 
 impl NextActionTarget {
+    /// Public MCP tool name this typed next-action payload should invoke.
     pub const fn tool_name(&self) -> &'static str {
         match self {
             Self::Workspace(_) => "workspace",

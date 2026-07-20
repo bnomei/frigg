@@ -9,6 +9,7 @@ use crate::storage::{PathRelationProjection, Storage, db_runtime::i64_to_u64};
 use super::common::normalize_repository_snapshot_ids;
 
 impl Storage {
+    /// Loads path-relation projections (graph or heuristic edges) for hybrid retrieval.
     pub fn load_path_relation_projections_for_repository_snapshot(
         &self,
         repository_id: &str,

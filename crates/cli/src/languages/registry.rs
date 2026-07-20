@@ -439,6 +439,7 @@ impl SymbolLanguage {
         }
     }
 
+    /// Canonical lowercase language key used in filters, diagnostics, and storage partitions.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Rust => "rust",

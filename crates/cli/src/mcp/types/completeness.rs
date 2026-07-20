@@ -209,6 +209,7 @@ pub struct ContinuationValidationError {
 }
 
 impl ContinuationValidationError {
+    /// Continuation token no longer matches the repository snapshot (stale proof handle).
     pub fn stale() -> Self {
         Self {
             kind: ContinuationErrorKind::Stale,
@@ -219,6 +220,7 @@ impl ContinuationValidationError {
         }
     }
 
+    /// Continuation token does not bind this tool, request shape, repository scope, or session.
     pub fn scope_mismatch() -> Self {
         Self {
             kind: ContinuationErrorKind::ScopeMismatch,
@@ -231,6 +233,7 @@ impl ContinuationValidationError {
         }
     }
 
+    /// Rejects combining legacy `resume_from` with a v2 `continuation` on the same request.
     pub fn reject_mixed_cursor_forms(
         legacy_present: bool,
         continuation_present: bool,
