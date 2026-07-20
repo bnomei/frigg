@@ -26,8 +26,8 @@ impl FriggMcpServer {
                 if !inspection.has_manifest
                     && workspace.runtime_repository_id != workspace.repository_id
                 {
-                    let legacy = storage
-                        .inspect_repository_read_only(&workspace.runtime_repository_id)?;
+                    let legacy =
+                        storage.inspect_repository_read_only(&workspace.runtime_repository_id)?;
                     inspection.has_manifest = legacy.has_manifest;
                 }
                 Ok(inspection)
