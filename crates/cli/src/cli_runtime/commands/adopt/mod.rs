@@ -785,19 +785,6 @@ fn apply_plan_entries(
                 }
                 writes += 1;
             }
-            AdoptApplyEdit::Delete => {
-                let rollback = match AdoptRollbackEdit::capture(&write_path) {
-                    Ok(rollback) => rollback,
-                    Err(err) => return Err(rollback_adopt_edits(rollback_edits, Box::new(err))),
-                };
-                rollback_edits.push(rollback);
-                match fs::remove_file(&write_path) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(rollback_adopt_edits(rollback_edits, Box::new(err))),
-                }
-                writes += 1;
-            }
             AdoptApplyEdit::Unchanged => {}
         }
     }
@@ -884,7 +871,6 @@ fn resolve_entry_write_path(entry: &AdoptPlanEntry) -> Result<PathBuf, Box<dyn E
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AdoptApplyEdit {
     Write(String),
-    Delete,
     Unchanged,
 }
 
@@ -899,11 +885,7 @@ fn apply_markdown_edit(
         };
         return match managed_block::remove_managed_block(contents) {
             Ok(managed_block::ManagedBlockEdit::Changed(updated)) => {
-                if updated.trim().is_empty() {
-                    Ok(AdoptApplyEdit::Delete)
-                } else {
-                    Ok(AdoptApplyEdit::Write(updated))
-                }
+                Ok(AdoptApplyEdit::Write(updated))
             }
             Ok(managed_block::ManagedBlockEdit::Unchanged) => Ok(AdoptApplyEdit::Unchanged),
             Err(err) => Err(Box::new(err)),
@@ -1320,8 +1302,8 @@ mod tests {
     }
 
     #[test]
-    fn adopt_apply_removes_owned_markdown_file_on_uninstall() {
-        let root = temp_dir("adopt-apply-remove-owned-markdown");
+    fn adopt_apply_keeps_markdown_file_when_uninstall_empties_it() {
+        let root = temp_dir("adopt-apply-keep-empty-markdown");
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(
             root.join("AGENTS.md"),
@@ -1354,7 +1336,15 @@ mod tests {
             .expect("apply uninstall"),
             1
         );
-        assert!(!root.join("AGENTS.md").exists());
+        let agents = root.join("AGENTS.md");
+        assert!(agents.exists(), "uninstall must not delete the doc");
+        assert!(
+            fs::read_to_string(&agents)
+                .expect("read agents")
+                .trim()
+                .is_empty(),
+            "the managed block should be gone, leaving no residue"
+        );
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

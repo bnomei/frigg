@@ -272,7 +272,30 @@ fn adopt_cli_uninstall_removes_only_frigg_owned_content() {
 
     let agents = fs::read_to_string(root.join("AGENTS.md")).expect("read agents");
     assert_eq!(agents, "# Team notes\n");
-    assert!(!root.join(".cursor/rules/frigg.mdc").exists());
+    let cursor_rule = root.join(".cursor/rules/frigg.mdc");
+    assert!(cursor_rule.exists(), "uninstall must not delete the file");
+    assert!(
+        fs::read_to_string(&cursor_rule)
+            .expect("read cursor rule")
+            .trim()
+            .is_empty(),
+        "the managed block should be gone, leaving no residue"
+    );
+
+    let removed_again = run_frigg(&root, &["adopt", "--target", "cursor", "--uninstall"]);
+    assert_success(&removed_again);
+    assert!(stdout(&removed_again).contains("unchanged=1"));
+    assert!(stdout(&removed_again).contains("writes=0"));
+    assert!(
+        cursor_rule.exists(),
+        "repeated uninstall must keep the file"
+    );
+    assert!(
+        fs::read_to_string(&cursor_rule)
+            .expect("read cursor rule after repeated uninstall")
+            .is_empty(),
+        "repeated uninstall must leave the file empty"
+    );
 
     let value: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
