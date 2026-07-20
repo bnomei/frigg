@@ -412,6 +412,8 @@ impl AdoptTarget {
 /// parent skills directory already exists — Frigg never creates that parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum SkillProvider {
+    /// Personal `~/.config/agents/skills`, legacy `~/.config/amp/skills`, else project `.agents/skills`.
+    Amp,
     /// Personal `~/.claude/skills`, else project `.claude/skills`.
     Claude,
     /// Personal `~/.codex/skills`.
@@ -494,6 +496,8 @@ mod tests {
             "frigg",
             "adopt",
             "--skill-provider",
+            "amp",
+            "--skill-provider",
             "claude",
             "--skill-provider",
             "copilot",
@@ -504,7 +508,11 @@ mod tests {
             Some(Command::Adopt { skill_provider, .. }) => {
                 assert_eq!(
                     skill_provider,
-                    vec![SkillProvider::Claude, SkillProvider::Copilot]
+                    vec![
+                        SkillProvider::Amp,
+                        SkillProvider::Claude,
+                        SkillProvider::Copilot
+                    ]
                 );
             }
             other => panic!("expected adopt command, got {other:?}"),

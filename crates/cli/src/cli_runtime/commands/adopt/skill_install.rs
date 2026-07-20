@@ -64,6 +64,7 @@ impl SkillInstallAction {
 impl SkillProvider {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::Amp => "amp",
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
@@ -107,6 +108,7 @@ fn validate_skill_source(path: &Path) -> Result<PathBuf, String> {
 /// Candidate parent skills directories for a provider (first existing dir wins).
 ///
 /// Best-effort researched defaults (macOS/`~` style; same relative layout on Linux):
+/// - Amp: `~/.config/agents/skills`, then `~/.config/amp/skills`, then project `.agents/skills`
 /// - Claude: `~/.claude/skills`, then project `.claude/skills`
 /// - Codex: `~/.codex/skills`
 /// - Cursor: project `.cursor/skills`, then `~/.cursor/skills`
@@ -118,6 +120,13 @@ pub(crate) fn skill_parent_candidates(
 ) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     match provider {
+        SkillProvider::Amp => {
+            if let Some(home) = home {
+                candidates.push(home.join(".config/agents/skills"));
+                candidates.push(home.join(".config/amp/skills"));
+            }
+            candidates.push(workspace_root.join(".agents/skills"));
+        }
         SkillProvider::Claude => {
             if let Some(home) = home {
                 candidates.push(home.join(".claude/skills"));
@@ -499,6 +508,7 @@ mod tests {
         fs::create_dir_all(home.join(".claude/skills")).expect("skills parent");
         fs::create_dir_all(source.join("references")).expect("source refs");
         fs::write(source.join("SKILL.md"), "version=test-skill\n").expect("skill md");
+        fs::write(source.join("mcp.json"), "{\"frigg\":{}}\n").expect("skill mcp");
         fs::write(source.join("references/a.md"), "ref\n").expect("ref");
 
         let plan = plan_skill_install(
@@ -513,6 +523,10 @@ mod tests {
 
         let dest = home.join(".claude/skills").join(SKILL_DIR_NAME);
         assert!(dest.join("SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(dest.join("mcp.json")).expect("read skill mcp"),
+            "{\"frigg\":{}}\n"
+        );
         assert!(dest.join("references/a.md").is_file());
 
         let plan2 = plan_skill_install(
@@ -553,6 +567,29 @@ mod tests {
 
         let parent = resolve_existing_skills_parent(SkillProvider::Copilot, &root, Some(&home));
         assert_eq!(parent, Some(root.join(".github/skills")));
+
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(home).ok();
+    }
+
+    #[test]
+    fn amp_prefers_standard_global_then_legacy_then_project_skills() {
+        let root = temp_dir("skill-amp-root");
+        let home = temp_dir("skill-amp-home");
+        fs::create_dir_all(root.join(".agents/skills")).expect("project skills");
+        fs::create_dir_all(home.join(".config/amp/skills")).expect("legacy skills");
+        fs::create_dir_all(home.join(".config/agents/skills")).expect("standard skills");
+
+        let parent = resolve_existing_skills_parent(SkillProvider::Amp, &root, Some(&home));
+        assert_eq!(parent, Some(home.join(".config/agents/skills")));
+
+        fs::remove_dir_all(home.join(".config/agents/skills")).expect("remove standard skills");
+        let parent = resolve_existing_skills_parent(SkillProvider::Amp, &root, Some(&home));
+        assert_eq!(parent, Some(home.join(".config/amp/skills")));
+
+        fs::remove_dir_all(home.join(".config/amp/skills")).expect("remove legacy skills");
+        let parent = resolve_existing_skills_parent(SkillProvider::Amp, &root, Some(&home));
+        assert_eq!(parent, Some(root.join(".agents/skills")));
 
         fs::remove_dir_all(root).ok();
         fs::remove_dir_all(home).ok();

@@ -1,0 +1,26 @@
+{
+  "frigg": {
+    "url": "http://127.0.0.1:37444/mcp",
+    "includeTools": [
+      "document_symbols",
+      "explore",
+      "find_declarations",
+      "find_implementations",
+      "find_references",
+      "go_to_definition",
+      "impact_bundle",
+      "incoming_calls",
+      "inspect_syntax_tree",
+      "list_files",
+      "outgoing_calls",
+      "read_file",
+      "read_match",
+      "search_batch",
+      "search_hybrid",
+      "search_structural",
+      "search_symbol",
+      "search_text",
+      "workspace"
+    ]
+  }
+}

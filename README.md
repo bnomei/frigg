@@ -170,14 +170,17 @@ Managed markdown defaults to a lightweight Frigg-first pointer to the `frigg-fir
 frigg adopt --target agents-md --policy expanded
 ```
 
-Frigg can also copy the skill into an existing Claude, Codex, Cursor, or Copilot skill directory. Run this from the Frigg checkout, where `skills/frigg-first-code-search` is available, or set `FRIGG_SKILL_SOURCE` to that skill directory first:
+Frigg can also copy the skill into an existing Amp, Claude, Codex, Cursor, or Copilot skill directory. Run this from the Frigg checkout, where `skills/frigg-first-code-search` is available, or set `FRIGG_SKILL_SOURCE` to that skill directory first:
 
 ```bash
+frigg adopt --target agents-md --skill-provider amp
 frigg adopt --target agents-md --skill-provider claude
 frigg adopt --target agents-md --skill-provider codex
 ```
 
 `--skill-provider` is additive: Frigg still applies the selected adopt targets, then copies the skill when both the source and the provider's parent skill directory exist. It never creates that parent directory. Uninstalling a copied skill also requires the matching `--skill-provider`; plain `--uninstall` removes only managed docs and MCP entries.
+
+The bundled skill includes an Amp-compatible `mcp.json` with a filtered Frigg tool list. Amp users therefore do not need `--target mcp-project` in addition to `--skill-provider amp`; keep `frigg serve` running for the bundled loopback HTTP endpoint.
 
 The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
 
