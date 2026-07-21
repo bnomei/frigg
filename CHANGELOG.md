@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.1 - 2026-07-21
+
+- Fixed stale symbol-corpus reuse in sessions without an active watch lease, ensuring symbol and
+  navigation tools revalidate live repository metadata after source edits.
+
 ## 0.10.0 - 2026-07-20
 
 - Added first-class Amp support: an Amp skill provider with bundled MCP configuration and a

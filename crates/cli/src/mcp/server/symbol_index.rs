@@ -140,7 +140,8 @@ impl FriggMcpServer {
             None => Self::load_latest_validated_manifest_snapshot_shared(
                 &root,
                 &runtime_repository_id,
-                Some(&self.runtime_state.validated_manifest_candidate_cache),
+                can_trust_validated_manifest_cache
+                    .then_some(&self.runtime_state.validated_manifest_candidate_cache),
             )?,
         };
         let (file_digests, manifest_token) = match validated_snapshot {
