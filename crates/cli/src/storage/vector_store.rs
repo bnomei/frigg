@@ -155,8 +155,10 @@ pub(super) fn decode_f32_vector(blob: &[u8]) -> Result<Vec<f32>, String> {
     }
 
     let mut out = Vec::with_capacity(blob.len() / std::mem::size_of::<f32>());
-    for chunk in blob.chunks_exact(std::mem::size_of::<f32>()) {
-        out.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    let (chunks, remainder) = blob.as_chunks::<{ std::mem::size_of::<f32>() }>();
+    debug_assert!(remainder.is_empty());
+    for chunk in chunks {
+        out.push(f32::from_le_bytes(*chunk));
     }
     Ok(out)
 }

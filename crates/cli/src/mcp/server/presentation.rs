@@ -1608,7 +1608,6 @@ impl FriggMcpServer {
             }
         }
         if !Self::should_return_full_response(response_mode) {
-            response.metadata = None;
             response.note = None;
         }
         self.validate_recovery_actions(&mut response.recovery);

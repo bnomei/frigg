@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::time::Duration;
 
 use crate::domain::{
     ChannelDiagnostic, ChannelHealth, ChannelHealthStatus, EvidenceAnchor, EvidenceAnchorKind,
@@ -139,10 +140,27 @@ pub(super) fn block_on_semantic_query_embedding(
 ) -> FriggResult<Vec<f32>> {
     if tokio::runtime::Handle::try_current().is_ok() {
         let model_owned = model.to_owned();
+        let cancellation = crate::mcp::search_work_cancellation_token();
+        let cancellable = cancellation.is_some();
         return std::thread::scope(|scope| {
             let handle = scope.spawn(move || {
-                let runtime = build_semantic_query_runtime()?;
-                runtime.block_on(semantic_executor.embed_query(provider, &model_owned, query))
+                crate::mcp::with_search_work_cancellation(cancellation, || {
+                    let runtime = build_semantic_query_runtime()?;
+                    if cancellable {
+                        runtime.block_on(cancellable_semantic_query_embedding(
+                            semantic_executor,
+                            provider,
+                            &model_owned,
+                            query,
+                        ))
+                    } else {
+                        runtime.block_on(semantic_executor.embed_query(
+                            provider,
+                            &model_owned,
+                            query,
+                        ))
+                    }
+                })
             });
             handle.join().map_err(|_| {
                 FriggError::Internal("semantic query embedding worker thread panicked".to_owned())
@@ -152,6 +170,28 @@ pub(super) fn block_on_semantic_query_embedding(
 
     let runtime = build_semantic_query_runtime()?;
     runtime.block_on(semantic_executor.embed_query(provider, model, query))
+}
+
+async fn cancellable_semantic_query_embedding(
+    semantic_executor: &dyn SemanticRuntimeQueryEmbeddingExecutor,
+    provider: SemanticRuntimeProvider,
+    model: &str,
+    query: String,
+) -> FriggResult<Vec<f32>> {
+    let embedding = semantic_executor.embed_query(provider, model, query);
+    tokio::pin!(embedding);
+    loop {
+        tokio::select! {
+            result = &mut embedding => return result,
+            () = tokio::time::sleep(Duration::from_millis(25)) => {
+                if crate::mcp::search_work_should_stop() {
+                    return Err(FriggError::Internal(
+                        "semantic query embedding was cancelled".to_owned(),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 fn build_semantic_query_runtime() -> FriggResult<tokio::runtime::Runtime> {
@@ -230,6 +270,11 @@ pub(super) fn search_semantic_channel_hits(
         FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
     })?;
     let model = model.as_str();
+    if crate::mcp::search_work_should_stop() {
+        return Err(FriggError::Internal(
+            "semantic search was cancelled".to_owned(),
+        ));
+    }
     let query_embedding = block_on_semantic_query_embedding(
         semantic_executor,
         provider,
@@ -275,6 +320,11 @@ pub(super) fn search_semantic_channel_hits(
     let mut degraded_reasons = Vec::new();
     let mut unavailable_reasons = Vec::new();
     for (index, repo) in repositories {
+        if crate::mcp::search_work_should_stop() {
+            return Err(FriggError::Internal(
+                "semantic search was cancelled".to_owned(),
+            ));
+        }
         if normalized_filters
             .repository_id
             .as_ref()
@@ -412,6 +462,11 @@ pub(super) fn search_semantic_channel_hits(
             grouped
         },
     ) {
+        if crate::mcp::search_work_should_stop() {
+            return Err(FriggError::Internal(
+                "semantic search was cancelled".to_owned(),
+            ));
+        }
         let Some(read_context) = read_contexts_by_repository.get(&repository_id) else {
             continue;
         };
@@ -517,6 +572,11 @@ pub(super) fn search_semantic_channel_hits(
             grouped
         },
     ) {
+        if crate::mcp::search_work_should_stop() {
+            return Err(FriggError::Internal(
+                "semantic search was cancelled".to_owned(),
+            ));
+        }
         let Some(read_context) = read_contexts_by_repository.get(&repository_id) else {
             continue;
         };
@@ -535,6 +595,11 @@ pub(super) fn search_semantic_channel_hits(
     }
 
     for hit in &mut semantic_hits {
+        if crate::mcp::search_work_should_stop() {
+            return Err(FriggError::Internal(
+                "semantic search was cancelled".to_owned(),
+            ));
+        }
         let Some(chunk_id) = hit.provenance_ids.first() else {
             continue;
         };

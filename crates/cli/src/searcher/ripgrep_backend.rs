@@ -16,8 +16,9 @@ use crate::domain::{FriggError, FriggResult, model::TextMatch};
 use crate::settings::{LexicalBackendMode, LexicalRuntimeConfig};
 
 use super::{
-    SearchCandidateUniverse, SearchDiagnostic, SearchDiagnosticKind, SearchExecutionDiagnostics,
-    SearchExecutionOutput, SearchLexicalBackend, SearchTextQuery, sort_matches_deterministically,
+    FileMatchSummary, SearchCandidateUniverse, SearchDiagnostic, SearchDiagnosticKind,
+    SearchExecutionDiagnostics, SearchExecutionOutput, SearchLexicalBackend, SearchTextQuery,
+    ordering::BoundedTextMatches, sort_matches_deterministically,
     sort_search_diagnostics_deterministically,
 };
 
@@ -146,8 +147,12 @@ pub(super) fn search_with_ripgrep_in_universe(
     let mut matches = Vec::new();
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut total_matches = 0usize;
+    let mut file_matches = BTreeMap::new();
 
     for repository in &candidate_universe.repositories {
+        if crate::mcp::search_work_should_stop() {
+            return Err(FriggError::Internal("search work cancelled".to_owned()));
+        }
         let filtered_paths = repository
             .candidates
             .iter()
@@ -164,17 +169,36 @@ pub(super) fn search_with_ripgrep_in_universe(
         }
 
         for batch in batch_candidate_paths(&filtered_paths)? {
-            let mut output =
-                run_ripgrep_batch(executable, &repository.root, &query.query, batch, mode)
-                    .map_err(|err| {
-                        FriggError::Internal(format!(
-                            "ripgrep {} execution failed for {}: {err}",
-                            mode.as_note(),
-                            repository.root.display()
-                        ))
-                    })?;
+            let mut output = run_ripgrep_batch(
+                executable,
+                &repository.root,
+                &query.query,
+                batch,
+                mode,
+                query.limit,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "ripgrep {} execution failed for {}: {err}",
+                    mode.as_note(),
+                    repository.root.display()
+                ))
+            })?;
             for matched in &mut output.matches {
                 matched.repository_id = repository.repository_id.clone();
+            }
+            for ((_, path), summary) in output.file_matches {
+                let merged = file_matches
+                    .entry((repository.repository_id.clone(), path))
+                    .or_insert_with(FileMatchSummary::default);
+                merged.count = merged.count.saturating_add(summary.count);
+                merged
+                    .retained
+                    .extend(summary.retained.into_iter().map(|mut found| {
+                        found.repository_id = repository.repository_id.clone();
+                        found
+                    }));
+                merged.retained.truncate(query.limit);
             }
             total_matches = total_matches.saturating_add(output.total_matches);
             matches.extend(output.matches);
@@ -190,6 +214,7 @@ pub(super) fn search_with_ripgrep_in_universe(
     Ok(SearchExecutionOutput {
         total_matches,
         matches,
+        file_matches,
         diagnostics,
         lexical_backend: Some(SearchLexicalBackend::Ripgrep),
         lexical_backend_note: Some(format!(
@@ -238,6 +263,7 @@ fn run_ripgrep_batch(
     query: &str,
     candidate_paths: Vec<String>,
     mode: RipgrepPatternMode,
+    limit: usize,
 ) -> Result<SearchExecutionOutput, String> {
     let allowed_paths = candidate_paths.iter().cloned().collect::<BTreeSet<_>>();
     let mut command = Command::new(&executable.program);
@@ -262,15 +288,36 @@ fn run_ripgrep_batch(
         .take()
         .ok_or_else(|| "ripgrep did not expose stdout".to_owned())?;
     let reader = BufReader::new(stdout);
-    let mut matches = Vec::new();
+    let use_bounded_retention = limit != usize::MAX;
+    let mut matches = BoundedTextMatches::with_limit(limit, use_bounded_retention);
+    let mut total_matches = 0usize;
+    let mut file_matches = BTreeMap::new();
     let mut diagnostics = SearchExecutionDiagnostics::default();
 
     for line in reader.lines() {
+        if crate::mcp::search_work_should_stop() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("search work cancelled".to_owned());
+        }
         let line = line.map_err(|err| err.to_string())?;
         if line.trim().is_empty() {
             continue;
         }
-        parse_ripgrep_event_line(&line, &mut matches)?;
+        let mut line_matches = Vec::new();
+        parse_ripgrep_event_line(&line, &mut line_matches)?;
+        line_matches.retain(|matched| allowed_paths.contains(&matched.path));
+        total_matches = total_matches.saturating_add(line_matches.len());
+        for matched in line_matches {
+            let summary = file_matches
+                .entry((String::new(), matched.path.clone()))
+                .or_insert_with(FileMatchSummary::default);
+            summary.count = summary.count.saturating_add(1);
+            if limit != usize::MAX && summary.retained.len() < limit {
+                summary.retained.push(matched.clone());
+            }
+            matches.push(matched);
+        }
     }
 
     let output = child.wait_with_output().map_err(|err| err.to_string())?;
@@ -294,12 +341,12 @@ fn run_ripgrep_batch(
         None => return Err("ripgrep terminated by signal".to_owned()),
     }
 
-    matches.retain(|matched| allowed_paths.contains(&matched.path));
-    let total_matches = matches.len();
+    let matches = matches.into_final_matches(limit);
 
     Ok(SearchExecutionOutput {
         total_matches,
         matches,
+        file_matches,
         diagnostics,
         lexical_backend: Some(SearchLexicalBackend::Ripgrep),
         lexical_backend_note: Some(format!(

@@ -3,7 +3,7 @@
 //! Streams file bytes line-by-line with optional content scrubbing and bounded match retention,
 //! producing `TextMatch` rows when ripgrep is unavailable or unsuitable.
 
-use std::fs;
+use std::{collections::BTreeMap, fs};
 
 use memchr::memchr_iter;
 use smallvec::SmallVec;
@@ -11,8 +11,8 @@ use smallvec::SmallVec;
 use crate::domain::{FriggResult, model::TextMatch};
 
 use super::{
-    BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD, SearchCandidateUniverse, SearchDiagnostic,
-    SearchDiagnosticKind, SearchExecutionOutput, SearchLexicalBackend, SearchTextQuery,
+    FileMatchSummary, SearchCandidateUniverse, SearchDiagnostic, SearchDiagnosticKind,
+    SearchExecutionOutput, SearchLexicalBackend, SearchTextQuery,
     content_scrub::{scrub_search_content, should_scrub_leading_markdown_comment},
     ordering::BoundedTextMatches,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
@@ -32,14 +32,20 @@ where
         return Ok(SearchExecutionOutput::default());
     }
 
-    let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
+    let use_bounded_retention = query.limit != usize::MAX;
     let mut matches = BoundedTextMatches::with_limit(query.limit, use_bounded_retention);
     let mut total_matches = 0usize;
+    let mut file_matches = BTreeMap::new();
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut match_columns_buffer = MatchColumnsBuffer::new();
 
     for repository in &candidate_universe.repositories {
         for candidate in &repository.candidates {
+            if crate::mcp::search_work_should_stop() {
+                return Err(crate::domain::FriggError::Internal(
+                    "search work cancelled".to_owned(),
+                ));
+            }
             let repository_id = &repository.repository_id;
             let rel_path = &candidate.relative_path;
             let path = &candidate.absolute_path;
@@ -63,6 +69,8 @@ where
                 &bytes,
                 &mut matches,
                 &mut total_matches,
+                &mut file_matches,
+                query.limit,
                 &mut match_columns_buffer,
                 &mut match_columns,
                 use_bounded_retention,
@@ -85,6 +93,7 @@ where
     Ok(SearchExecutionOutput {
         total_matches,
         matches,
+        file_matches,
         diagnostics,
         lexical_backend: Some(SearchLexicalBackend::Native),
         lexical_backend_note: None,
@@ -105,11 +114,17 @@ where
 
     let mut matches = BoundedTextMatches::with_limit(query.limit, true);
     let mut total_matches = 0usize;
+    let mut file_matches = BTreeMap::new();
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut match_columns_buffer = MatchColumnsBuffer::new();
 
     'repositories: for repository in &candidate_universe.repositories {
         for candidate in &repository.candidates {
+            if crate::mcp::search_work_should_stop() {
+                return Err(crate::domain::FriggError::Internal(
+                    "search work cancelled".to_owned(),
+                ));
+            }
             let repository_id = &repository.repository_id;
             let rel_path = &candidate.relative_path;
             let path = &candidate.absolute_path;
@@ -133,6 +148,8 @@ where
                 &bytes,
                 &mut matches,
                 &mut total_matches,
+                &mut file_matches,
+                query.limit,
                 &mut match_columns_buffer,
                 &mut match_columns,
                 false,
@@ -156,6 +173,7 @@ where
     Ok(SearchExecutionOutput {
         total_matches,
         matches,
+        file_matches,
         diagnostics,
         lexical_backend: Some(SearchLexicalBackend::Native),
         lexical_backend_note: None,
@@ -172,13 +190,19 @@ where
     P: FnMut(&str) -> bool,
     F: FnMut(&str, &mut MatchColumnsBuffer),
 {
-    let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
+    let use_bounded_retention = query.limit != usize::MAX;
     let mut matches = BoundedTextMatches::with_limit(query.limit, use_bounded_retention);
     let mut total_matches = 0usize;
+    let mut file_matches = BTreeMap::new();
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut match_columns_buffer = MatchColumnsBuffer::new();
     for repository in &candidate_universe.repositories {
         for candidate in &repository.candidates {
+            if crate::mcp::search_work_should_stop() {
+                return Err(crate::domain::FriggError::Internal(
+                    "search work cancelled".to_owned(),
+                ));
+            }
             let repository_id = &repository.repository_id;
             let rel_path = &candidate.relative_path;
             let path = &candidate.absolute_path;
@@ -212,6 +236,8 @@ where
                 content.as_bytes(),
                 &mut matches,
                 &mut total_matches,
+                &mut file_matches,
+                query.limit,
                 &mut match_columns_buffer,
                 &mut match_columns,
                 use_bounded_retention,
@@ -234,6 +260,7 @@ where
     Ok(SearchExecutionOutput {
         total_matches,
         matches,
+        file_matches,
         diagnostics,
         lexical_backend: Some(SearchLexicalBackend::Native),
         lexical_backend_note: None,
@@ -289,6 +316,8 @@ fn collect_line_matches<F>(
     bytes: &[u8],
     matches: &mut BoundedTextMatches,
     total_matches: &mut usize,
+    file_matches: &mut BTreeMap<(String, String), FileMatchSummary>,
+    per_file_limit: usize,
     match_columns_buffer: &mut MatchColumnsBuffer,
     match_columns: &mut F,
     use_bounded_retention: bool,
@@ -307,6 +336,12 @@ where
         let mut excerpt_for_line: Option<String> = None;
         for &column in match_columns_buffer.iter() {
             *total_matches = total_matches.saturating_add(1);
+            let file_summary = file_matches
+                .entry((repository_id.to_owned(), rel_path.to_owned()))
+                .or_default();
+            file_summary.count = file_summary.count.saturating_add(1);
+            let retain_for_file =
+                per_file_limit != usize::MAX && file_summary.retained.len() < per_file_limit;
             let is_non_improving = matches.is_full()
                 && matches.worst().is_some_and(|worst| {
                     !text_match_candidate_order(
@@ -324,7 +359,7 @@ where
                     should_stop = true;
                     break;
                 }
-                if use_bounded_retention {
+                if use_bounded_retention && !retain_for_file {
                     continue;
                 }
             }
@@ -342,6 +377,9 @@ where
                 witness_score_hint_millis: None,
                 witness_provenance_ids: None,
             };
+            if retain_for_file {
+                file_summary.retained.push(candidate.clone());
+            }
             matches.push(candidate);
         }
 

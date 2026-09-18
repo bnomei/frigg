@@ -16,6 +16,7 @@ use super::{
     StoredPathWitnessProjection, hybrid_excerpt_has_build_flow_anchor,
     hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
     hybrid_path_overlap_tokens, hybrid_query_overlap_terms,
+    ordering::text_match_order,
     policy::{
         PathWitnessFacts,
         hybrid_path_quality_multiplier_with_intent as policy_path_quality_multiplier_with_intent,
@@ -433,6 +434,13 @@ pub(super) fn merge_hybrid_lexical_search_output(
         .total_matches
         .saturating_add(supplement.total_matches)
         .max(base.matches.len());
+    for (file, summary) in supplement.file_matches {
+        let merged = base.file_matches.entry(file).or_default();
+        merged.count = merged.count.saturating_add(summary.count);
+        merged.retained.extend(summary.retained);
+        merged.retained.sort_by(text_match_order);
+        merged.retained.truncate(limit);
+    }
 
     base.diagnostics
         .entries

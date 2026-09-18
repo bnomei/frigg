@@ -199,6 +199,7 @@ impl TextSearcher {
         Ok(SearchExecutionOutput {
             total_matches: matches.len(),
             matches,
+            file_matches: Default::default(),
             diagnostics: candidate_universe.diagnostics,
             lexical_backend: None,
             lexical_backend_note: None,

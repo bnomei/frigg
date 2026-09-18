@@ -67,7 +67,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            use_cross: false
+            use_cross: true
           - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu
             use_cross: true
@@ -118,7 +118,7 @@ jobs:
 
       - name: Build (unix)
         if: runner.os != 'Windows'
-        run: TARGET=${{ matrix.target }} PACKAGE_NAME=${{ env.BIN_NAME }} scripts/build-release.sh
+        run: TARGET=${{ matrix.target }} PACKAGE_NAME=${{ env.BIN_NAME }} USE_CROSS=${{ matrix.use_cross }} scripts/build-release.sh
 
       - name: Build (windows)
         if: runner.os == 'Windows'
@@ -157,7 +157,7 @@ jobs:
 
   container:
     name: Publish container image
-    needs: [release_ref, build]
+    needs: [release_ref, build, linux_runtime_smoke]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -236,9 +236,55 @@ jobs:
             ${{ steps.image.outputs.name }}:${{ steps.version.outputs.version }}
             ${{ steps.image.outputs.name }}:latest
 
+  linux_runtime_smoke:
+    name: MCP smoke ${{ matrix.target }}
+    needs: [release_ref, build]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            image: python:3.12-slim-bookworm
+          - target: x86_64-unknown-linux-musl
+            image: python:3.12-alpine3.22
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release_ref.outputs.sha }}
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist
+
+      - name: Smoke init, index, search_text, search_symbol, and semantic search_hybrid
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          RUNTIME_IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          archive="$(find dist -maxdepth 1 -name "frigg-v*-${TARGET}.tar.gz" -print -quit)"
+          test -n "$archive"
+          mkdir -p smoke/dist smoke/workspace/src
+          tar -xzf "$archive" -C smoke/dist
+          git -C smoke/workspace init --quiet
+          printf 'pub struct ReleaseSmokeSymbol;\n' > smoke/workspace/src/lib.rs
+          docker pull "$RUNTIME_IMAGE"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD/smoke/dist:/dist:ro" \
+            -v "$PWD/smoke/workspace:/workspace" \
+            -v "$PWD/scripts/smoke-mcp.py:/smoke-mcp.py:ro" \
+            -w /workspace \
+            "$RUNTIME_IMAGE" python3 /smoke-mcp.py \
+              --workspace /workspace \
+              --semantic-stub \
+              -- /dist/frigg
+
   npm:
     name: Publish npm wrapper
-    needs: [release_ref, build]
+    needs: [release_ref, build, linux_runtime_smoke]
     runs-on: ubuntu-24.04
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

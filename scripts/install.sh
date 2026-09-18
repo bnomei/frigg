@@ -17,7 +17,7 @@ Usage:
   curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | sh
 
 Environment:
-  FRIGG_VERSION      Release version or tag, for example 0.10.1 or v0.10.1.
+  FRIGG_VERSION      Release version or tag, for example 0.10.2 or v0.10.2.
                      Defaults to the latest GitHub Release.
   FRIGG_INSTALL_DIR  Install directory. Defaults to $HOME/.local/bin.
 
@@ -127,6 +127,10 @@ main() {
   mkdir -p "$install_dir" || die "failed to create install directory '$install_dir'"
   cp "$tmp/$bin" "$install_dir/$bin" || die "failed to install $bin"
   chmod 755 "$install_dir/$bin" || die "failed to mark $bin executable"
+  for runtime_library in "$tmp"/libonnxruntime.so.*; do
+    [ -f "$runtime_library" ] || continue
+    cp "$runtime_library" "$install_dir/" || die "failed to install ONNX Runtime"
+  done
 
   if [ -n "${GITHUB_PATH:-}" ] && [ -e "$GITHUB_PATH" ]; then
     printf '%s\n' "$install_dir" >> "$GITHUB_PATH"

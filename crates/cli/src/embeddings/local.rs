@@ -3,8 +3,12 @@
 //! Runs prepared on-disk models through fastembed batching and rejects unsafe cache overrides so
 //! offline semantic indexing and recall stay reproducible across hosts.
 
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use fastembed::{TextEmbedding, TextInitOptions};
@@ -17,6 +21,37 @@ use super::*;
 
 const FASTEMBED_BATCH_SIZE: usize = 256;
 const HF_HOME_ENV: &str = "HF_HOME";
+#[cfg(target_os = "linux")]
+const ONNX_RUNTIME_LIBRARY: &str = "libonnxruntime.so.1.24.2";
+
+#[cfg(target_os = "linux")]
+static ONNX_RUNTIME_INITIALIZATION: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn initialize_onnx_runtime() -> Result<(), String> {
+    ONNX_RUNTIME_INITIALIZATION
+        .get_or_init(|| {
+            let sibling = std::env::current_exe()
+                .ok()
+                .and_then(|executable| executable.parent().map(Path::to_path_buf))
+                .map(|directory| directory.join(ONNX_RUNTIME_LIBRARY))
+                .filter(|path| path.is_file());
+            let library = sibling
+                .or_else(|| std::env::var_os("ORT_DYLIB_PATH").map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("libonnxruntime.so"));
+            ort::init_from(&library)
+                .map(|builder| {
+                    let _ = builder.commit();
+                })
+                .map_err(|error| {
+                    format!(
+                        "failed to load ONNX Runtime from '{}': {error}",
+                        library.display()
+                    )
+                })
+        })
+        .clone()
+}
 
 pub(super) trait LocalEmbeddingBackend: Send {
     fn embed(&mut self, input: &[String]) -> Result<Vec<Vec<f32>>, String>;
@@ -44,6 +79,16 @@ pub struct LocalEmbeddingProvider {
 impl LocalEmbeddingProvider {
     /// Loads a prepared on-disk model via fastembed; fails if artifacts are missing or HF_HOME is set.
     pub fn new(model: impl Into<String>) -> EmbeddingResult<Self> {
+        #[cfg(target_os = "linux")]
+        initialize_onnx_runtime().map_err(|message| {
+            EmbeddingError::Provider(ProviderFailure::non_retryable(
+                EmbeddingProviderKind::Local,
+                message,
+                Some("onnx_runtime_load_failed".to_owned()),
+                None,
+                None,
+            ))
+        })?;
         let model = normalize_local_model(model.into());
         let alias = resolve_model_alias(&model).map_err(local_model_error_to_embedding_error)?;
         let artifact =

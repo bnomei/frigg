@@ -141,10 +141,12 @@ pub(super) fn deterministic_fixture_embedding(text: &str, index: usize) -> Vec<f
     let digest = hasher.finalize();
     let mut embedding = digest
         .as_bytes()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .take(8)
         .map(|chunk| {
-            let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let value = u32::from_le_bytes(*chunk);
             (value as f32) / (u32::MAX as f32)
         })
         .collect::<Vec<_>>();

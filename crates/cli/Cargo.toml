@@ -61,9 +61,16 @@ walkdir.workspace = true
 
 [features]
 default = ["local-embeddings"]
-local-embeddings = ["dep:fastembed", "dep:hf-hub"]
+local-embeddings = ["dep:fastembed", "dep:hf-hub", "dep:ort"]
 futura-bench = []
 playbook = []
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fastembed = { workspace = true, features = ["ort-load-dynamic"], optional = true }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic"], optional = true }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+fastembed = { workspace = true, features = ["ort-download-binaries-rustls-tls"], optional = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/frigg-v{ version }-{ target }.tar.gz"

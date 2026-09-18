@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG FRIGG_VERSION=0.10.1
+ARG FRIGG_VERSION=0.10.2
 ARG FRIGG_REPOSITORY=bnomei/frigg
 ARG FRIGG_RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot
 
@@ -22,10 +22,11 @@ RUN set -eux; \
   url="https://github.com/${FRIGG_REPOSITORY}/releases/download/${tag}/${archive}"; \
   curl -fsSL -o "/tmp/${archive}" "$url"; \
   curl -fsSL -o "/tmp/${archive}.sha256" "${url}.sha256"; \
+  mkdir -p /tmp/frigg-dist; \
   cd /tmp; \
   sha256sum -c "${archive}.sha256"; \
-  tar -xzf "$archive"; \
-  chmod 755 frigg; \
+  tar -xzf "/tmp/${archive}" -C /tmp/frigg-dist; \
+  chmod 755 /tmp/frigg-dist/frigg; \
   mkdir -p /tmp/frigg-workspace/.cache
 
 FROM ${FRIGG_RUNTIME_IMAGE}
@@ -40,7 +41,7 @@ LABEL org.opencontainers.image.source="https://github.com/bnomei/frigg"
 LABEL org.opencontainers.image.licenses="MIT AND MPL-2.0"
 LABEL org.opencontainers.image.version="${FRIGG_VERSION}"
 
-COPY --from=fetch --chown=65532:65532 /tmp/frigg /usr/local/bin/frigg
+COPY --from=fetch --chown=65532:65532 /tmp/frigg-dist/ /usr/local/bin/
 COPY --from=fetch --chown=65532:65532 /tmp/frigg-workspace /workspace
 
 WORKDIR /workspace

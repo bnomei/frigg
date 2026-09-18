@@ -158,6 +158,9 @@ use crate::settings::RuntimeProfile;
 mod content;
 mod errors;
 mod execution;
+pub(crate) use execution::{
+    search_work_cancellation_token, search_work_should_stop, with_search_work_cancellation,
+};
 mod navigation_cache;
 mod navigation_metadata;
 mod navigation_precise;
@@ -651,6 +654,7 @@ impl FriggMcpServer {
     }
 
     /// Serves this instance over stdio until the peer disconnects.
+    #[allow(clippy::result_large_err)]
     pub async fn serve_stdio(self) -> Result<(), rmcp::RmcpError> {
         let service = self.serve(rmcp::transport::stdio()).await?;
         service.waiting().await?;

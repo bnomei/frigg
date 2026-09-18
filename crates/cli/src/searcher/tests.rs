@@ -5,7 +5,10 @@ use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -90,6 +93,20 @@ impl SemanticRuntimeQueryEmbeddingExecutor for MockSemanticQueryEmbeddingExecuto
                 Err(message) => Err(FriggError::Internal(message)),
             }
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingSemanticQueryEmbeddingExecutor;
+
+impl SemanticRuntimeQueryEmbeddingExecutor for PendingSemanticQueryEmbeddingExecutor {
+    fn embed_query<'a>(
+        &'a self,
+        _provider: SemanticRuntimeProvider,
+        _model: &'a str,
+        _query: String,
+    ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<f32>>> + Send + 'a>> {
+        Box::pin(std::future::pending())
     }
 }
 

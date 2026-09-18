@@ -43,7 +43,15 @@ fi
 
 ARCHIVE_NAME="${BIN_NAME}-v${VERSION}-${TARGET}.tar.gz"
 
-tar -C "${TARGET_DIR}/${TARGET}/release" -czf "${OUT_DIR}/${ARCHIVE_NAME}" "$BIN_NAME"
+archive_files=("$BIN_NAME")
+if [[ "$TARGET" == *-unknown-linux-gnu ]]; then
+  runtime_library="$(TARGET="$TARGET" scripts/prepare-onnxruntime.sh)"
+  runtime_name="$(basename "$runtime_library")"
+  cp "$runtime_library" "${TARGET_DIR}/${TARGET}/release/${runtime_name}"
+  archive_files+=("$runtime_name")
+fi
+
+tar -C "${TARGET_DIR}/${TARGET}/release" -czf "${OUT_DIR}/${ARCHIVE_NAME}" "${archive_files[@]}"
 
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$OUT_DIR" && sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256")

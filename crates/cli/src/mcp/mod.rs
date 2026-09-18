@@ -28,4 +28,7 @@ pub use server::{
     benchmark_build_symbol_corpora, benchmark_build_symbol_corpora_for_server,
     benchmark_precise_graph_for_server,
 };
+pub(crate) use server::{
+    search_work_cancellation_token, search_work_should_stop, with_search_work_cancellation,
+};
 pub use server_state::{RuntimeTaskGuard, RuntimeTaskRegistry};

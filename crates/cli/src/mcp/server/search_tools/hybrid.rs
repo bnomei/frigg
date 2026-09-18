@@ -74,7 +74,7 @@ impl FriggMcpServer {
         let params_for_blocking = params.clone();
         let server = self.clone();
         let execution = self
-            .run_read_only_tool_blocking(&execution_context, move || {
+            .run_cancellable_search_blocking(&execution_context, move || {
                 let mut scoped_repository_ids: Vec<String> = Vec::new();
                 let mut effective_limit: Option<usize> = None;
                 let mut effective_weights: Option<SearchHybridChannelWeightsParams> = None;

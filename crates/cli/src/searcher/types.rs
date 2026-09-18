@@ -2,7 +2,7 @@
 //! boundary explicit so MCP handlers, playbooks, and tests can all talk about the same execution
 //! semantics.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::domain::{
@@ -135,6 +135,12 @@ impl SearchExecutionDiagnostics {
 }
 
 #[derive(Debug, Clone, Default)]
+pub(super) struct FileMatchSummary {
+    pub count: usize,
+    pub retained: Vec<TextMatch>,
+}
+
+#[derive(Debug, Clone, Default)]
 /// Output of a lexical-only search pass, including diagnostics that explain degraded or partial
 /// coverage.
 pub struct SearchExecutionOutput {
@@ -142,6 +148,8 @@ pub struct SearchExecutionOutput {
     pub total_matches: usize,
     /// Bounded, deterministically ordered lexical matches.
     pub matches: Vec<TextMatch>,
+    /// Per-file cardinality and a bounded row window for exact row shaping.
+    pub(super) file_matches: BTreeMap<(String, String), FileMatchSummary>,
     /// Walk and read issues encountered while scanning candidates.
     pub diagnostics: SearchExecutionDiagnostics,
     /// Backend that produced lexical hits when an accelerator was selected.

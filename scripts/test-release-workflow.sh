@@ -6,8 +6,8 @@ WORKFLOW="$ROOT_DIR/.github/workflows/release.yml"
 
 publishing_checkout_count="$(grep -Fc "ref: \${{ needs.release_ref.outputs.sha }}" "$WORKFLOW")"
 
-if [[ "$publishing_checkout_count" != "3" ]]; then
-  echo "Expected build, container, and npm to checkout the validated release SHA; found $publishing_checkout_count matching checkouts." >&2
+if [[ "$publishing_checkout_count" != "4" ]]; then
+  echo "Expected build, Linux runtime smoke, container, and npm to checkout the validated release SHA; found $publishing_checkout_count matching checkouts." >&2
   exit 1
 fi
 

@@ -55,7 +55,10 @@ async fn core_search_symbol_defaults_to_compact_with_handles() {
         .expect("compact search_symbol should succeed")
         .0;
 
-    assert!(response.metadata.is_none());
+    assert!(
+        response.metadata.is_some(),
+        "compact search_symbol must retain required structured metadata"
+    );
     assert!(response.note.is_none());
     assert!(
         response.result_handle.is_some(),

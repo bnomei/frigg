@@ -132,6 +132,7 @@ use surfaces::{
     is_runtime_companion_surface_path, is_runtime_config_artifact_path, is_scripts_ops_path,
     is_test_harness_path, is_test_support_path, is_workspace_config_surface_path,
 };
+use types::FileMatchSummary;
 /// Public query, result, and channel types for lexical and hybrid retrieval APIs.
 pub use types::{
     ExactSearchExecutionOutput, HybridChannelHit, HybridChannelWeights, HybridDocumentRef,
@@ -297,7 +298,6 @@ pub const MAX_REGEX_QUANTIFIERS: usize = 64;
 pub const MAX_REGEX_SIZE_LIMIT_BYTES: usize = 1_000_000;
 /// Compiled-regex DFA size budget passed to the `regex` builder.
 pub const MAX_REGEX_DFA_SIZE_LIMIT_BYTES: usize = 1_000_000;
-const BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD: usize = 256;
 const HYBRID_LEXICAL_RECALL_MAX_TOKENS: usize = 12;
 const HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN: usize = 4;
 const HYBRID_GRAPH_MAX_ANCHORS: usize = 8;
@@ -673,18 +673,12 @@ impl TextSearcher {
             self.build_candidate_universe(&query, &normalized_filters),
             &options,
         );
-        // Backends retain no page-bound rows here. Row shaping is a shared final step, so a
-        // dense early file cannot starve a later file-mode result and totals remain exact.
-        let exhaustive_query = SearchTextQuery {
-            limit: usize::MAX,
-            ..query.clone()
-        };
         let output = match mode {
             RipgrepPatternMode::Literal => {
                 let matcher = AhoCorasick::new([query.query.as_str()])
                     .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
                 self.search_literal_with_candidate_universe_using_matcher(
-                    &exhaustive_query,
+                    &query,
                     &candidate_universe,
                     &matcher,
                 )?
@@ -694,7 +688,7 @@ impl TextSearcher {
                     compile_safe_regex(&query.query).map_err(regex_error_to_frigg_error)?;
                 let prefilter_plan = build_regex_prefilter_plan(&query.query);
                 self.search_regex_with_candidate_universe(
-                    &exhaustive_query,
+                    &query,
                     &candidate_universe,
                     matcher,
                     prefilter_plan,
@@ -1057,7 +1051,7 @@ fn finalize_exact_search_output(
     sort_matches_deterministically(&mut output.matches);
     let mut rows = match row_mode {
         SearchTextRowMode::Occurrence => output.matches.clone(),
-        SearchTextRowMode::UniqueFile => {
+        SearchTextRowMode::UniqueFile if limit == usize::MAX => {
             let mut first_by_file = BTreeMap::new();
             for found in &output.matches {
                 first_by_file
@@ -1066,7 +1060,12 @@ fn finalize_exact_search_output(
             }
             first_by_file.into_values().collect()
         }
-        SearchTextRowMode::PerFileCapped { max_count_per_file } => {
+        SearchTextRowMode::UniqueFile => output
+            .file_matches
+            .values()
+            .filter_map(|summary| summary.retained.first().cloned())
+            .collect(),
+        SearchTextRowMode::PerFileCapped { max_count_per_file } if limit == usize::MAX => {
             let mut retained_per_file = BTreeMap::<(String, String), usize>::new();
             output
                 .matches
@@ -1075,18 +1074,30 @@ fn finalize_exact_search_output(
                     let count = retained_per_file
                         .entry((found.repository_id.clone(), found.path.clone()))
                         .or_default();
-                    if *count >= max_count_per_file {
-                        return false;
-                    }
+                    let retain = *count < max_count_per_file;
                     *count = count.saturating_add(1);
-                    true
+                    retain
                 })
                 .cloned()
                 .collect()
         }
+        SearchTextRowMode::PerFileCapped { max_count_per_file } => output
+            .file_matches
+            .values()
+            .flat_map(|summary| summary.retained.iter().take(max_count_per_file))
+            .cloned()
+            .collect(),
     };
     sort_matches_deterministically(&mut rows);
-    let total_rows = rows.len();
+    let total_rows = match row_mode {
+        SearchTextRowMode::Occurrence => output.total_matches,
+        SearchTextRowMode::UniqueFile => output.file_matches.len(),
+        SearchTextRowMode::PerFileCapped { max_count_per_file } => output
+            .file_matches
+            .values()
+            .map(|summary| summary.count.min(max_count_per_file))
+            .sum(),
+    };
     rows.truncate(limit);
     let coverage = if output.diagnostics.entries.iter().any(|diagnostic| {
         !diagnostic

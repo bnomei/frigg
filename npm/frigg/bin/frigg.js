@@ -51,12 +51,13 @@ function normalizeVersion(version) {
 function releaseTarget() {
   const platform = process.platform;
   const arch = process.arch;
+  const linuxLibc = platform === "linux" ? selectedLinuxLibc() : null;
 
   if (platform === "linux" && arch === "x64") {
-    return unixRelease("x86_64-unknown-linux-gnu");
+    return unixRelease(`x86_64-unknown-linux-${linuxLibc}`);
   }
   if (platform === "linux" && arch === "arm64") {
-    return unixRelease("aarch64-unknown-linux-gnu");
+    return unixRelease(`aarch64-unknown-linux-${linuxLibc}`);
   }
   if (platform === "darwin" && arch === "x64") {
     return unixRelease("x86_64-apple-darwin");
@@ -73,6 +74,22 @@ function releaseTarget() {
   }
 
   throw new Error(`unsupported platform ${platform}/${arch}`);
+}
+
+function selectedLinuxLibc() {
+  const libc = process.env.FRIGG_LIBC || detectedLinuxLibc();
+  if (libc !== "gnu" && libc !== "musl") {
+    throw new Error(`FRIGG_LIBC must be "gnu" or "musl", received ${JSON.stringify(libc)}`);
+  }
+  return libc;
+}
+
+function detectedLinuxLibc() {
+  if (process.platform !== "linux") {
+    return "gnu";
+  }
+  const report = process.report && process.report.getReport ? process.report.getReport() : null;
+  return report && report.header && report.header.glibcVersionRuntime ? "gnu" : "musl";
 }
 
 function unixRelease(target) {
@@ -118,6 +135,11 @@ async function installRelease(binaryPath, release) {
     fs.copyFileSync(extracted, binaryPath);
     if (process.platform !== "win32") {
       fs.chmodSync(binaryPath, 0o755);
+    }
+    for (const entry of fs.readdirSync(tmp)) {
+      if (entry.startsWith("libonnxruntime.so.")) {
+        fs.copyFileSync(path.join(tmp, entry), path.join(path.dirname(binaryPath), entry));
+      }
     }
   } finally {
     fs.rmSync(tmp, { force: true, recursive: true });

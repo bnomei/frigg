@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.10.2 - 2026-09-18
+
+- Made Linux releases portable across older distributions: GNU binaries are cross-built against
+  an older glibc baseline and bundle a checksum-pinned ONNX Runtime 1.24 shared library requiring
+  at most glibc 2.27. The npm wrapper now selects GNU or musl assets from Node's runtime libc,
+  validates `FRIGG_LIBC` overrides, and installs bundled runtime libraries. Musl packages remain
+  available without the local FastEmbed provider; remote and OpenAI-compatible semantics continue
+  to work.
+- Fixed runaway first-call `search_symbol` work by replacing the global quadratic containing-symbol
+  pass with a per-file sorted nesting pass. Compact symbol responses now retain the required
+  structured `metadata` object.
+- Bounded exact `search_text` result retention while preserving exact occurrence totals and stable
+  continuation pages. `search_text`, `search_symbol`, and `search_hybrid` now enforce a 30-second
+  deadline and cooperatively cancel dropped or timed-out work, including in-flight semantic query
+  embedding requests and ripgrep children.
+- Added packaged GNU-on-Debian-Bookworm and musl-on-Alpine MCP release smoke coverage for init,
+  indexing, workspace discovery, exact text and symbol search, and full semantic hybrid search.
+  npm and container publishing now wait for these runtime checks.
+
 ## 0.10.1 - 2026-07-21
 
 - Fixed stale symbol-corpus reuse in sessions without an active watch lease, ensuring symbol and

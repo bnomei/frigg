@@ -2126,3 +2126,28 @@ fn hybrid_search_semantic_query_embedding_works_inside_existing_tokio_runtime() 
     cleanup_workspace(&root);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hybrid_search_cancels_an_inflight_semantic_query_embedding() {
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let worker_cancellation = Arc::clone(&cancellation);
+    let worker = tokio::task::spawn_blocking(move || {
+        crate::mcp::with_search_work_cancellation(Some(worker_cancellation), || {
+            crate::searcher::semantic::block_on_semantic_query_embedding(
+                &PendingSemanticQueryEmbeddingExecutor,
+                SemanticRuntimeProvider::OpenAi,
+                "text-embedding-3-small",
+                "semantic query".to_owned(),
+            )
+        })
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    cancellation.store(true, Ordering::Relaxed);
+    let error = tokio::time::timeout(Duration::from_secs(1), worker)
+        .await
+        .expect("cancelled semantic query should stop promptly")
+        .expect("semantic query worker should join")
+        .expect_err("cancelled semantic query should return an error");
+    assert!(error.to_string().contains("cancelled"));
+}

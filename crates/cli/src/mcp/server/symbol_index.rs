@@ -6,50 +6,46 @@
 
 use super::*;
 use crate::languages::analyze_rust_indexed_source;
-use rayon::prelude::*;
 
 const SYMBOL_CORPUS_CACHE_MAX_ENTRIES: usize = 16;
 const SYMBOL_CORPUS_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 impl FriggMcpServer {
-    fn container_symbol_index_by_index(symbols: &[SymbolDefinition]) -> Vec<Option<usize>> {
-        symbols
-            .iter()
-            .enumerate()
-            .map(|(symbol_index, symbol)| {
-                symbols
-                    .iter()
-                    .enumerate()
-                    .filter(|(candidate_index, candidate)| {
-                        *candidate_index != symbol_index
-                            && candidate.path == symbol.path
-                            && Self::source_span_strictly_contains(&candidate.span, &symbol.span)
-                    })
-                    .min_by(|(_, left), (_, right)| {
-                        let left_span = left.span.end_line.saturating_sub(left.span.start_line);
-                        let right_span = right.span.end_line.saturating_sub(right.span.start_line);
-                        let left_column_span = if left_span == 0 {
-                            left.span.end_column.saturating_sub(left.span.start_column)
-                        } else {
-                            usize::MAX
-                        };
-                        let right_column_span = if right_span == 0 {
-                            right
-                                .span
-                                .end_column
-                                .saturating_sub(right.span.start_column)
-                        } else {
-                            usize::MAX
-                        };
-                        left_span
-                            .cmp(&right_span)
-                            .then(left_column_span.cmp(&right_column_span))
-                            .then(left.line.cmp(&right.line))
-                            .then(left.stable_id.cmp(&right.stable_id))
-                    })
-                    .map(|(container_index, _)| container_index)
-            })
-            .collect()
+    fn container_symbol_index_by_index(
+        symbols: &[SymbolDefinition],
+        symbols_by_relative_path: &BTreeMap<String, Vec<usize>>,
+    ) -> Vec<Option<usize>> {
+        let mut containers = vec![None; symbols.len()];
+        for file_symbol_indices in symbols_by_relative_path.values() {
+            if crate::mcp::search_work_should_stop() {
+                break;
+            }
+            let mut ordered = file_symbol_indices.clone();
+            ordered.sort_by(|left, right| {
+                let left_span = &symbols[*left].span;
+                let right_span = &symbols[*right].span;
+                left_span
+                    .start_byte
+                    .cmp(&right_span.start_byte)
+                    .then(right_span.end_byte.cmp(&left_span.end_byte))
+                    .then(symbols[*left].stable_id.cmp(&symbols[*right].stable_id))
+            });
+
+            let mut open_containers: Vec<usize> = Vec::new();
+            for symbol_index in ordered {
+                while open_containers.last().is_some_and(|candidate_index| {
+                    !Self::source_span_strictly_contains(
+                        &symbols[*candidate_index].span,
+                        &symbols[symbol_index].span,
+                    )
+                }) {
+                    open_containers.pop();
+                }
+                containers[symbol_index] = open_containers.last().copied();
+                open_containers.push(symbol_index);
+            }
+        }
+        containers
     }
 
     pub(super) fn invalidate_repository_symbol_corpus_cache(&self, repository_id: &str) {
@@ -226,6 +222,12 @@ impl FriggMcpServer {
         source_paths.sort();
 
         let mut symbol_extraction = extract_symbols_for_paths(&source_paths);
+        if crate::mcp::search_work_should_stop() {
+            return Err(Self::timeout(
+                "symbol corpus construction was cancelled",
+                Some(json!({ "operation": "search_symbol" })),
+            ));
+        }
         crate::indexer::assign_repository_relative_symbol_identities(&root, &mut symbol_extraction);
         let SymbolExtractionOutput {
             symbols,
@@ -243,6 +245,12 @@ impl FriggMcpServer {
         let mut canonical_symbol_name_by_stable_id = BTreeMap::new();
 
         for path in &source_paths {
+            if crate::mcp::search_work_should_stop() {
+                return Err(Self::timeout(
+                    "symbol corpus construction was cancelled",
+                    Some(json!({ "operation": "search_symbol" })),
+                ));
+            }
             let relative_path = Self::relative_display_path(&root, path);
             let file_symbol_indices = symbols_by_relative_path
                 .get(&relative_path)
@@ -303,7 +311,14 @@ impl FriggMcpServer {
             &symbol_index_by_stable_id,
             &canonical_symbol_name_by_stable_id,
         );
-        let container_symbol_index_by_index = Self::container_symbol_index_by_index(&symbols);
+        let container_symbol_index_by_index =
+            Self::container_symbol_index_by_index(&symbols, &symbols_by_relative_path);
+        if crate::mcp::search_work_should_stop() {
+            return Err(Self::timeout(
+                "symbol corpus construction was cancelled",
+                Some(json!({ "operation": "search_symbol" })),
+            ));
+        }
 
         let corpus = Arc::new(RepositorySymbolCorpus {
             repository_id: repository_id.clone(),
@@ -651,7 +666,7 @@ impl FriggMcpServer {
     ) -> Result<Vec<Arc<RepositorySymbolCorpus>>, ErrorData> {
         let mut corpora = self
             .attached_workspaces_for_repository(repository_id)?
-            .into_par_iter()
+            .into_iter()
             .map(|workspace| {
                 self.collect_repository_symbol_corpus(
                     workspace.repository_id,
@@ -753,6 +768,42 @@ mod tests {
         assert!(
             FriggMcpServer::symbol_corpus_cache_total_bytes(&cache) <= newest_bytes + 1,
             "trimmed cache should stay under the configured byte budget"
+        );
+    }
+
+    #[test]
+    fn container_lookup_is_scoped_by_file_and_selects_nearest_parent() {
+        fn symbol(id: &str, path: &str, start: usize, end: usize) -> SymbolDefinition {
+            SymbolDefinition {
+                stable_id: id.to_owned(),
+                language: SymbolLanguage::Rust,
+                kind: SymbolKind::Function,
+                name: id.to_owned(),
+                path: PathBuf::from(path),
+                line: start,
+                span: SourceSpan {
+                    start_byte: start,
+                    end_byte: end,
+                    start_line: start,
+                    start_column: 0,
+                    end_line: end,
+                    end_column: 0,
+                },
+            }
+        }
+
+        let root = PathBuf::from("/repo");
+        let symbols = vec![
+            symbol("outer", "/repo/src/a.rs", 0, 100),
+            symbol("inner", "/repo/src/a.rs", 10, 80),
+            symbol("leaf", "/repo/src/a.rs", 20, 30),
+            symbol("other-file", "/repo/src/b.rs", 20, 30),
+        ];
+        let by_path = FriggMcpServer::symbols_by_relative_path(&root, &symbols);
+
+        assert_eq!(
+            FriggMcpServer::container_symbol_index_by_index(&symbols, &by_path),
+            vec![None, Some(0), Some(1), None]
         );
     }
 

@@ -22,7 +22,7 @@ impl FriggMcpServer {
         let params_for_blocking = params.clone();
         let server = self.clone();
         let execution = self
-            .run_read_only_tool_blocking(&execution_context, move || {
+            .run_cancellable_search_blocking(&execution_context, move || {
                 let mut scoped_repository_ids: Vec<String> = Vec::new();
                 let mut diagnostics_count = 0usize;
                 let mut manifest_walk_diagnostics_count = 0usize;
@@ -128,6 +128,12 @@ impl FriggMcpServer {
 
                     let mut ranked_matches: Vec<RankedSymbolMatch> = Vec::new();
                     for corpus in &corpora {
+                        if crate::mcp::search_work_should_stop() {
+                            return Err(Self::timeout(
+                                "search_symbol was cancelled",
+                                Some(json!({ "operation": "search_symbol" })),
+                            ));
+                        }
                         if query_looks_canonical {
                             if let Some(symbol_indices) =
                                 corpus.symbol_indices_by_canonical_name.get(&query)
@@ -253,6 +259,12 @@ impl FriggMcpServer {
                     }
                     for corpus in &corpora {
                         for (symbol_index, symbol) in corpus.symbols.iter().enumerate() {
+                            if symbol_index % 256 == 0 && crate::mcp::search_work_should_stop() {
+                                return Err(Self::timeout(
+                                    "search_symbol was cancelled",
+                                    Some(json!({ "operation": "search_symbol" })),
+                                ));
+                            }
                             if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
                                 != Some(3)
                             {

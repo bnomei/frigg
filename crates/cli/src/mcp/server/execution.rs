@@ -5,8 +5,63 @@
 
 use super::*;
 use rmcp::model::ProgressNotificationParam;
+use std::cell::RefCell;
+use std::sync::atomic::AtomicBool;
 
 use crate::domain::{NormalizedWorkloadMetadata, WorkloadPrecisionMode};
+
+const SEARCH_WORK_TIMEOUT: Duration = Duration::from_secs(30);
+
+thread_local! {
+    static SEARCH_WORK_CANCELLATION: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+struct SearchWorkCancellationGuard {
+    cancellation: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl Drop for SearchWorkCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancellation.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+struct SearchWorkThreadGuard {
+    previous: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for SearchWorkThreadGuard {
+    fn drop(&mut self) {
+        SEARCH_WORK_CANCELLATION.with(|slot| {
+            slot.replace(self.previous.take());
+        });
+    }
+}
+
+/// Returns true when the active search request was cancelled or exceeded its deadline.
+pub(crate) fn search_work_should_stop() -> bool {
+    SEARCH_WORK_CANCELLATION.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.load(Ordering::Relaxed))
+    })
+}
+
+pub(crate) fn search_work_cancellation_token() -> Option<Arc<AtomicBool>> {
+    SEARCH_WORK_CANCELLATION.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn with_search_work_cancellation<T>(
+    cancellation: Option<Arc<AtomicBool>>,
+    task_fn: impl FnOnce() -> T,
+) -> T {
+    let previous = SEARCH_WORK_CANCELLATION.with(|slot| slot.replace(cancellation));
+    let _thread_guard = SearchWorkThreadGuard { previous };
+    task_fn()
+}
 
 impl ReadOnlyToolExecutionContext {
     /// Optional context-efficiency percent mirrored into the tool-call display sink.
@@ -141,6 +196,55 @@ impl FriggMcpServer {
         F: FnOnce() -> T + Send + 'static,
     {
         Self::run_blocking_task(context.tool_name, task_fn).await
+    }
+
+    /// Runs exact-search work with a hard deadline and cooperative cancellation on request drop.
+    pub(super) async fn run_cancellable_search_blocking<T, F>(
+        &self,
+        context: &ReadOnlyToolExecutionContext,
+        task_fn: F,
+    ) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let worker_cancellation = Arc::clone(&cancellation);
+        let operation = context.tool_name;
+        let mut cancellation_guard = SearchWorkCancellationGuard {
+            cancellation: Arc::clone(&cancellation),
+            armed: true,
+        };
+        let handle = task::spawn_blocking(move || {
+            with_search_work_cancellation(Some(worker_cancellation), task_fn)
+        });
+
+        let result = match tokio::time::timeout(SEARCH_WORK_TIMEOUT, handle).await {
+            Ok(joined) => joined.map_err(|err| {
+                Self::internal(
+                    format!("blocking task join failure in {operation}: {err}"),
+                    Some(json!({
+                        "operation": operation,
+                        "join_error": Self::bounded_text(&err.to_string()),
+                    })),
+                )
+            }),
+            Err(_) => {
+                cancellation.store(true, Ordering::Relaxed);
+                Err(Self::timeout(
+                    format!(
+                        "{operation} exceeded the {} second search deadline",
+                        SEARCH_WORK_TIMEOUT.as_secs()
+                    ),
+                    Some(json!({
+                        "operation": operation,
+                        "timeout_seconds": SEARCH_WORK_TIMEOUT.as_secs(),
+                    })),
+                ))
+            }
+        };
+        cancellation_guard.armed = false;
+        result
     }
 
     pub(super) fn finalize_read_only_tool<T>(

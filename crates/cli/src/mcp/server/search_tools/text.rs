@@ -23,7 +23,7 @@ impl FriggMcpServer {
         let params_for_blocking = params.clone();
         let server = self.clone();
         let execution = self
-            .run_read_only_tool_blocking(&execution_context, move || {
+            .run_cancellable_search_blocking(&execution_context, move || {
                 let mut scoped_repository_ids: Vec<String> = Vec::new();
                 let mut effective_limit: Option<usize> = None;
                 let mut effective_pattern_type: Option<SearchPatternType> = None;
@@ -162,13 +162,14 @@ impl FriggMcpServer {
                         exclude_glob: exclude_glob_regex,
                         row_mode,
                     };
+                    let retained_match_limit = resume_offset.saturating_add(requested_limit).max(1);
                     let search_output = match pattern_type {
                         SearchPatternType::Literal => searcher
                             .search_literal_with_execution_options_diagnostics(
                                 SearchTextQuery {
                                     query,
                                     path_regex: explicit_path_regex.clone(),
-                                    limit: usize::MAX,
+                                    limit: retained_match_limit,
                                 },
                                 SearchFilters {
                                     include_hidden,
@@ -181,7 +182,7 @@ impl FriggMcpServer {
                                 SearchTextQuery {
                                     query,
                                     path_regex: explicit_path_regex,
-                                    limit: usize::MAX,
+                                    limit: retained_match_limit,
                                 },
                                 SearchFilters {
                                     include_hidden,

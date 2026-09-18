@@ -28,7 +28,9 @@ musl_cc() {
   esac
 }
 
-if [[ "$TARGET" == *"musl"* ]]; then
+if [[ "${USE_CROSS:-false}" == "true" ]]; then
+  cross "${BUILD_ARGS[@]}"
+elif [[ "$TARGET" == *"musl"* ]]; then
   if command -v cross >/dev/null 2>&1; then
     cross "${BUILD_ARGS[@]}"
   elif [[ -n "$(musl_cc)" ]] && command -v "$(musl_cc)" >/dev/null 2>&1; then
