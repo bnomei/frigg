@@ -182,11 +182,6 @@ impl JsonSchema for MetadataObject {
     }
 }
 
-/// JSON Schema helper for optional `metadata` fields on MCP read responses.
-pub fn metadata_object_field_schema(generator: &mut SchemaGenerator) -> Schema {
-    MetadataObject::json_schema(generator)
-}
-
 /// Response detail profile for search and navigation tools that support compact versus full payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

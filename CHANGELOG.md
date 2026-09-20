@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### 2026-09-20
+
+- Fixed MCP output schemas that incorrectly required `metadata` in compact symbol, navigation,
+  outline, and structural responses. Metadata may be omitted but remains object-only when present;
+  regression tests cover live schemas and compact/full outline responses.
+- Added a check that the bundled Amp skill's tool allowlist matches the core MCP tool surface,
+  preventing symbol, batch, and navigation tools from being silently excluded by the bundle.
+- Preserved the full Frigg-first skill and added targeted guidance for source-proof follow-ups,
+  partial tool availability, stale installed filters, schema failures, and manifest glob scope.
+  Tool descriptions now point to `read_match` and target-based navigation; installation guidance
+  explains how to preserve custom MCP endpoints and credentials during skill updates.
+
 ## 0.10.2 - 2026-09-18
 
 - Made Linux releases portable across older distributions: GNU binaries are cross-built against

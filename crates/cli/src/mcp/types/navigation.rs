@@ -92,7 +92,7 @@ pub struct FindReferencesResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -162,7 +162,7 @@ pub struct GoToDefinitionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -208,7 +208,7 @@ pub struct FindDeclarationsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -273,7 +273,7 @@ pub struct FindImplementationsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -367,7 +367,7 @@ pub struct IncomingCallsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -400,7 +400,7 @@ pub struct OutgoingCallsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_selection: Option<NavigationTargetSelectionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     /// Full-mode diagnostic note only (stripped in compact). Prefer `trust` / `trust_note`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -497,7 +497,7 @@ pub struct DocumentSymbolsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -545,7 +545,7 @@ pub struct InspectSyntaxTreeResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -1297,7 +1297,7 @@ pub struct SearchStructuralResponse {
     /// Canonical cardinality and paging truth for the selected structural row unit.
     pub completeness: super::ResultCompleteness,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

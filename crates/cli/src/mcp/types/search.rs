@@ -678,7 +678,7 @@ pub struct SearchSymbolResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_class: Option<LatencyClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    #[schemars(default, with = "MetadataObject")]
     pub metadata: Option<MetadataObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

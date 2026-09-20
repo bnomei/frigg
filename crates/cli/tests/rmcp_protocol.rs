@@ -7,7 +7,10 @@ use std::collections::{BTreeSet, HashMap};
 use frigg::mcp::{
     FriggMcpServer,
     tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile},
-    types::{NextAction, NextActionId, NextActionRole, NextActionTarget, PUBLIC_WRITE_TOOL_NAMES},
+    types::{
+        DocumentSymbolsParams, NextAction, NextActionId, NextActionRole, NextActionTarget,
+        PUBLIC_WRITE_TOOL_NAMES, ResponseMode,
+    },
 };
 use frigg::settings::FriggConfig;
 use rmcp::{
@@ -224,6 +227,35 @@ async fn canonical_next_actions_validate_against_live_rmcp_schemas_on_all_profil
         let tools = tools_list_for_profile(profile).await;
         assert_actions_validate_against_live_schemas(profile, &tools);
     }
+}
+
+#[tokio::test]
+async fn bundled_amp_skill_filter_exposes_the_live_core_surface() {
+    let config: Value = serde_json::from_str(include_str!(
+        "../../../skills/frigg-first-code-search/mcp.json"
+    ))
+    .expect("bundled Amp MCP config");
+    let filter = config["frigg"]["includeTools"]
+        .as_array()
+        .expect("explicit tool filter");
+    let allowed = filter
+        .iter()
+        .map(|name| name.as_str().expect("tool name"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        allowed.len(),
+        filter.len(),
+        "no duplicate allowlist entries"
+    );
+    let tools = tools_list_for_profile(ToolSurfaceProfile::Core).await;
+    let live = tools
+        .iter()
+        .map(|tool| tool.name.as_ref())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        allowed, live,
+        "the installed skill must not hide symbol, batch, or navigation tools"
+    );
 }
 
 /// Prove against actual RMCP descriptors that workspace keeps the additive freshness contract
@@ -461,15 +493,118 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
         .as_ref()
         .expect("document_symbols should publish outputSchema");
     assert_schema_object(output_schema, "document_symbols outputSchema");
-    let metadata_schema = output_schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .and_then(|properties| properties.get("metadata"))
-        .expect("document_symbols outputSchema should include metadata");
-    assert_eq!(
-        metadata_schema.get("type"),
-        Some(&Value::String("object".to_owned())),
-        "document_symbols metadata outputSchema should be an object"
+    let metadata_tools = [
+        "search_symbol",
+        "find_references",
+        "go_to_definition",
+        "find_declarations",
+        "find_implementations",
+        "incoming_calls",
+        "outgoing_calls",
+        "document_symbols",
+        "inspect_syntax_tree",
+        "search_structural",
+    ];
+    for tool_name in metadata_tools {
+        let schema = tool_named(&tools.tools, tool_name)
+            .output_schema
+            .as_ref()
+            .unwrap_or_else(|| panic!("{tool_name} should publish outputSchema"));
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !required.iter().any(|field| field == "metadata"),
+            "{tool_name} outputSchema must permit compact responses to omit metadata"
+        );
+        let metadata_schema = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("metadata"))
+            .unwrap_or_else(|| panic!("{tool_name} outputSchema should include metadata"));
+        let object_fixture = json!({"freshness_basis": "manifest"});
+        let validator = jsonschema::validator_for(metadata_schema)
+            .unwrap_or_else(|error| panic!("{tool_name} metadata schema must compile: {error}"));
+        validator.validate(&object_fixture).unwrap_or_else(|error| {
+            panic!("{tool_name} metadata schema must retain its object type: {error}")
+        });
+        for invalid in [
+            json!(null),
+            json!([]),
+            json!("not metadata"),
+            json!(42),
+            json!(false),
+        ] {
+            assert!(
+                validator.validate(&invalid).is_err(),
+                "{tool_name} metadata schema must reject non-object {invalid}"
+            );
+        }
+    }
+
+    let fixture =
+        std::env::temp_dir().join(format!("frigg-outline-schema-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(fixture.join("src")).expect("fixture source directory");
+    std::fs::create_dir(fixture.join(".git")).expect("fixture repository marker");
+    std::fs::write(fixture.join("src/lib.rs"), "pub fn schema_witness() {}\n")
+        .expect("fixture source");
+    let fixture_server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![fixture.clone()]).expect("fixture configuration"),
+    );
+    let document_symbols_schema = Value::Object(output_schema.as_ref().clone());
+    let output_validator = jsonschema::validator_for(&document_symbols_schema)
+        .expect("document_symbols outputSchema must compile");
+    for mode in [ResponseMode::Compact, ResponseMode::Full] {
+        let response = fixture_server
+            .document_symbols(rmcp::handler::server::wrapper::Parameters(
+                DocumentSymbolsParams {
+                    path: "src/lib.rs".to_owned(),
+                    response_mode: Some(mode),
+                    ..Default::default()
+                },
+            ))
+            .await
+            .expect("real outline response")
+            .0;
+        assert_eq!(response.symbols.len(), 1);
+        assert_eq!(response.symbols[0].symbol, "schema_witness");
+        let serialized = serde_json::to_value(response).unwrap_or_else(|error| {
+            panic!("{mode:?} document_symbols response serializes: {error}")
+        });
+        assert_eq!(
+            serialized.get("metadata").is_some(),
+            mode == ResponseMode::Full,
+            "{mode:?} serialization must match metadata presentation"
+        );
+        output_validator
+            .validate(&serialized)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "actual {mode:?} document_symbols response must satisfy outputSchema: {error}"
+                )
+            });
+    }
+    drop(fixture_server);
+    std::fs::remove_dir_all(fixture).expect("remove fixture");
+
+    let explore = tool_named(&tools.tools, "explore");
+    let explore_schema = Value::Object(explore.input_schema.as_ref().clone());
+    let explore_validator =
+        jsonschema::validator_for(&explore_schema).expect("explore inputSchema must compile");
+    for operation in ["probe", "zoom", "refine"] {
+        explore_validator
+            .validate(&json!({"path": "src/lib.rs", "operation": operation}))
+            .unwrap_or_else(|error| {
+                panic!("explore.operation={operation} must be declared: {error}")
+            });
+    }
+    assert!(
+        explore_validator
+            .validate(&json!({"path": "src/lib.rs", "operation": "unknown"}))
+            .is_err(),
+        "explore.operation must remain a closed enum"
     );
 
     let resources = client

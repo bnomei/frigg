@@ -1987,7 +1987,7 @@ impl FriggMcpServer {
     /// Auto-adopts when a single sensible repository is available; scope is path under that root.
     #[tool(
         name = "read_file",
-        description = "Read a bounded repository-relative source file or line window. Text is raw source; JSON/citation modes add metadata or line citations.",
+        description = "Read current source at a known path/line window. After a search hit, prefer read_match for revision-bound proof. Text/JSON/citation modes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2045,7 +2045,7 @@ impl FriggMcpServer {
     /// Exact lexical search (literal default) under adopted scope; completeness + v2 continuation.
     #[tool(
         name = "search_text",
-        description = "Exact text search, literal by default. Paged rows expose completeness and canonical continuation; use regex/glob/path_regex to scope.",
+        description = "Find exact text (literal default); scope with glob/path_regex. Follow a hit with read_match. Pages expose completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2079,7 +2079,7 @@ impl FriggMcpServer {
     /// Known-name symbol lookup over the adopted index; completeness + continuation for exhaustive pages.
     #[tool(
         name = "search_symbol",
-        description = "Known-name lookup for APIs, types, functions, classes, methods, or identifiers. Paged rows expose completeness and continuation.",
+        description = "Find named APIs/types/functions. Copy target_ref into navigation or use read_match for proof. Pages expose completeness and continuation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

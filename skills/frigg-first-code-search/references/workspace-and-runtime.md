@@ -49,6 +49,37 @@ dual-class only (`manifest_fast` + `semantic_followup`).
 
 **Not authoritative:** Phase 0 / systems inventory freezes, host schema caches, non-public `#[tool]` handlers. Lifecycle tools such as `workspace_index` / `workspace_attach` are not public and never appear in `tools_exposed` / `active_tools`.
 
+### Tools described by the skill are missing in the host
+
+Compare three distinct surfaces before attributing missing tools to the model or server:
+
+1. The host's callable tool definitions for this session.
+2. The **installed** skill's `mcp.json` `includeTools` (not just the latest repository copy).
+   Amp inline `mcpServers` takes precedence over a sibling `mcp.json`; inspect it if present.
+3. The connected server's `workspace.runtime.tools_exposed` or MCP `tools/list`.
+
+A nine-tool install containing text/read/outline tools but no symbol, batch, or navigation tools
+can be an outdated allowlist. The bundled Amp filter is checked against the core server manifest.
+If the server advertises the missing names but the installed filter excludes them, update the
+installed skill/filter rather than changing search parameters or restarting the server.
+
+For a local Amp install, preview the refresh with
+`frigg adopt --skill-provider amp --dry-run`, using the current bundled skill source (set
+`FRIGG_SKILL_SOURCE` to the current `skills/frigg-first-code-search` directory when necessary).
+Check the destination: an explicitly loaded project skill can differ from the installer's preferred
+global destination. Apply only to the intended install. Server-managed global skills must be
+updated in their owning skills repository, not the read-only cache. Preserve the configured MCP
+endpoint and credentials; do not blindly replace a remote URL with the bundle's loopback default.
+The adopter replaces the skill tree rather than merging customized MCP configuration. For a
+custom endpoint, merge the intended `includeTools` changes into the existing configuration, or
+safeguard and restore its connection settings after updating the skill and before reloading the host.
+
+After an approved config refresh, reload skills and reconnect/reload MCP in the host, then compare
+the callable tools again. If the filter allows a tool but the server omits it, check the running
+binary/version and endpoint. If both allow it but the host omits it, investigate host registration.
+`Session not found` prevents server comparison: reconnect the expired session through the host;
+it does not prove that the server has fewer tools. Do not restart shared services as a diagnostic.
+
 **`post_edit=run_cli_index` is not an MCP tool.** Public Frigg MCP has no reindex/write tool. It
 means the snapshot is missing, uninitialized, or erroneous: run CLI `frigg index` (or operator
 lifecycle / attach-side ensure). Do not invent `workspace_reindex` or shell-grep the repo as a

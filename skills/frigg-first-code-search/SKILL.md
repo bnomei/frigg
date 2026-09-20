@@ -14,6 +14,11 @@ Shell tools are fallback only for git state and diffs, non-code files, build/tes
 
 Do not run parallel shell grep in the same turn as Frigg search on indexed source.
 
+**Follow the evidence, not just the shell replacement:** use `search_symbol` for a known
+identifier and `search_batch` for independent hypotheses when callable. After selecting a hit,
+copy its `target_ref` into navigation when relationships matter, then use `read_match` for source
+proof. A known path still warrants direct `read_file`; do not add navigation merely to use more tools.
+
 **Harness boundary (Frigg is an evidence layer, not an agent OS):**
 
 - Host tool order, Grep-first defaults, and intermittent MCP **registration/inheritance** flukes are **outside** Frigg product code (**FUT-003** harness boundary — not a Frigg CI gate or ranking bug).
@@ -43,6 +48,23 @@ Do not run parallel shell grep in the same turn as Frigg search on indexed sourc
    *after* each spawn actually has Frigg registered; HTTP shares state when registration works —
    it does not create child registration by itself.
 ```
+
+**Partial surface (some Frigg tools work, recommended ones are missing):**
+
+- Compare the host-callable tools, the **installed** skill's `mcp.json` `includeTools` (or inline
+  `mcpServers`), and `workspace.runtime.tools_exposed` / live `tools/list` when available. A stale
+  skill filter can hide symbol, batch, and navigation tools even when the server supports them.
+- Report the reduced surface once. Do not call host-unavailable tools just because the skill or
+  server lists them. Use parallel scoped searches when batch is unavailable; use bounded exact
+  identifier/import/call-site searches when navigation is unavailable, then read the witnesses.
+- See [runtime recovery](references/workspace-and-runtime.md#tools-described-by-the-skill-are-missing-in-the-host)
+  before refreshing an install. Preserve its endpoint/credentials; an expired HTTP session is not
+  evidence of a smaller server tool surface.
+
+**Output-schema failures are not zero hits:** if a tool result fails validation (for example,
+`document_symbols` missing required `metadata`), report the tool and contract error once and use
+another proof tool. Do not blindly retry or change search parameters to repair a response schema.
+For an input validation error, correct the named field and retry only when the correction is clear.
 
 **Transport contract (dual mode — hosts choose; Frigg does not force one):**
 
@@ -119,6 +141,12 @@ Use this table before reaching for shell on source code.
 **Default scope:** `path_regex='^src/'` or tighter (use the repo’s real runtime roots, e.g. `^crates/`) unless the question is about docs, specs, or intentionally indexed research paths.
 
 **Regex trap:** `|`, `.*`, `^`, `$`, or character classes in a literal query with 0 hits → retry with `pattern_type=regex`.
+
+**Glob scope trap:** `ZERO_HIT_SCOPE_TOO_TIGHT` is not absence proof. Frigg's basename glob
+`Cargo.toml` matches root and nested manifests; `**/Cargo.toml` excludes the root manifest.
+For unambiguous manifest scope, omit `glob` and use `path_regex='(^|/)Cargo\.toml$'` for all
+manifests or `path_regex='^Cargo\.toml$'` for root-only. Verify scope before claiming workspace-wide
+absence, or explicitly limit the claim to manifests actually read.
 
 **Ignore truth:** Frigg follows `.gitignore`. Ignored paths (for example gitignored `/docs/`) do not appear in indexed search even if they exist on disk — use direct read or adjust ignore rules when those paths are the task.
 
