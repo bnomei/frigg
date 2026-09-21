@@ -1513,7 +1513,7 @@ fn index_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> Fr
     assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
     assert_eq!(
         plan.semantic_refresh.changed_paths,
-        vec![PathBuf::from("src/main.rs")]
+        vec!["src/main.rs".to_owned()]
     );
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
 
@@ -1804,7 +1804,7 @@ fn index_plan_changed_only_with_dirty_hint_advances_after_manifest_fast_pass() -
     );
     assert_eq!(
         plan.semantic_refresh.changed_paths,
-        vec![PathBuf::from("src/main.rs")]
+        vec!["src/main.rs".to_owned()]
     );
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
 
