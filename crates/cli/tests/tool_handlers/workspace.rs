@@ -538,16 +538,10 @@ async fn workspace_attach_hides_repository_health_artifact_counts() {
         ],
     );
 
-    let mut config = FriggConfig::from_optional_workspace_roots(Vec::new())
-        .expect("empty serving config should be valid");
-    config.semantic_runtime = SemanticRuntimeConfig {
-        enabled: true,
-        provider: Some(SemanticRuntimeProvider::OpenAi),
-        model: Some("text-embedding-3-small".to_owned()),
-        strict_mode: false,
-        openai_compat_endpoint: None,
-    };
-    let server = server_for_config(config);
+    let server = server_for_config(
+        FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid"),
+    );
 
     let response = server
         .workspace_attach(Parameters(WorkspaceAttachParams {

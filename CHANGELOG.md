@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.4 - 2026-09-21
+
+- Fixed Linux release builds by installing the pinned `cross` executable in GitHub Actions
+  instead of only configuring cross-compilation toolchains.
+
 ## 0.10.3 - 2026-09-21
 
 - Updated Cargo dependencies and the lockfile within their existing compatibility ranges,

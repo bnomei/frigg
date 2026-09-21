@@ -22,4 +22,19 @@ do
   }
 done
 
+grep -Fq "uses: taiki-e/install-action@v2" "$WORKFLOW" || {
+  echo "Release workflow does not install the cross executable." >&2
+  exit 1
+}
+
+grep -Fq "tool: cross@0.2.5" "$WORKFLOW" || {
+  echo "Release workflow does not pin the cross executable version." >&2
+  exit 1
+}
+
+if grep -Fq "uses: taiki-e/setup-cross-toolchain-action" "$WORKFLOW"; then
+  echo "Release workflow configures a cross toolchain without installing the cross executable." >&2
+  exit 1
+fi
+
 echo "Release workflow checkout contract is valid."

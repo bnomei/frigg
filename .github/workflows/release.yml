@@ -103,11 +103,11 @@ jobs:
           shared-key: release-${{ runner.os }}-${{ matrix.target }}
           cache-on-failure: true
 
-      - name: Setup cross
+      - name: Install cross
         if: matrix.use_cross
-        uses: taiki-e/setup-cross-toolchain-action@v1
+        uses: taiki-e/install-action@v2
         with:
-          target: ${{ matrix.target }}
+          tool: cross@0.2.5
 
       - name: Resolve version
         id: version

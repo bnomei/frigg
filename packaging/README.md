@@ -23,13 +23,13 @@ removes ambient OpenAI and Gemini credentials before starting Frigg.
 Default Docker image assets:
 
 ```bash
-VERSION=0.10.3 TARGET=x86_64-unknown-linux-gnu scripts/build-release.sh
-VERSION=0.10.3 TARGET=x86_64-unknown-linux-gnu scripts/package-release.sh
-VERSION=0.10.3 TARGET=x86_64-unknown-linux-gnu scripts/smoke-release.sh
+VERSION=0.10.4 TARGET=x86_64-unknown-linux-gnu scripts/build-release.sh
+VERSION=0.10.4 TARGET=x86_64-unknown-linux-gnu scripts/package-release.sh
+VERSION=0.10.4 TARGET=x86_64-unknown-linux-gnu scripts/smoke-release.sh
 
-VERSION=0.10.3 TARGET=aarch64-unknown-linux-gnu scripts/build-release.sh
-VERSION=0.10.3 TARGET=aarch64-unknown-linux-gnu scripts/package-release.sh
-VERSION=0.10.3 TARGET=aarch64-unknown-linux-gnu scripts/smoke-release.sh
+VERSION=0.10.4 TARGET=aarch64-unknown-linux-gnu scripts/build-release.sh
+VERSION=0.10.4 TARGET=aarch64-unknown-linux-gnu scripts/package-release.sh
+VERSION=0.10.4 TARGET=aarch64-unknown-linux-gnu scripts/smoke-release.sh
 ```
 
 Static musl assets omit the default local ONNX/FastEmbed provider because ONNX Runtime does not
@@ -37,13 +37,13 @@ publish musl binaries. The npm wrapper detects Node's runtime libc and selects t
 instead of hard-coding GNU Linux:
 
 ```bash
-VERSION=0.10.3 TARGET=x86_64-unknown-linux-musl scripts/build-release.sh
-VERSION=0.10.3 TARGET=x86_64-unknown-linux-musl scripts/package-release.sh
-VERSION=0.10.3 TARGET=x86_64-unknown-linux-musl scripts/smoke-release.sh
+VERSION=0.10.4 TARGET=x86_64-unknown-linux-musl scripts/build-release.sh
+VERSION=0.10.4 TARGET=x86_64-unknown-linux-musl scripts/package-release.sh
+VERSION=0.10.4 TARGET=x86_64-unknown-linux-musl scripts/smoke-release.sh
 
-VERSION=0.10.3 TARGET=aarch64-unknown-linux-musl scripts/build-release.sh
-VERSION=0.10.3 TARGET=aarch64-unknown-linux-musl scripts/package-release.sh
-VERSION=0.10.3 TARGET=aarch64-unknown-linux-musl scripts/smoke-release.sh
+VERSION=0.10.4 TARGET=aarch64-unknown-linux-musl scripts/build-release.sh
+VERSION=0.10.4 TARGET=aarch64-unknown-linux-musl scripts/package-release.sh
+VERSION=0.10.4 TARGET=aarch64-unknown-linux-musl scripts/smoke-release.sh
 ```
 
 Use `cross` for these targets unless the matching musl C toolchain is installed on the host.
@@ -52,7 +52,7 @@ The Intel macOS release asset also omits the default local ONNX/FastEmbed provid
 `ort-sys` does not provide prebuilt ONNX Runtime binaries for `x86_64-apple-darwin`:
 
 ```bash
-VERSION=0.10.3 TARGET=x86_64-apple-darwin scripts/build-release.sh
-VERSION=0.10.3 TARGET=x86_64-apple-darwin scripts/package-release.sh
-VERSION=0.10.3 TARGET=x86_64-apple-darwin scripts/smoke-release.sh
+VERSION=0.10.4 TARGET=x86_64-apple-darwin scripts/build-release.sh
+VERSION=0.10.4 TARGET=x86_64-apple-darwin scripts/package-release.sh
+VERSION=0.10.4 TARGET=x86_64-apple-darwin scripts/smoke-release.sh
 ```
