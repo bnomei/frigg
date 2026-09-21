@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 2026-09-21
+## 0.10.3 - 2026-09-21
 
 - Updated Cargo dependencies and the lockfile within their existing compatibility ranges,
   including Clap, Tokio, UUID, SmallVec, Tree-sitter, SQLite, and schema/serialization crates.
@@ -10,9 +10,6 @@
   FastEmbed remains on 5.17.3 because 5.17.4 requires a newer ONNX Runtime prerelease.
 - Corrected two semantic-index test expectations to compare string paths, keeping the test
   targets compilable on Rust 1.88 without relying on newer `String`/`PathBuf` comparisons.
-
-### 2026-09-20
-
 - Fixed MCP output schemas that incorrectly required `metadata` in compact symbol, navigation,
   outline, and structural responses. Metadata may be omitted but remains object-only when present;
   regression tests cover live schemas and compact/full outline responses.
