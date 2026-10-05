@@ -52,7 +52,7 @@ The narrow promise is source-backed context for AI agents: repository-aware sear
 Fast path on macOS or GNU/glibc Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.10.4 sh
+curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.11.0 sh
 ```
 
 The installer downloads the matching GitHub Release archive, verifies its `.sha256`, and installs the `frigg` binary to `$HOME/.local/bin` unless `FRIGG_INSTALL_DIR` is set. When `FRIGG_VERSION` is unset, it resolves the latest GitHub Release.
@@ -65,7 +65,7 @@ Other install surfaces:
 | Cargo prebuilt binary | `cargo binstall frigg` |
 | Cargo source fallback | `cargo install frigg` |
 | npm wrapper | `npx @bnomei/frigg --version` |
-| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.10.4 --version` |
+| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.11.0 --version` |
 | Scoop | `scoop bucket add frigg https://github.com/bnomei/scoop-frigg && scoop install frigg` |
 
 The prebuilt paths are the point: one local binary, no Python 3.11+ runtime, no local C compiler, and no ONNX model download unless you explicitly enable the local semantic runtime.
@@ -82,7 +82,7 @@ target/release/frigg --version
 Expected output:
 
 ```text
-frigg 0.10.4
+frigg 0.11.0
 ```
 
 Frigg's source currently requires Rust 1.88 or newer.
@@ -551,6 +551,8 @@ Related contracts and operator guidance:
 | `frigg index` | Scan files, refresh the local search index, and refresh semantic rows when semantic runtime is enabled. |
 | `frigg index --changed` | Recheck files changed since the last index. |
 | `frigg hash` | Print the stable CI cache fingerprint as `frigg-hash=<hex>`. |
+| `frigg cache make` | Create portable `frigg-cache.zip` from local SQLite, semantic, and SCIP state. |
+| `frigg cache load` | Validate and load `frigg-cache.zip` into the current checkout. |
 | `frigg context` | Summarize context-efficiency JSONL logs when logging is enabled. |
 | `frigg stats` | Show local opt-in routing stats when `FRIGG_ROUTING_STATS` is enabled on the MCP process. |
 
@@ -729,14 +731,14 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.10.4
+  FRIGG_VERSION: 0.11.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
   frigg:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Frigg
         run: |
@@ -747,7 +749,14 @@ jobs:
       - run: frigg index
 ```
 
-For larger repositories, cache `.frigg/` as regenerable build output. Restore first, then run `frigg init` and `frigg index --changed` to validate and refresh restored state. Save the cache only from trusted events:
+For larger repositories and cloud agents, publish a portable index with each GitHub Release. A
+fresh checkout can download the fixed `frigg-cache.zip`, run `frigg cache load`, and then
+`frigg index --changed` to reconcile the release snapshot. See the
+[portable release cache guide](docs/portable-cache.md) and Frigg's own
+[release workflow](.github/workflows/release.yml) for a complete setup.
+
+For branch and pull-request jobs, `.frigg/` can still be cached as regenerable build output. Restore
+first, then run `frigg init` and `frigg index --changed`. Save the cache only from trusted events:
 
 ```yaml
 name: Frigg
@@ -758,14 +767,14 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.10.4
+  FRIGG_VERSION: 0.11.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
   frigg:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Frigg
         run: |
@@ -778,7 +787,7 @@ jobs:
 
       - name: Restore Frigg state
         id: frigg_cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .frigg/
           key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ env.FRIGG_VERSION }}-${{ steps.frigg_hash.outputs.frigg-hash }}-${{ github.sha }}
@@ -790,7 +799,7 @@ jobs:
 
       - name: Save Frigg state
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .frigg/
           key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ env.FRIGG_VERSION }}-${{ steps.frigg_hash.outputs.frigg-hash }}-${{ github.sha }}
@@ -870,6 +879,46 @@ just index /absolute/path/to/repo
 ```
 
 ## Troubleshooting
+
+HTTP reports `404 Not Found: Session not found` after idle time, sleep/resume, or restart:
+
+- Frigg uses stateful MCP sessions. Restarting the process or container loses those sessions;
+  rmcp also expires sessions after five minutes without session activity. HTTP liveness probes
+  do not keep MCP sessions alive. A healthy `/healthz` does not imply an existing session is valid.
+- Compare `x-frigg-instance-id` on HTTP responses (including `/healthz`) before and after the
+  failure. It changes when the HTTP server starts again. An unchanged ID with a session 404
+  indicates a missing session in the same server instance, not a process restart.
+- Session 404s retain rmcp's status/body and include `x-frigg-session-recovery: initialize`.
+  The warning log provides the same guidance without logging the session ID or bearer token.
+  These headers are diagnostics, not an alternative recovery protocol.
+- The [MCP transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management)
+  requires clients to initialize again **without** the stale `Mcp-Session-Id`, complete the
+  handshake, and use the newly issued ID. In Amp, reload/reconnect the MCP servers after a
+  Frigg restart if automatic recovery does not happen. Reattach repositories with `workspace`
+  and rerun searches to obtain new result handles; session-local defaults and proof handles
+  do not survive reconnection. Do not blindly replay interrupted mutating tool calls.
+- Keep orb setup/resume service startup idempotent to avoid unnecessary restarts. Stateless
+  HTTP or accepting an unknown session ID is not a safe workaround: Frigg relies on session
+  isolation for repository adoption, watch leases, and result handles. Disabling idle cleanup
+  would retain abandoned sessions and their leases indefinitely.
+
+To test the transport with a temporary source build (no local embedding runtime required):
+
+```bash
+cargo test --locked -p frigg --no-default-features --test streamable_http
+# Optional real idle-expiry reproduction: takes just over five minutes.
+cargo test --locked -p frigg --no-default-features --test streamable_http -- --ignored
+cargo build --locked -p frigg --no-default-features --bin frigg
+```
+
+Use `target/debug/frigg` with the existing service arguments in a disposable test deployment.
+This build omits local embeddings; omit `--no-default-features` if testing those too. Capture
+the instance header, initialize and call a tool, restart only the test Frigg service, then call
+through the existing client again. Expect a stale-session 404 followed by a fresh handshake
+and successful tool calls if the client implements recovery. Otherwise reconnect the client
+and confirm recovery manually. These diagnostics do not themselves reconnect Amp. Build in
+the target container image for matching architecture and libc rather than replacing a shared
+service binary with an incompatible host build.
 
 No repositories appear in a client:
 

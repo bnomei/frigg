@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Frigg
         run: scripts/install.sh
@@ -37,7 +37,7 @@ jobs:
 
       - name: Restore Frigg index cache
         id: frigg_cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .frigg/
           key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ steps.frigg_hash.outputs.frigg-hash }}-${{ github.sha }}
@@ -51,7 +51,7 @@ jobs:
 
       - name: Save Frigg index cache
         if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.frigg_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .frigg/
           key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ steps.frigg_hash.outputs.frigg-hash }}-${{ github.sha }}

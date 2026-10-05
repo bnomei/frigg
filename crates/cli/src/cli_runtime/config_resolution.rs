@@ -1,7 +1,8 @@
 //! CLI-to-config resolution for serve startup and per-command operating profiles.
 //!
 //! Maps CLI flags and workspace roots into `FriggConfig` profiles for serve, watch, lexical, and
-//! semantic runtime contracts.
+//! semantic runtime contracts. Portable cache commands use the ordinary single-workspace utility
+//! profile; archive contents, not semantic CLI flags, determine which semantic state is moved.
 
 use std::error::Error;
 use std::io;
@@ -48,6 +49,7 @@ pub(crate) fn resolve_command_config(
             "`frigg serve` uses startup serving config, not command config resolution",
         ))),
         Command::Adopt { .. }
+        | Command::Cache { .. }
         | Command::Context { .. }
         | Command::Init
         | Command::RepairStorage

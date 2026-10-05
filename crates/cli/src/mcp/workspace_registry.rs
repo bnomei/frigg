@@ -1,15 +1,20 @@
 //! Process-wide workspace catalog keyed by canonical repository root.
 //!
-//! Tracks stable `repository_id` values, SQLite storage paths, and per-session adoption
-//! refcounts so watch leases and cache invalidation can outlive individual MCP sessions.
+//! Separates the public path-derived `repository_id` from the `runtime_repository_id` that owns
+//! durable SQLite rows. Existing indexes, including loaded portable caches, supply the runtime
+//! partition so search, indexing, watch leases, and cache invalidation never split one workspace
+//! across two identities. Per-session adoption refcounts let those resources outlive a session.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::domain::model::stable_repository_id_for_root;
-use crate::storage::resolve_provenance_db_path;
+use crate::storage::{Storage, resolve_provenance_db_path};
 
-/// One workspace known to the process-wide registry with stable and runtime repository ids.
+/// Workspace identity and storage routing shared by MCP sessions and background tasks.
+///
+/// `repository_id` is the public path-derived alias; `runtime_repository_id` is the durable
+/// partition key used for SQLite, indexing, watch leases, and process caches.
 #[derive(Debug, Clone)]
 pub(crate) struct AttachedWorkspace {
     pub repository_id: String,
@@ -30,17 +35,21 @@ pub(crate) struct WorkspaceRegistry {
 }
 
 impl WorkspaceRegistry {
-    /// Seeds the catalog from configured startup roots (`runtime_id`, display name, path).
+    /// Seeds startup roots while preferring an existing database's sole durable partition.
+    ///
+    /// The configured id is used only when storage has no readable repository row.
     pub(crate) fn from_startup_repositories<I>(repositories: I) -> Self
     where
         I: IntoIterator<Item = (String, String, String)>,
     {
         let mut registry = Self::default();
-        for (runtime_repository_id, display_name, root_path) in repositories {
+        for (configured_repository_id, display_name, root_path) in repositories {
             let root = PathBuf::from(&root_path)
                 .canonicalize()
                 .unwrap_or_else(|_| PathBuf::from(&root_path));
             let repository_id = stable_repository_id_for_root(&root).0;
+            let runtime_repository_id =
+                stored_repository_id_for_root(&root).unwrap_or(configured_repository_id);
             let workspace = registry.insert_with_repository_id(
                 root,
                 repository_id,
@@ -132,15 +141,19 @@ impl WorkspaceRegistry {
         workspace
     }
 
-    /// Ensures a root is cataloged; second value is true when this call created the entry.
+    /// Catalogs a dynamically attached root without forking an existing storage partition.
+    ///
+    /// The second result is true when this call created the registry entry.
     pub(crate) fn get_or_insert(&mut self, canonical_root: PathBuf) -> (AttachedWorkspace, bool) {
         let display_name = display_name_for_root(&canonical_root);
         let repository_id = stable_repository_id_for_root(&canonical_root).0;
+        let runtime_repository_id =
+            stored_repository_id_for_root(&canonical_root).unwrap_or_else(|| repository_id.clone());
         let already_known = self.by_canonical_root.contains_key(&canonical_root);
         let workspace = self.insert_with_repository_id(
             canonical_root,
             repository_id.clone(),
-            repository_id,
+            runtime_repository_id,
             display_name,
         );
         (workspace, !already_known)
@@ -255,4 +268,75 @@ fn storage_db_path_for_root(root: &Path) -> PathBuf {
         root.join(crate::storage::PROVENANCE_STORAGE_DIR)
             .join(crate::storage::PROVENANCE_STORAGE_DB_FILE)
     })
+}
+
+/// Reads the sole durable partition so registry fallback cannot create a second repository row.
+///
+/// Missing storage and inspection failures return `None`; startup/readiness gates remain
+/// responsible for surfacing incompatible or corrupt databases before they are used.
+fn stored_repository_id_for_root(root: &Path) -> Option<String> {
+    let db_path = storage_db_path_for_root(root);
+    if !db_path.is_file() {
+        return None;
+    }
+    Storage::new(db_path).sole_repository_id().ok().flatten()
+}
+
+#[cfg(test)]
+mod portable_cache_tests {
+    #![allow(clippy::panic)]
+
+    use super::*;
+    use crate::storage::{Storage, ensure_provenance_db_parent_dir};
+    use uuid::Uuid;
+
+    #[test]
+    fn dynamic_workspace_reuses_the_stored_repository_partition() {
+        let root = std::env::temp_dir().join(format!("frigg-cache-registry-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("create workspace");
+        let db_path = ensure_provenance_db_parent_dir(&root).expect("resolve storage path");
+        let storage = Storage::new(&db_path);
+        storage.initialize().expect("initialize storage");
+        storage
+            .upsert_repository("repo-001", Path::new("/different/checkout"), "fixture")
+            .expect("seed repository");
+
+        let canonical_root = root.canonicalize().expect("canonicalize workspace");
+        let (workspace, inserted) = WorkspaceRegistry::default().get_or_insert(canonical_root);
+        assert!(inserted);
+        assert_eq!(workspace.runtime_repository_id, "repo-001");
+        assert_ne!(workspace.repository_id, workspace.runtime_repository_id);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_workspace_reuses_the_stored_repository_partition() {
+        let root = std::env::temp_dir().join(format!("frigg-cache-startup-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).expect("create workspace");
+        let db_path = ensure_provenance_db_parent_dir(&root).expect("resolve storage path");
+        let storage = Storage::new(&db_path);
+        storage.initialize().expect("initialize storage");
+        storage
+            .upsert_repository(
+                "loaded-partition",
+                Path::new("/different/checkout"),
+                "fixture",
+            )
+            .expect("seed repository");
+
+        let registry = WorkspaceRegistry::from_startup_repositories([(
+            "configured-partition".to_owned(),
+            "fixture".to_owned(),
+            root.display().to_string(),
+        )]);
+        let workspace = registry
+            .startup_workspaces()
+            .into_iter()
+            .next()
+            .expect("startup workspace");
+        assert_eq!(workspace.runtime_repository_id, "loaded-partition");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

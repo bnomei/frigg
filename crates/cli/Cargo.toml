@@ -58,6 +58,7 @@ tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
+zip.workspace = true
 
 [features]
 default = ["local-embeddings"]

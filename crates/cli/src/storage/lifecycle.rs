@@ -2,7 +2,8 @@
 //!
 //! Coordinates schema init, vector extension readiness, verification, and auto-repair for
 //! `.frigg/storage.sqlite3`; callers treat failures here as bootstrap blockers rather than
-//! per-query errors.
+//! per-query errors. Portable cache admission uses the strongest verification path because staged
+//! external state must prove relational, SQLite, and semantic-vector integrity before install.
 
 use std::time::Duration;
 
@@ -232,6 +233,94 @@ impl Storage {
         self.verify_runtime_readiness()?;
         let conn = self.open_current_schema_connection()?;
         self.verify_embedding_membership_with_connection(&conn)
+    }
+
+    /// Applies the full admission gate for a staged portable cache database.
+    ///
+    /// Requires the current schema and tables, SQLite integrity and foreign-key checks, writable
+    /// repository behavior, sqlite-vec readiness, relational invariants, and complete semantic
+    /// embedding membership. Callers may install the database only after this succeeds.
+    pub fn verify_portable_cache(&self) -> FriggResult<()> {
+        let mut conn = open_existing_connection(&self.db_path)?;
+        self.require_current_schema_on_connection(&conn)?;
+        self.verify_required_tables_on_connection(&conn)?;
+
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "portable cache integrity check failed for '{}': {err}",
+                    self.db_path.display()
+                ))
+            })?;
+        if integrity != "ok" {
+            return Err(FriggError::Internal(format!(
+                "portable cache integrity check failed for '{}': {integrity}",
+                self.db_path.display()
+            )));
+        }
+
+        let foreign_key_violation = conn
+            .prepare("PRAGMA foreign_key_check")
+            .and_then(|mut statement| statement.exists([]))
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "portable cache foreign-key check failed for '{}': {err}",
+                    self.db_path.display()
+                ))
+            })?;
+        if foreign_key_violation {
+            return Err(FriggError::Internal(format!(
+                "portable cache contains foreign-key violations in '{}'",
+                self.db_path.display()
+            )));
+        }
+
+        run_repository_roundtrip_probe(&mut conn)?;
+        verify_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
+        self.verify_relational_invariants_with_connection(&conn)?;
+        drop(conn);
+        self.validate_embeddings()
+    }
+
+    /// Returns the durable repository partition when the database contains zero or one.
+    ///
+    /// Multiple partitions are rejected because portable storage and single-workspace command
+    /// paths cannot safely infer which identity should receive subsequent reads and writes.
+    pub fn sole_repository_id(&self) -> FriggResult<Option<String>> {
+        let conn = open_existing_read_only_connection(&self.db_path)?;
+        self.require_current_schema_on_connection(&conn)?;
+        let mut statement = conn
+            .prepare("SELECT repository_id FROM repository ORDER BY repository_id LIMIT 2")
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to inspect repository identity in '{}': {err}",
+                    self.db_path.display()
+                ))
+            })?;
+        let repository_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to query repository identity in '{}': {err}",
+                    self.db_path.display()
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode repository identity in '{}': {err}",
+                    self.db_path.display()
+                ))
+            })?;
+        match repository_ids.as_slice() {
+            [] => Ok(None),
+            [repository_id] => Ok(Some(repository_id.clone())),
+            _ => Err(FriggError::Internal(format!(
+                "portable storage requires one repository partition, found multiple in '{}'",
+                self.db_path.display()
+            ))),
+        }
     }
 
     /// Verifies cheap relational schema readiness for workspace/status responses.

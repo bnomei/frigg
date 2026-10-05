@@ -24,7 +24,8 @@ dist
 #.idea/
 
 .frigg
-/docs/
+/docs/*
+!/docs/portable-cache.md
 specs
 /index.scip
 .env

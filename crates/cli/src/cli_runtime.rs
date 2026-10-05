@@ -5,7 +5,7 @@
 //! - `config_resolution` — maps CLI flags into `FriggConfig` for serve and utility commands.
 //! - `startup_gates` — semantic-runtime and vector-readiness checks before serving or index.
 //! - `storage_paths` — storage database path resolution for workspace roots.
-//! - `commands` — init, index, storage maintenance, and context summaries.
+//! - `commands` — init, index, portable cache, storage maintenance, and context summaries.
 
 mod commands;
 mod config_resolution;
@@ -16,9 +16,10 @@ mod storage_paths;
 
 pub(crate) use commands::{
     StorageMaintenanceCommand, report_storage_failure, run_adopt_command_with_output,
-    run_context_summary_command, run_hash_command, run_index_command_with_output,
-    run_pretooluse_hook_command, run_stats_command, run_status_command,
-    run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
+    run_cache_load_command, run_cache_make_command, run_context_summary_command, run_hash_command,
+    run_index_command_with_output, run_pretooluse_hook_command, run_stats_command,
+    run_status_command, run_storage_init_command_with_output,
+    run_storage_maintenance_command_with_output,
 };
 pub(crate) use config_resolution::{
     resolve_command_config, resolve_startup_config, resolve_watch_runtime_config,

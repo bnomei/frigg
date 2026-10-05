@@ -1,7 +1,9 @@
 //! Clap-derived CLI surface: global runtime flags and utility or serve subcommands.
 //!
 //! Defines the `Cli` parser, subcommand enums, and flag defaults that `cli_dispatch` and HTTP
-//! runtime wiring deserialize before startup gates and MCP serve begin.
+//! runtime wiring deserialize before startup gates and MCP serve begin. Portable cache commands
+//! deliberately expose only an optional archive path so release and orb automation stay
+//! deterministic.
 
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -365,6 +367,11 @@ pub(crate) enum Command {
     ///
     /// Useful for CI cache keys; most local workflows do not need it.
     Hash,
+    /// Create or load a portable Frigg cache archive.
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
     /// Prune retained manifest snapshots for each workspace root.
     #[command(hide = true)]
     PruneStorage {
@@ -405,6 +412,26 @@ pub(crate) enum Command {
         /// Print the stable machine-readable status snapshot.
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+}
+
+/// Creates or installs the fixed-shape portable archive used to seed fresh checkouts.
+///
+/// Both operations default to `frigg-cache.zip`; the positional path is the only packaging
+/// customization supported by the CLI contract.
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum CacheAction {
+    /// Create a consistent cache archive from the current workspace.
+    Make {
+        /// Archive path (defaults to `frigg-cache.zip`).
+        #[arg(value_name = "ARCHIVE", default_value = "frigg-cache.zip")]
+        archive: PathBuf,
+    },
+    /// Load a cache archive into the current workspace.
+    Load {
+        /// Archive path (defaults to `frigg-cache.zip`).
+        #[arg(value_name = "ARCHIVE", default_value = "frigg-cache.zip")]
+        archive: PathBuf,
     },
 }
 
@@ -551,10 +578,12 @@ pub(crate) enum SkillProvider {
 mod tests {
     #![allow(clippy::panic)]
 
+    use std::path::PathBuf;
+
     use clap::Parser;
 
     use super::{
-        AdoptAgentsPolicy, AdoptClient, AdoptTarget, Cli, Command, HiddenHookCli,
+        AdoptAgentsPolicy, AdoptClient, AdoptTarget, CacheAction, Cli, Command, HiddenHookCli,
         HiddenHookCommand, HookEvent, SkillProvider, expand_adopt_clients,
     };
 
@@ -563,6 +592,40 @@ mod tests {
         let cli = Cli::try_parse_from(["frigg", "hash"]).expect("hash command should parse");
         assert!(cli.workspace_roots.is_empty());
         assert!(matches!(cli.command, Some(Command::Hash)));
+    }
+
+    #[test]
+    fn cache_commands_default_to_fixed_archive_name() {
+        let make =
+            Cli::try_parse_from(["frigg", "cache", "make"]).expect("cache make should parse");
+        assert!(matches!(
+            make.command,
+            Some(Command::Cache {
+                action: CacheAction::Make { archive }
+            }) if archive == PathBuf::from("frigg-cache.zip")
+        ));
+
+        let load =
+            Cli::try_parse_from(["frigg", "cache", "load"]).expect("cache load should parse");
+        assert!(matches!(
+            load.command,
+            Some(Command::Cache {
+                action: CacheAction::Load { archive }
+            }) if archive == PathBuf::from("frigg-cache.zip")
+        ));
+    }
+
+    #[test]
+    fn cache_commands_accept_only_a_positional_archive_override() {
+        let cli = Cli::try_parse_from(["frigg", "cache", "make", "custom.zip"])
+            .expect("positional archive should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Cache {
+                action: CacheAction::Make { archive }
+            }) if archive == PathBuf::from("custom.zip")
+        ));
+        assert!(Cli::try_parse_from(["frigg", "cache", "make", "--output", "custom.zip"]).is_err());
     }
 
     #[test]

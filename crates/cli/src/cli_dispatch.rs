@@ -1,8 +1,9 @@
 //! Async CLI dispatch: utility commands, startup gates, watch supervisor attach, and serve over
 //! stdio or HTTP runtime.
 //!
-//! Parses `Cli` arguments, runs storage and indexing utilities, attaches the watch supervisor when
-//! configured, and hands off long-lived MCP serve to the stdio or HTTP runtime entry points.
+//! Parses `Cli` arguments, runs storage, portable cache, and indexing utilities, attaches the watch
+//! supervisor when configured, and hands off long-lived MCP serve to the stdio or HTTP runtime
+//! entry points.
 
 use std::error::Error;
 use std::io;
@@ -14,12 +15,15 @@ use frigg::searcher::ValidatedManifestCandidateCache;
 use frigg::settings::{RuntimeTransportKind, runtime_profile_for_transport};
 use frigg::watch::{WatchEvent, WatchEventReporter, maybe_start_watch_runtime_with_reporter};
 
-use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent, expand_adopt_clients};
+use crate::cli_args::{
+    CacheAction, HiddenHookCli, HiddenHookCommand, HookEvent, expand_adopt_clients,
+};
 use crate::cli_runtime::{
     CliOutput, OutputField, OutputLevel, StorageMaintenanceCommand, emit_index_plan_events,
     emit_index_progress_event, field, resolve_command_config, resolve_startup_config,
-    resolve_watch_runtime_config, run_adopt_command_with_output, run_context_summary_command,
-    run_hash_command, run_index_command_with_output, run_pretooluse_hook_command,
+    resolve_watch_runtime_config, run_adopt_command_with_output, run_cache_load_command,
+    run_cache_make_command, run_context_summary_command, run_hash_command,
+    run_index_command_with_output, run_pretooluse_hook_command,
     run_semantic_runtime_startup_gate_with_output,
     run_semantic_runtime_startup_gate_with_stderr_prepare_output, run_stats_command,
     run_status_command, run_storage_init_command_with_output,
@@ -131,6 +135,17 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 )?
             }
             Command::Hash => run_hash_command()?,
+            Command::Cache { action } => {
+                let config = resolve_command_config(&cli, command.clone())?;
+                match action {
+                    CacheAction::Make { archive } => {
+                        run_cache_make_command(&config, &archive, &cli_output)?
+                    }
+                    CacheAction::Load { archive } => {
+                        run_cache_load_command(&config, &archive, &cli_output)?
+                    }
+                }
+            }
             Command::PruneStorage {
                 keep_manifest_snapshots,
             } => {

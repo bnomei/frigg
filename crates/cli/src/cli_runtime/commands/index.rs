@@ -1,7 +1,9 @@
 //! CLI `index` command: full or changed-only manifest rebuild across configured workspace roots.
 //!
 //! After each repository index completes, changed and deleted paths may trigger synchronous
-//! SCIP precise-artifact generation when configured generators need refresh.
+//! SCIP precise-artifact generation when configured generators need refresh. Existing databases
+//! remain authoritative for their sole repository partition, which lets a loaded portable cache
+//! continue incrementally without creating a second partition from startup configuration.
 
 use std::error::Error;
 
@@ -129,11 +131,16 @@ pub(crate) fn run_index_command_with_output(
                 )));
             }
         }
+        // Durable rows define the runtime partition after cache load; falling back to config is
+        // valid only for a newly initialized database with no repository row yet.
+        let repository_id = storage
+            .sole_repository_id()?
+            .unwrap_or_else(|| repo.repository_id.0.clone());
 
         let mut semantic_duration_ms = None;
         let summary =
             match index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
-                &repo.repository_id.0,
+                &repository_id,
                 root,
                 &db_path,
                 mode,
@@ -142,7 +149,7 @@ pub(crate) fn run_index_command_with_output(
                 &[],
                 |plan| {
                     if output.wants_progress_events() {
-                        emit_index_plan_events(*output, &repo.repository_id.0, plan, &[])
+                        emit_index_plan_events(*output, &repository_id, plan, &[])
                             .map_err(FriggError::from)
                     } else {
                         Ok(())
@@ -166,7 +173,7 @@ pub(crate) fn run_index_command_with_output(
                             field("status", "failed"),
                             field("mode", mode_name),
                             field("repos", repositories.len()),
-                            field("repo", &repo.repository_id.0),
+                            field("repo", &repository_id),
                             field("db", db_path.display()),
                             field("error", &err),
                         ],
@@ -174,7 +181,7 @@ pub(crate) fn run_index_command_with_output(
                     )?;
                     return Err(reported_error(format!(
                         "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
-                        repo.repository_id.0,
+                        repository_id,
                         root.display(),
                         db_path.display()
                     )));
@@ -191,14 +198,14 @@ pub(crate) fn run_index_command_with_output(
                 output,
                 "index",
                 repositories.len(),
-                &repo.repository_id.0,
+                &repository_id,
                 root,
                 &db_path,
                 &err,
             )?;
             return Err(reported_error(format!(
                 "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
-                repo.repository_id.0,
+                repository_id,
                 root.display(),
                 db_path.display()
             )));
@@ -225,7 +232,7 @@ pub(crate) fn run_index_command_with_output(
         {
             let mut semantic_fields = vec![
                 field("status", "ok"),
-                field("repo", &repo.repository_id.0),
+                field("repo", &repository_id),
                 field("mode", summary.semantic_refresh_mode.as_str()),
                 field(
                     "provider",
@@ -257,7 +264,7 @@ pub(crate) fn run_index_command_with_output(
                 "diagnostic",
                 &[
                     field("kind", diagnostic.kind.as_str()),
-                    field("repo", &repo.repository_id.0),
+                    field("repo", &repository_id),
                     field("mode", mode_name),
                     field("message", &diagnostic.message),
                 ],
@@ -269,7 +276,7 @@ pub(crate) fn run_index_command_with_output(
             &precise_server,
             *output,
             "index",
-            &repo.repository_id.0,
+            &repository_id,
             root,
             &summary.changed_paths,
             &summary.deleted_paths,
@@ -278,7 +285,7 @@ pub(crate) fn run_index_command_with_output(
 
         let mut repo_fields = vec![
             field("status", "ok"),
-            field("repo", &repo.repository_id.0),
+            field("repo", &repository_id),
             field("mode", mode_name),
             field("snapshot", &summary.snapshot_id),
             field("scanned", summary.files_scanned),

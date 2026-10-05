@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# The latest release cache requires the matching latest Frigg binary.
+scripts/install.sh
+
+cache_url="https://github.com/bnomei/frigg/releases/latest/download/frigg-cache.zip"
+cache_archive="$(mktemp "${TMPDIR:-/tmp}/frigg-cache.XXXXXX.zip")"
+trap 'rm -f "$cache_archive"' EXIT
+if curl -fsSL "$cache_url" -o "$cache_archive"; then
+  if ! frigg cache load "$cache_archive"; then
+    echo "warning: latest Frigg cache was incompatible; rebuilding locally" >&2
+  fi
+else
+  echo "warning: latest Frigg release has no portable cache; rebuilding locally" >&2
+fi
+
+frigg index --changed

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-05
+
+- Added `frigg cache make` and `frigg cache load` for release-seeded workspaces. The fixed
+  `frigg-cache.zip` archive carries SQLite, semantic, and SCIP state when present, together with
+  full source-commit and compatibility metadata; loading localizes repository identity to the new
+  checkout before `frigg index --changed` reconciles source changes.
+- Hardened portable cache handling with bounded and allowlisted ZIP extraction, per-file BLAKE3
+  verification, SQLite integrity and relational checks, WAL-safe online backup, semantic-vector
+  validation, workspace/symlink containment, and coordinated database/SCIP rollback on errors.
+- Extended the release workflow to build and smoke-test one lexical-only portable cache with the
+  released binary, then attach exactly one `frigg-cache.zip` from the final GitHub Release
+  publisher. Added optional latest-release cache seeding for Amp orbs and updated workflow action
+  versions, setup guidance, and portable cache documentation.
+- Added Streamable HTTP session diagnostics for expired, terminated, and pre-restart session IDs.
+  Every response identifies the server instance, missing-session 404s preserve rmcp's status and
+  body while recommending a fresh `initialize`, and real-process coverage exercises restart,
+  explicit termination, reinitialization, and the five-minute idle expiry boundary.
+
 ## 0.10.4 - 2026-09-21
 
 - Fixed Linux release builds by installing the pinned `cross` executable in GitHub Actions

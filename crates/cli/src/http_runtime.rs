@@ -1,7 +1,9 @@
 //! HTTP runtime for MCP serve: bind resolution, bearer auth, and streamable HTTP transport wiring.
 //!
 //! Builds the Axum router, optional bearer middleware, and streamable HTTP MCP transport used when
-//! `frigg serve` runs as a loopback or remote HTTP service instead of stdio.
+//! `frigg serve` runs as a loopback or remote HTTP service instead of stdio. Each invocation emits
+//! a process-instance header, while missing stateful sessions retain rmcp's 404 contract and add a
+//! diagnostic reinitialization hint; this layer never revives sessions or replays requests.
 
 use std::error::Error;
 use std::io;
@@ -10,7 +12,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -136,9 +138,12 @@ pub(super) async fn serve_http(
     let shutdown = config.cancellation_token.clone();
     let status_server = server.clone();
     let service = server.streamable_http_service(config);
+    let instance_id = uuid::Uuid::now_v7().to_string();
 
     info!(
         bind_addr = %runtime.bind_addr,
+        instance_id = %instance_id,
+        session_mode = "stateful",
         "serving MCP over streamable HTTP at /mcp"
     );
     output.progress_event(
@@ -149,6 +154,7 @@ pub(super) async fn serve_http(
             field("status", "listening"),
             field("addr", runtime.bind_addr),
             field("endpoint", "/mcp"),
+            field("instance_id", &instance_id),
             field(
                 "origin_allowlist",
                 if runtime.allowed_authorities.is_some() {
@@ -198,6 +204,10 @@ pub(super) async fn serve_http(
                 allowed_authorities: runtime.allowed_authorities,
             },
             bearer_auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            HeaderValue::from_str(&instance_id).expect("UUID is a valid HTTP header"),
+            session_diagnostics_middleware,
         ));
 
     // Side effect: process shutdown signals cancel the MCP service before Axum shuts down.
@@ -209,6 +219,38 @@ pub(super) async fn serve_http(
         .await?;
 
     Ok(())
+}
+
+/// Adds process identity to every response and recovery guidance only to missing-session 404s.
+///
+/// Authentication and rmcp remain authoritative for status and body selection. The middleware
+/// observes their response without logging credentials or session identifiers.
+async fn session_diagnostics_middleware(
+    State(instance_id): State<HeaderValue>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let session_request = matches!(request.uri().path(), "/mcp" | "/mcp/")
+        && request.headers().contains_key("mcp-session-id");
+    let method = request.method().clone();
+    let mut response = next.run(request).await;
+    if session_request && response.status() == StatusCode::NOT_FOUND {
+        // Keep rmcp's required 404 and body. Never revive a lost session or replay a tool call:
+        // adoption, watch leases, and result handles belong to the original session.
+        warn!(
+            instance_id = ?instance_id,
+            method = %method,
+            "MCP session unavailable (expired, terminated, or from a previous process); client must initialize without Mcp-Session-Id, then reattach workspaces"
+        );
+        response.headers_mut().insert(
+            "x-frigg-session-recovery",
+            HeaderValue::from_static("initialize"),
+        );
+    }
+    response
+        .headers_mut()
+        .insert("x-frigg-instance-id", instance_id);
+    response
 }
 
 async fn wait_for_shutdown_signal() {
